@@ -113,8 +113,16 @@ reescrever (backend e frontend separados por API HTTP).
 - **Atualizações:** o app avisa quando há versão nova e baixa com um clique
   (necessário porque o WhatsApp muda e a biblioteca precisa acompanhar).
 - **Iniciar com o Windows:** opcional, desligado por padrão, em Configurações.
-- **Transcrição:** API Whisper (OpenAI, modelo de transcrição em pt-BR).
-  Isolada atrás de uma interface para trocar de provedor depois.
+- **Transcrição (gratuita):** **Groq**, modelo `whisper-large-v3`, no plano
+  gratuito (cadastro sem cartão). Limites do plano gratuito, a conferir no
+  painel da Groq: cerca de 20 pedidos por minuto, 2.000 por dia e 28.800
+  segundos de áudio por dia (cerca de 8 h). Cada pedido conta no mínimo
+  10 s de áudio. A fila respeita esses limites: quando a cota do dia acaba,
+  ela continua no dia seguinte, sem erro. O provedor fica isolado atrás de
+  uma interface, com OpenAI Whisper (pago) como alternativa configurável.
+- **Por que não o Gemini gratuito:** no plano gratuito, o Google usa o
+  conteúdo enviado para melhorar os próprios produtos, e pessoas podem ler
+  esse material. Não serve para conversas privadas de mentorados.
 - **Resumo e sugestões:** API do Claude (modelo configurável na tela de Configurações).
   Uma chamada por conversa gera, em JSON: resumo "o que a pessoa quer" + 2–3
   sugestões com abordagens diferentes (ex.: direta, mais acolhedora,
