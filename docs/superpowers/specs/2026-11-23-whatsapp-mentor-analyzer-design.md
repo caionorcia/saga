@@ -126,6 +126,78 @@ reescrever (backend e frontend separados por API HTTP).
 - Notas por mentorado (campo livre, editável) também entram no prompt —
   ex.: "está no módulo 3, quer abrir loja".
 
+## Trava de segurança (ritmo lento e proteção contra bloqueio)
+
+Pedido do mentor: nunca fazer ações em lote quando o computador liga de novo,
+trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
+(ligar, desligar, queda de energia etc.).
+
+### Princípios
+
+1. **Uma única porta para o WhatsApp.** Toda ação do app que vai para o
+   WhatsApp (baixar áudio, buscar nome/foto, reconectar e, na v2, enviar)
+   passa por uma **fila única com limite de ritmo**. Nada fala com o
+   WhatsApp por fora dela.
+2. **Ritmo humano, com variação.** Intervalo mínimo entre ações com sorteio
+   (ex.: 4–12 s entre downloads de áudio), teto por hora e por dia.
+   Valores ficam em configuração, com padrões conservadores.
+3. **Aquecimento ao iniciar.** Nos primeiros 15 minutos depois de ligar,
+   o ritmo é ainda mais lento (metade do normal), seja qual for o tempo que
+   o computador ficou desligado.
+4. **Receber é passivo, buscar é controlado.** As mensagens que chegaram com
+   o computador desligado são entregues pelo próprio WhatsApp ao reconectar.
+   O app só grava o texto. Os áudios entram na fila e são baixados aos
+   poucos, primeiro os das conversas mais recentes e "aguardando resposta".
+5. **Nada é feito sozinho na volta.** Ao reiniciar, nenhuma ação pendente de
+   envio (v2) é executada automaticamente, e nenhuma geração de sugestões em
+   lote é disparada (as sugestões já são geradas só ao abrir a conversa).
+6. **Invisível.** O app não marca mensagens como lidas, não envia "digitando"
+   e não aparece como online (`markOnlineOnConnect: false`, sem recibos de
+   leitura).
+7. **Botão de pausa geral.** Um botão no topo para a fila inteira na hora.
+   Um painel de status mostra a conexão, o tamanho da fila, o ritmo atual
+   e a última ação.
+
+### Situações do dia a dia e o que o app faz
+
+| Situação | Risco | O que o app faz |
+|---|---|---|
+| Computador desligado por horas ou dias e ligado de novo | Rajada de downloads e de mensagens | Aquecimento lento; o WhatsApp entrega as mensagens e o app só grava. Áudios entram na fila e são baixados no ritmo, primeiro os mais recentes. Áudios de conversas fora dos 30 dias não são baixados. |
+| Queda de energia ou desligamento forçado no meio do trabalho | Banco ou sessão corrompidos, tarefas pela metade | Banco SQLite em modo WAL, gravações em transação. A sessão do WhatsApp é gravada de forma atômica (arquivo temporário e depois renomeia), com cópia de segurança. Tarefas "em andamento" voltam para "pendente" ao reiniciar, sem duplicar (cada tarefa tem o id da mensagem como chave única). |
+| Sessão do WhatsApp corrompida mesmo assim | Pedir QR de novo, o que refaz a sincronização inteira | Restaura a última cópia boa da sessão. Só pede QR se a cópia também falhar, e avisa antes. |
+| Internet caindo e voltando várias vezes | Reconexões em rajada (padrão de robô) | Reconexão com espera crescente e variação: 10 s, 30 s, 2 min, 5 min, 15 min, até no máximo 30 min. Teto de 6 tentativas por hora. Depois disso, espera o mentor clicar em "Reconectar". |
+| Notebook entra em suspensão e acorda | Mesmo efeito da queda de internet | Tratado como reconexão, com a mesma espera crescente e o aquecimento se ficou mais de 1 h fora. |
+| App aberto duas vezes (clique duplo repetido) | Duas conexões no mesmo número, conflito e rajada | Trava de instância única (arquivo de trava e porta fixa). A segunda abertura só abre o navegador na instância que já está rodando. |
+| WhatsApp desconecta o aparelho (desvinculado pelo celular, ou celular sem internet por cerca de 14 dias) | O app tentar se reconectar em loop | Ao receber "desconectado/logout", para tudo, não tenta de novo e mostra o aviso "Vincule novamente". O novo vínculo exige ação do mentor. |
+| Sinal de restrição ou bloqueio vindo do WhatsApp | Agravar o bloqueio | Para a fila inteira, grava o motivo, mostra um alerta e não faz mais nada até o mentor decidir. |
+| Versão do WhatsApp Web muda e a biblioteca fica desatualizada | Erros repetidos e reconexões em loop | Detecta erro de versão/protocolo, para e mostra "Atualize o app". Não fica tentando. |
+| Muitos contatos novos ou fotos de perfil | Muitas consultas seguidas | Nomes e fotos só são buscados quando a conversa aparece na tela, pela fila e com cache. Sem busca em massa. |
+| Primeiro uso (vínculo inicial) | Sincronização grande de histórico | O histórico vem do próprio WhatsApp (passivo). Os áudios dos 30 dias entram na fila com ritmo lento, e a tela mostra o progresso ("baixando 12 de 340 áudios"). Pode levar horas, e isso é intencional. |
+| Relógio do computador errado ou mudança de fuso | Cálculo errado da janela de 30 dias e dos limites | Usa o horário das mensagens vindo do WhatsApp para a janela. Os limites de ritmo usam um relógio monotônico. |
+| Disco cheio | Falhar ao gravar áudios ou a sessão | Verifica o espaço livre antes de cada download. Abaixo de 1 GB, pausa a fila e avisa. |
+| Falha ou limite das APIs de IA (transcrição/Claude) | Gastos repetidos e tentativas em rajada | Até 3 tentativas com espera crescente, depois marca como "falhou" com botão "Tentar de novo". Teto de gasto diário configurável: ao atingir, pausa a IA e avisa. |
+| Mentor fecha o app no meio da fila | Retomar com tudo de uma vez | A fila é salva no banco. Ao abrir, retoma no mesmo ritmo lento, com aquecimento. |
+
+### Regras extras para a v2 (envio de mensagens)
+
+- **Nenhum envio é automático após religar.** Envio pendente que não saiu
+  antes de fechar ou cair expira e volta para "aguardando confirmação".
+- Confirmação explícita a cada envio (no app ou no Claude Code).
+- Intervalo entre envios de 30 a 90 s, com sorteio. Teto por hora e por dia.
+  "Digitando…" proporcional ao tamanho do texto.
+- **Nunca reenviar no escuro:** se o estado de um envio ficou desconhecido
+  (caiu no meio), o app verifica se a mensagem já aparece na conversa antes
+  de oferecer reenviar, e sempre pergunta.
+- Só envia para quem mandou mensagem antes (responder, nunca iniciar
+  conversa em massa).
+
+### Como testar a trava
+
+- Testes automáticos da fila: ritmo, teto, aquecimento, retomada após
+  "queda" (matar o processo no meio), sem duplicar e expiração de envios.
+- Teste manual: desligar a internet, suspender o notebook, abrir o app duas
+  vezes e puxar a tomada (ou matar o processo) durante downloads.
+
 ## Dados (esboço)
 
 - `contacts` (jid, nome, escondido, notas)
@@ -133,6 +205,8 @@ reescrever (backend e frontend separados por API HTTP).
   transcricao, status_transcricao)
 - `analyses` (jid, ultima_msg_id, resumo, sugestoes_json, criado_em)
 - `approved_replies` (como acima)
+- `jobs` (fila única: tipo, chave única, status, tentativas, próxima_execução)
+- `rate_state` e `events` (histórico de ações e de desconexões, para o painel)
 - Sessão do Baileys em pasta local (`auth/`), fora do git.
 
 ## Deixado para quem constrói
