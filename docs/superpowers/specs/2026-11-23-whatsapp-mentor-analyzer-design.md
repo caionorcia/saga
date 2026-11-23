@@ -123,10 +123,19 @@ reescrever (backend e frontend separados por API HTTP).
 - **Por que não o Gemini gratuito:** no plano gratuito, o Google usa o
   conteúdo enviado para melhorar os próprios produtos, e pessoas podem ler
   esse material. Não serve para conversas privadas de mentorados.
-- **Resumo e sugestões:** API do Claude (modelo configurável na tela de Configurações).
-  Uma chamada por conversa gera, em JSON: resumo "o que a pessoa quer" + 2–3
-  sugestões com abordagens diferentes (ex.: direta, mais acolhedora,
-  com pergunta de aprofundamento).
+- **Resumo e sugestões, com dois provedores à escolha** (decisão do mentor):
+  - **Groq gratuito (padrão ao instalar):** usa a mesma chave da
+    transcrição, com um modelo de texto aberto do catálogo gratuito da Groq
+    (o melhor disponível em pt-BR no momento do build).
+  - **Claude (opcional, pago):** ativado nas Configurações colando uma chave
+    da Anthropic. Recomendado se as sugestões gratuitas ficarem genéricas.
+  - Troca de provedor com um clique nas Configurações. A memória (respostas
+    salvas) é a mesma para os dois. Cada sugestão registra qual provedor a
+    gerou, para comparar depois.
+  - Uma chamada por conversa gera, em JSON: o resumo "o que a pessoa quer" e
+    2–3 sugestões com abordagens diferentes (ex.: direta, mais acolhedora,
+    com pergunta de aprofundamento). Se o JSON vier inválido, tenta uma vez
+    de novo e depois mostra erro com o botão "Tentar de novo".
 - **Quando gerar (chamada do Claude, para controlar custo):** os áudios são
   transcritos automaticamente. O resumo e as sugestões são gerados quando o
   mentor abre a conversa, ficam salvos no banco e só são refeitos se chegar
