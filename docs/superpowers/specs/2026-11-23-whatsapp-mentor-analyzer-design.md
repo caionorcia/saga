@@ -69,11 +69,12 @@ cada vez menos correção.
   normalmente cobre 30 dias, mas não é garantido. Áudios antigos podem não
   estar mais disponíveis para download — nesse caso, mostrar "áudio
   indisponível".
-- **Roda localmente** no computador do mentor (Windows ou Mac — a confirmar),
-  aberto no navegador em `http://localhost`. Mensagens recebidas com o app
-  fechado chegam quando ele reabre.
+- **Roda localmente no Windows** do mentor, que **não usa terminal**. Tudo
+  precisa funcionar com clique: instalador, ícone na área de trabalho,
+  configuração por tela. Mensagens recebidas com o app fechado chegam quando
+  ele reabre.
 - **Custos de API:** transcrição e sugestões usam APIs pagas (centavos por
-  conversa). Chaves ficam num arquivo `.env` local.
+  conversa). Chaves ficam guardadas de forma criptografada (ver abaixo).
 - Idioma: português do Brasil em toda a interface e nas sugestões.
 
 ## Abordagens consideradas
@@ -89,11 +90,32 @@ reescrever (backend e frontend separados por API HTTP).
 
 ## Decisões de como construir (chamadas do Claude, corrigíveis)
 
-- **Stack:** Node.js + TypeScript. Backend Express; frontend React (Vite);
-  banco **SQLite** (arquivo local). Baileys para o WhatsApp.
+- **Stack:** Node.js + TypeScript, empacotado como **app de desktop Electron**
+  com instalador para Windows (`.exe`, via electron-builder). Interface em
+  React (Vite), dentro da própria janela do app. Banco **SQLite** (arquivo
+  local na pasta de dados do usuário). Baileys para o WhatsApp. A lógica fica
+  separada da interface (um "núcleo" com API interna), para permitir migrar
+  para servidor depois.
+- **Por que Electron:** instala com clique duplo, cria um ícone, permite
+  ficar na bandeja do Windows, já tem trava de instância única e avisa quando
+  o computador vai dormir ou acorda (usado pela trava de segurança).
+- **Configuração sem terminal:** na primeira abertura, um assistente pede as
+  chaves das APIs (Claude e transcrição), com links de onde obter, e mostra o
+  QR Code. As chaves ficam guardadas de forma criptografada pelo Windows
+  (`safeStorage`), nunca em arquivo de texto. Tudo pode ser alterado numa tela
+  de Configurações.
+- **Áudios:** as mensagens de voz do WhatsApp (OGG/Opus) são aceitas
+  diretamente pela API de transcrição, então não é preciso instalar conversor.
+- **Instalador sem assinatura digital (v1):** o Windows mostra o aviso
+  "O Windows protegeu o computador". O mentor clica em "Mais informações",
+  depois em "Executar assim mesmo", e o guia de instalação mostra isso com
+  imagens. Assinatura digital (paga) fica para depois, se incomodar.
+- **Atualizações:** o app avisa quando há versão nova e baixa com um clique
+  (necessário porque o WhatsApp muda e a biblioteca precisa acompanhar).
+- **Iniciar com o Windows:** opcional, desligado por padrão, em Configurações.
 - **Transcrição:** API Whisper (OpenAI, modelo de transcrição em pt-BR).
   Isolada atrás de uma interface para trocar de provedor depois.
-- **Resumo e sugestões:** API do Claude (modelo configurável no `.env`).
+- **Resumo e sugestões:** API do Claude (modelo configurável na tela de Configurações).
   Uma chamada por conversa gera, em JSON: resumo "o que a pessoa quer" + 2–3
   sugestões com abordagens diferentes (ex.: direta, mais acolhedora,
   com pergunta de aprofundamento).
@@ -166,8 +188,8 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 | Queda de energia ou desligamento forçado no meio do trabalho | Banco ou sessão corrompidos, tarefas pela metade | Banco SQLite em modo WAL, gravações em transação. A sessão do WhatsApp é gravada de forma atômica (arquivo temporário e depois renomeia), com cópia de segurança. Tarefas "em andamento" voltam para "pendente" ao reiniciar, sem duplicar (cada tarefa tem o id da mensagem como chave única). |
 | Sessão do WhatsApp corrompida mesmo assim | Pedir QR de novo, o que refaz a sincronização inteira | Restaura a última cópia boa da sessão. Só pede QR se a cópia também falhar, e avisa antes. |
 | Internet caindo e voltando várias vezes | Reconexões em rajada (padrão de robô) | Reconexão com espera crescente e variação: 10 s, 30 s, 2 min, 5 min, 15 min, até no máximo 30 min. Teto de 6 tentativas por hora. Depois disso, espera o mentor clicar em "Reconectar". |
-| Notebook entra em suspensão e acorda | Mesmo efeito da queda de internet | Tratado como reconexão, com a mesma espera crescente e o aquecimento se ficou mais de 1 h fora. |
-| App aberto duas vezes (clique duplo repetido) | Duas conexões no mesmo número, conflito e rajada | Trava de instância única (arquivo de trava e porta fixa). A segunda abertura só abre o navegador na instância que já está rodando. |
+| Notebook entra em suspensão e acorda (detectado pelo `powerMonitor`) | Mesmo efeito da queda de internet | Tratado como reconexão, com a mesma espera crescente e o aquecimento se ficou mais de 1 h fora. |
+| App aberto duas vezes (clique duplo repetido) | Duas conexões no mesmo número, conflito e rajada | Trava de instância única do Electron. A segunda abertura só traz para a frente a janela que já está aberta. |
 | WhatsApp desconecta o aparelho (desvinculado pelo celular, ou celular sem internet por cerca de 14 dias) | O app tentar se reconectar em loop | Ao receber "desconectado/logout", para tudo, não tenta de novo e mostra o aviso "Vincule novamente". O novo vínculo exige ação do mentor. |
 | Sinal de restrição ou bloqueio vindo do WhatsApp | Agravar o bloqueio | Para a fila inteira, grava o motivo, mostra um alerta e não faz mais nada até o mentor decidir. |
 | Versão do WhatsApp Web muda e a biblioteca fica desatualizada | Erros repetidos e reconexões em loop | Detecta erro de versão/protocolo, para e mostra "Atualize o app". Não fica tentando. |
@@ -176,7 +198,7 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 | Relógio do computador errado ou mudança de fuso | Cálculo errado da janela de 30 dias e dos limites | Usa o horário das mensagens vindo do WhatsApp para a janela. Os limites de ritmo usam um relógio monotônico. |
 | Disco cheio | Falhar ao gravar áudios ou a sessão | Verifica o espaço livre antes de cada download. Abaixo de 1 GB, pausa a fila e avisa. |
 | Falha ou limite das APIs de IA (transcrição/Claude) | Gastos repetidos e tentativas em rajada | Até 3 tentativas com espera crescente, depois marca como "falhou" com botão "Tentar de novo". Teto de gasto diário configurável: ao atingir, pausa a IA e avisa. |
-| Mentor fecha o app no meio da fila | Retomar com tudo de uma vez | A fila é salva no banco. Ao abrir, retoma no mesmo ritmo lento, com aquecimento. |
+| Mentor fecha a janela ou o app no meio da fila (fechar a janela deixa o app na bandeja; "Sair" encerra) | Retomar com tudo de uma vez | A fila é salva no banco. Ao abrir, retoma no mesmo ritmo lento, com aquecimento. |
 
 ### Regras extras para a v2 (envio de mensagens)
 
@@ -195,6 +217,7 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 
 - Testes automáticos da fila: ritmo, teto, aquecimento, retomada após
   "queda" (matar o processo no meio), sem duplicar e expiração de envios.
+- Build do instalador e testes em Windows feitos por GitHub Actions (máquina Windows).
 - Teste manual: desligar a internet, suspender o notebook, abrir o app duas
   vezes e puxar a tomada (ou matar o processo) durante downloads.
 
@@ -207,7 +230,7 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 - `approved_replies` (como acima)
 - `jobs` (fila única: tipo, chave única, status, tentativas, próxima_execução)
 - `rate_state` e `events` (histórico de ações e de desconexões, para o painel)
-- Sessão do Baileys em pasta local (`auth/`), fora do git.
+- Sessão do Baileys na pasta de dados do app (`%APPDATA%`), com cópia de segurança.
 
 ## Deixado para quem constrói
 
