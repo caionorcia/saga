@@ -1,6 +1,6 @@
 # Saga — Assistente de respostas para mentorados (WhatsApp)
 
-Data: 2026-11-23 · Status: rascunho para aprovação
+Data: 2026-11-23 · Status: aprovado
 
 ## Intenção e o porquê
 
