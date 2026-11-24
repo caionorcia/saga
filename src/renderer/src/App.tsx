@@ -7,6 +7,7 @@ import { Settings } from './components/Settings'
 import { SetupWizard } from './components/SetupWizard'
 import { StatusBar } from './components/StatusBar'
 import { Suggestions, type DraftStore } from './components/Suggestions'
+import { ColumnDivider, useColumnWidths } from './columns'
 import { connAlert } from './format'
 
 export function App() {
@@ -117,10 +118,12 @@ function Main({
   }, [selected])
 
   useEffect(() => setAnalysis(null), [selected])
+  const cols = useColumnWidths()
 
   return (
-    <div className="columns" hidden={hidden}>
+    <div className="columns" hidden={hidden} style={cols.style}>
       <ContactList selected={selected} onSelect={onSelect} />
+      <ColumnDivider {...cols.divider('left')} />
       {contact ? (
         <Conversation key={contact.jid} contact={contact} analysis={analysis} />
       ) : (
@@ -128,6 +131,7 @@ function Main({
           <p>Escolha uma pessoa na lista para ver a conversa.</p>
         </section>
       )}
+      <ColumnDivider {...cols.divider('right')} />
       <aside className="suggestions" aria-label="Sugestões de resposta">
         <h2>Sugestões de resposta</h2>
         <p className="muted small">Edite como quiser, depois copie e cole no WhatsApp. O Saga não envia nada.</p>

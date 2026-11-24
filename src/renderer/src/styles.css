@@ -57,7 +57,14 @@ label { font-weight: 600; font-size: 14px; display: block; margin: 12px 0 4px; }
 
 /* layout geral */
 .app { display: flex; flex-direction: column; height: 100%; }
-.columns { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(320px, 380px); }
+.columns { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: 280px 6px minmax(360px, 1fr) 6px 350px; }
+/* divisores entre as colunas (arrastar, setas ← →, Home ou duplo clique para voltar ao padrão) */
+.col-divider { position: relative; cursor: col-resize; background: var(--bg); touch-action: none; outline: none; z-index: 1; }
+.col-divider::before { content: ''; position: absolute; inset: 0 -4px; }
+.col-grip { position: absolute; top: 50%; left: 50%; width: 4px; height: 40px; margin: -20px 0 0 -2px; border-radius: 2px; background: var(--muted); opacity: 0; transition: opacity .15s; }
+.col-divider:hover, .col-divider.dragging, .col-divider:focus-visible { background: var(--accent-soft); }
+.col-divider:hover .col-grip, .col-divider.dragging .col-grip, .col-divider:focus-visible .col-grip { opacity: 1; background: var(--accent); }
+.col-divider:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
 
 /* barra de status */
 .statusbar {
@@ -172,9 +179,6 @@ a { color: var(--accent-dark); }
 .events li { display: flex; gap: 14px; padding: 5px 0; border-top: 1px solid #edf1f2; }
 .events time { color: var(--muted); flex: none; min-width: 160px; }
 
-@media (max-width: 1200px) {
-  .columns { grid-template-columns: 240px minmax(0, 1fr) 320px; }
-}
 
 .columns[hidden] { display: none; }
 .btn-danger { background: #c0392b; border-color: #c0392b; color: #fff; }
