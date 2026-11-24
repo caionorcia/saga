@@ -47,7 +47,7 @@ import type {
 
 /** O que o serviço usa do cliente do WhatsApp (o real ou um falso nos testes / modo SAGA_FAKE_WA). */
 export interface WaClientLike {
-  on(event: 'qr' | 'status' | 'message' | 'disk', listener: (arg: any) => void): unknown
+  on(event: 'qr' | 'status' | 'message' | 'disk' | 'contacts', listener: (arg: any) => void): unknown
   start(): Promise<void>
   stop(): Promise<void>
   manualReconnect(): Promise<void>
@@ -193,7 +193,7 @@ export class SagaService extends EventEmitter {
       transcribe: this.limiters.groq_audio,
       fetch_profile: this.limiters.wa_profile
     }
-    this.queue = new JobQueue(repo, clock, byType)
+    this.queue = new JobQueue(repo, clock, byType, { diag: (k, d) => this.diag(k, d) })
 
     registerTranscribeHandler({
       queue: this.queue,
@@ -258,6 +258,10 @@ export class SagaService extends EventEmitter {
       this.markState()
     })
     this.wa.on('disk', () => this.markState())
+    this.wa.on('contacts', () => {
+      this.pendingContacts = true
+      this.scheduleEmit()
+    })
     this.wa.on('message', (m: NormalizedMessage) => {
       try {
         reconcileSent(repo, m)

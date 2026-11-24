@@ -3,7 +3,8 @@ import type { Repo, JobRow } from '../db/repo'
 import type { RateLimiter } from './limiter'
 
 export type JobType = 'download_audio' | 'transcribe' | 'fetch_profile'
-export type Handler = (payload: any) => Promise<void>
+/** `signal` é abortado quando o job estoura o prazo do tipo (o resultado atrasado é descartado). */
+export type Handler = (payload: any, signal?: AbortSignal) => Promise<void>
 export type TickResult = 'ran' | 'idle' | 'paused' | 'waiting'
 export type JobListener = (job: JobRow) => void
 
@@ -32,6 +33,39 @@ export class DeferJobError extends Error {
 
 const BACKOFF_MS = [30_000, 2 * 60_000, 10 * 60_000]
 
+/**
+ * Prazo de cada job por tipo. Um job que estoura o prazo conta como tentativa falha e a fila segue:
+ * sem isso, um pedido HTTP que nunca responde (ex.: download de mídia) travaria a fila inteira.
+ */
+export const DEFAULT_JOB_TIMEOUTS_MS: Record<JobType, number> = {
+  download_audio: 120_000,
+  transcribe: 180_000,
+  fetch_profile: 60_000
+}
+const SUMMARY_EVERY_MS = 5 * 60_000
+
+export interface JobQueueOpts {
+  timeoutsMs?: Partial<Record<JobType, number>>
+  /** registro de diagnóstico: uma linha por início/fim de job e um resumo a cada 5 min (nunca o payload) */
+  diag?: (kind: string, detail: string) => void
+}
+
+/** Estourou o prazo do tipo. */
+export class JobTimeoutError extends Error {
+  constructor(readonly ms: number) {
+    super(`tempo esgotado (${Math.round(ms / 1000)} s)`)
+    this.name = 'JobTimeoutError'
+  }
+}
+
+/** Mensagem de erro para o registro: uma linha, curta, sem caminho/consulta de URLs. */
+function safeErr(msg: string): string {
+  return msg
+    .replace(/(https?:\/\/[^/\s?#]+)[^\s]*/g, '$1/…')
+    .replace(/\s+/g, ' ')
+    .slice(0, 200)
+}
+
 /** Horário (WhatsApp) da mensagem do job, para desempate; sem ts = mais antigo de todos. */
 function payloadTs(j: JobRow): number {
   const ts = Number((j.payload as { ts?: unknown } | null)?.ts)
@@ -57,12 +91,57 @@ export class JobQueue {
   private ticking: Promise<TickResult> | null = null
   private failedListeners = new Set<JobListener>()
   private doneListeners = new Set<JobListener>()
+  private readonly timeouts: Record<JobType, number>
+  private readonly diagFn?: (kind: string, detail: string) => void
+  private summaryTimer: ReturnType<typeof setInterval> | null = null
+  /** tentativa em andamento: só ela pode concluir o job (respostas atrasadas são ignoradas) */
+  private attemptSeq = 0
+  private current: { jobId: number; token: number; type: JobType; startedMono: number } | null = null
 
   constructor(
     private readonly repo: Repo,
     private readonly clock: Clock,
-    private readonly limiters: Record<JobType, RateLimiter>
-  ) {}
+    private readonly limiters: Record<JobType, RateLimiter>,
+    opts: JobQueueOpts = {}
+  ) {
+    this.timeouts = { ...DEFAULT_JOB_TIMEOUTS_MS, ...(opts.timeoutsMs ?? {}) }
+    this.diagFn = opts.diag
+  }
+
+  private diag(kind: string, detail: string): void {
+    try {
+      this.diagFn?.(kind, detail)
+    } catch {
+      // registrar nunca trava a fila
+    }
+  }
+
+  /** Uma linha de resumo da fila no registro de diagnóstico (contagens por tipo, pausas, limitadores). */
+  logSummary(): void {
+    if (!this.diagFn) return
+    try {
+      const now = this.clock.now()
+      const parts: string[] = []
+      for (const type of Object.keys(DEFAULT_JOB_TIMEOUTS_MS) as JobType[]) {
+        const c = this.repo.jobCounts(type)
+        const next = this.limiters[type].nextAllowedAt() - now
+        parts.push(
+          `${type}: pending=${c.pending} running=${c.running} done=${c.done} failed=${c.failed} next_allowed=${next <= 0 ? 'now' : `+${Math.ceil(next / 1000)}s`}`
+        )
+      }
+      const paused = [...this.pausedTypes]
+      const cur = this.current
+      const running = cur
+        ? `; current=${cur.type} #${cur.jobId} ${Math.round((this.clock.monotonic() - cur.startedMono) / 1000)}s`
+        : ''
+      this.diag(
+        'queue_summary',
+        `${parts.join('; ')}; paused_types=${paused.length ? paused.join(',') : '-'}; global_pause=${this.paused ? 'yes' : 'no'}${running}`
+      )
+    } catch {
+      // banco fechado: sem resumo
+    }
+  }
 
   enqueue(type: JobType, key: string, payload: unknown, priority = 0): void {
     this.repo.insertJobIgnore(type, key, payload, priority)
@@ -198,17 +277,51 @@ export class JobQueue {
     // conta contra o ritmo mesmo que o job falhe (antes de marcar running: se lançar, nada fica preso)
     limiter.record(job.type === 'transcribe' ? Number((job.payload as any)?.durationSec) : 1)
     this.repo.markJobRunning(job.id)
+    const type = job.type as JobType
+    const token = ++this.attemptSeq
+    const startedMono = this.clock.monotonic()
+    const startedAt = Date.now()
+    this.current = { jobId: job.id, token, type, startedMono }
+    const tag = `${type} #${job.id}`
+    this.diag('job_start', `${tag} tentativa ${job.attempts + 1}`)
+    const ctrl = new AbortController()
+    const ms = this.timeouts[type]
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      await this.handlers.get(job.type as JobType)!(job.payload)
+      const run = Promise.resolve().then(() => this.handlers.get(type)!(job.payload, ctrl.signal))
+      // a tentativa que estourou o prazo pode resolver/rejeitar depois: nunca escapa, nunca conclui o job
+      run.catch(() => {})
+      const timeout = new Promise<never>((_, rej) => {
+        timer = setTimeout(() => rej(new JobTimeoutError(ms)), ms)
+        ;(timer as { unref?: () => void }).unref?.()
+      })
+      await Promise.race([run, timeout])
+      if (this.current?.token !== token) return 'ran'
       this.repo.markJobDone(job.id)
+      this.diag('job_done', `${tag} ${Date.now() - startedAt} ms`)
       this.notify(this.doneListeners, { ...job, status: 'done', lastError: null })
     } catch (e) {
-      if (e instanceof DeferJobError) {
+      if (this.current?.token !== token) return 'ran'
+      if (e instanceof JobTimeoutError) {
+        ctrl.abort(e)
+        this.diag('job_timeout', `${tag} sem resposta em ${Math.round(ms / 1000)} s (tentativa ${job.attempts + 1})`)
+        this.failJob(job, e.message)
+      } else if (e instanceof DeferJobError) {
+        this.diag('job_deferred', `${tag} ${safeErr(e.message)} (+${Math.round(e.delayMs / 1000)} s)`)
         this.repo.markJobFailed(job.id, job.attempts, e.message, this.clock.now() + e.delayMs)
       } else {
-        this.failJob(job, e instanceof Error ? e.message : String(e))
+        const msg = e instanceof Error ? e.message : String(e)
+        const code = (e as { code?: unknown; output?: { statusCode?: unknown }; status?: unknown } | null)
+        const c = code?.output?.statusCode ?? code?.status ?? code?.code
+        this.diag(
+          'job_failed',
+          `${tag} tentativa ${job.attempts + 1}${c !== undefined ? ` código ${String(c)}` : ''}: ${safeErr(msg)} (${Date.now() - startedAt} ms)`
+        )
+        this.failJob(job, msg)
       }
     } finally {
+      clearTimeout(timer)
+      if (this.current?.token === token) this.current = null
       limiter.markFinished()
     }
     return 'ran'
@@ -231,10 +344,17 @@ export class JobQueue {
     if (this.started) return
     this.started = true
     this.schedule(0)
+    if (this.diagFn && !this.summaryTimer) {
+      this.logSummary()
+      this.summaryTimer = setInterval(() => this.logSummary(), SUMMARY_EVERY_MS)
+      ;(this.summaryTimer as { unref?: () => void }).unref?.()
+    }
   }
 
   async stop(): Promise<void> {
     this.started = false
+    if (this.summaryTimer) clearInterval(this.summaryTimer)
+    this.summaryTimer = null
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     for (const t of this.typeTimers.values()) clearTimeout(t)

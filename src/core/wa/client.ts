@@ -10,11 +10,12 @@ import makeWASocket, {
   fetchLatestWaWebVersion,
   type Contact,
   type LIDMapping,
+  type MediaDownloadOptions,
   type UserFacingSocketConfig,
   type WAMessage
 } from '@whiskeysockets/baileys'
 import type { Clock } from '../clock'
-import type { Repo } from '../db/repo'
+import { NAME_RANK, type Repo } from '../db/repo'
 import { ONE_GB, hasFreeSpace } from '../disk'
 import { audioFileId } from '../media'
 import type { RateLimiter } from '../queue/limiter'
@@ -47,7 +48,11 @@ export interface WaSocket {
 }
 
 export type SocketFactory = (config: UserFacingSocketConfig) => WaSocket
-export type DownloadFn = (msg: WAMessage, type: 'buffer', options: Record<string, never>) => Promise<Buffer>
+/**
+ * Baixa a mídia. `options.options` vai para o `fetch` do Baileys (7.0.0-rc14 ainda ignora o `signal`;
+ * o prazo do job na fila é quem garante que um download travado não prende a fila).
+ */
+export type DownloadFn = (msg: WAMessage, type: 'buffer', options: MediaDownloadOptions) => Promise<Buffer>
 
 export interface WhatsAppClientDeps {
   repo: Repo
@@ -145,6 +150,15 @@ function statusOf(e: unknown): number | undefined {
   return x?.output?.statusCode ?? x?.status ?? x?.statusCode
 }
 
+/** O que o cliente lê de uma conversa do Baileys (`Chat` / `ChatUpdate`): só o id e o nome. */
+interface ChatLike {
+  id?: string | null
+  name?: string | null
+  displayName?: string | null
+  pnJid?: string | null
+  lidJid?: string | null
+}
+
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 /**
@@ -152,7 +166,7 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
  * Nunca envia mensagens, recibos de leitura nem presença; nunca pede reenvio de mídia.
  *
  * Eventos: `'qr'(dataUrl)`, `'status'(ConnState)`, `'message'(NormalizedMessage)`,
- * `'disk'(low: boolean)` (só quando muda).
+ * `'disk'(low: boolean)` (só quando muda), `'contacts'()` (nomes de contatos mudaram).
  */
 export class WhatsAppClient extends EventEmitter {
   private readonly policy: ReconnectPolicy
@@ -194,6 +208,11 @@ export class WhatsAppClient extends EventEmitter {
   private diskTimer: ReturnType<typeof setTimeout> | null = null
   /** LID (sem dispositivo) → JID de telefone */
   private lidToPn = new Map<string, string>()
+  /**
+   * Melhor nome conhecido por JID (telefone ou @lid ainda sem telefone). Vale para contatos que ainda não
+   * têm mensagem (o nome entra quando a primeira chegar) e para @lid que só depois ganha o telefone.
+   */
+  private knownNames = new Map<string, { name: string; rank: number }>()
   private work: Promise<void> = Promise.resolve()
 
   constructor(private readonly deps: WhatsAppClientDeps) {
@@ -205,7 +224,7 @@ export class WhatsAppClient extends EventEmitter {
     this.hasFreeSpace = deps.hasFreeSpace ?? hasFreeSpace
     this.versions = new WaVersionResolver(deps.repo, deps.clock, deps.fetchWaVersion ?? defaultFetchWaVersion)
     this.baileysLogger = makeBaileysLogger(deps.diag)
-    deps.queue.register('download_audio', (p) => this.downloadAudio(p))
+    deps.queue.register('download_audio', (p, signal) => this.downloadAudio(p, signal))
     deps.queue.register('fetch_profile', (p) => this.fetchProfile(p))
     // downloads só com a conexão aberta
     deps.queue.pauseType('download_audio')
@@ -442,11 +461,20 @@ export class WhatsAppClient extends EventEmitter {
     on('connection.update', (u) => this.onConnectionUpdate(u))
     on('creds.update', () => auth.saveCreds())
     on('lid-mapping.update', (m: LIDMapping) => this.addLidMappings([m]))
-    on('messaging-history.set', (h: { messages: WAMessage[]; contacts?: Contact[]; lidPnMappings?: LIDMapping[] }) => {
-      this.addLidMappings(h.lidPnMappings ?? [])
-      return this.ingest(h.messages ?? [], this.namesFrom(h.contacts ?? []))
-    })
+    on(
+      'messaging-history.set',
+      async (h: { messages: WAMessage[]; contacts?: Contact[]; chats?: ChatLike[]; lidPnMappings?: LIDMapping[] }) => {
+        this.addLidMappings(h.lidPnMappings ?? [])
+        await this.learnContacts('history', h.contacts ?? [])
+        await this.learnChats('history', h.chats ?? [])
+        return this.ingest(h.messages ?? [])
+      }
+    )
     on('messages.upsert', (u: { messages: WAMessage[] }) => this.ingest(u.messages ?? []))
+    on('contacts.upsert', (cs: Contact[]) => this.learnContacts('contacts.upsert', cs ?? []))
+    on('contacts.update', (cs: Partial<Contact>[]) => this.learnContacts('contacts.update', cs ?? []))
+    on('chats.upsert', (cs: ChatLike[]) => this.learnChats('chats.upsert', cs ?? []))
+    on('chats.update', (cs: ChatLike[]) => this.learnChats('chats.update', cs ?? []))
   }
 
   private async onConnectionUpdate(u: {
@@ -638,19 +666,77 @@ export class WhatsAppClient extends EventEmitter {
   private addLidMappings(maps: LIDMapping[]): void {
     for (const m of maps) {
       const pn = toPhoneJid(m?.pn)
-      if (m?.lid && pn) this.lidToPn.set(stripDevice(m.lid), pn)
+      if (!m?.lid || !pn) continue
+      const lid = stripDevice(m.lid)
+      this.lidToPn.set(lid, pn)
+      // nome que chegou para o @lid antes do telefone: vai para o contato do telefone
+      const pending = this.knownNames.get(lid)
+      if (pending) {
+        this.knownNames.delete(lid)
+        if (this.rememberName(pn, pending.name, pending.rank)) this.emit('contacts')
+      }
     }
   }
 
-  /** Nomes vindos do histórico (nome salvo na agenda > nome do perfil), indexados pelo JID do contato. */
-  private namesFrom(contacts: Contact[]): Map<string, string> {
-    const names = new Map<string, string>()
-    for (const c of contacts) {
-      const name = c.name || c.notify || c.verifiedName
-      if (!name) continue
-      for (const j of [c.id, c.phoneNumber, c.lid]) if (j) names.set(stripDevice(j), name)
+  /** Guarda o nome se não for pior que o já conhecido e aplica no contato, se ele existir. */
+  private rememberName(jid: string, name: string, rank: number): boolean {
+    const cur = this.knownNames.get(jid)
+    if (cur && cur.rank > rank) return false
+    this.knownNames.set(jid, { name, rank })
+    return this.deps.repo.setContactName(jid, name, rank)
+  }
+
+  /** Nome e qualidade de um contato do Baileys: agenda > perfil (notify) > nome verificado (empresa). */
+  private static contactName(c: Partial<Contact>): { name: string; rank: number } | null {
+    const book = c.name?.trim()
+    if (book) return { name: book, rank: NAME_RANK.addressBook }
+    const profile = c.notify?.trim() || c.verifiedName?.trim()
+    return profile ? { name: profile, rank: NAME_RANK.profile } : null
+  }
+
+  /** Só conversas individuais (telefone ou @lid); grupos, status e newsletters não viram contato. */
+  private static isPersonJid(j: unknown): j is string {
+    return typeof j === 'string' && (j.endsWith('@s.whatsapp.net') || j.endsWith('@lid'))
+  }
+
+  /** Aplica nomes de uma lista de JIDs que são a mesma pessoa (id, telefone, @lid). */
+  private async learnName(ids: Array<string | null | undefined>, name: string, rank: number): Promise<boolean> {
+    const targets = new Set<string>()
+    const raw = ids.filter(WhatsAppClient.isPersonJid).map((j) => stripDevice(j))
+    const pn = raw.find((j) => !j.endsWith('@lid'))
+    for (const lid of raw.filter((j) => j.endsWith('@lid'))) {
+      if (pn && !this.lidToPn.has(lid)) this.lidToPn.set(lid, pn)
     }
-    return names
+    for (const j of raw) targets.add(await this.resolveJid(j))
+    let changed = false
+    for (const j of targets) if (this.rememberName(j, name, rank)) changed = true
+    return changed
+  }
+
+  private async learnContacts(source: string, contacts: Partial<Contact>[]): Promise<void> {
+    let named = 0
+    let applied = 0
+    for (const c of contacts) {
+      const n = c ? WhatsAppClient.contactName(c) : null
+      if (!n) continue
+      named++
+      if (await this.learnName([c.id, c.phoneNumber, c.lid], n.name, n.rank)) applied++
+    }
+    if (named) this.diag('wa_names', `${source}: ${contacts.length} contatos, ${named} com nome, ${applied} aplicados`)
+    if (applied) this.emit('contacts')
+  }
+
+  private async learnChats(source: string, chats: ChatLike[]): Promise<void> {
+    let named = 0
+    let applied = 0
+    for (const c of chats) {
+      const name = (c?.name || c?.displayName)?.trim()
+      if (!name || !WhatsAppClient.isPersonJid(c.id)) continue
+      named++
+      if (await this.learnName([c.id, c.pnJid, c.lidJid], name, NAME_RANK.profile)) applied++
+    }
+    if (named) this.diag('wa_names', `${source}: ${chats.length} conversas, ${named} com nome, ${applied} aplicados`)
+    if (applied) this.emit('contacts')
   }
 
   /** `@lid` → telefone quando conhecido (mapa do histórico/eventos, depois o armazenamento local do Baileys). */
@@ -688,7 +774,7 @@ export class WhatsAppClient extends EventEmitter {
     return Number.isFinite(newest) ? Math.min(newest, bound) : this.deps.clock.now()
   }
 
-  private async ingest(messages: WAMessage[], names?: Map<string, string>): Promise<void> {
+  private async ingest(messages: WAMessage[]): Promise<void> {
     const { repo, queue } = this.deps
     const ownJid = this.auth?.state.creds.me?.id
     const normalized = messages.map((raw) => ({ raw, n: normalize(raw, { ownJid }) }))
@@ -702,7 +788,16 @@ export class WhatsAppClient extends EventEmitter {
       const lid = n.jid
       n.jid = await this.resolveJid(n.jid)
       const pushName = n.fromMe ? null : raw.pushName?.trim() || null
-      repo.upsertContact({ jid: n.jid, pushName: names?.get(n.jid) ?? names?.get(lid) ?? pushName })
+      repo.upsertContact({ jid: n.jid, pushName, nameRank: NAME_RANK.push })
+      // nome melhor já conhecido (agenda, perfil, chat), inclusive o que chegou para o @lid
+      const known = this.knownNames.get(n.jid) ?? (lid !== n.jid ? this.knownNames.get(lid) : undefined)
+      if (known) {
+        if (lid !== n.jid && this.knownNames.get(lid) === known) {
+          this.knownNames.delete(lid)
+          this.knownNames.set(n.jid, known)
+        }
+        repo.setContactName(n.jid, known.name, known.rank)
+      }
       if (!repo.insertMessage(n)) continue
       this.emit('message', n)
       if (n.kind === 'audio') audios.push(n)
@@ -724,7 +819,7 @@ export class WhatsAppClient extends EventEmitter {
 
   // --- handlers da fila ---
 
-  private async downloadAudio(payload: { id: string; ts?: number }): Promise<void> {
+  private async downloadAudio(payload: { id: string; ts?: number }, signal?: AbortSignal): Promise<void> {
     const { repo, queue, mediaDir } = this.deps
     if (!(await this.hasFreeSpace(mediaDir, ONE_GB))) {
       // pausa só os downloads e devolve o job sem gastar tentativa; voltam na próxima medição com espaço
@@ -747,7 +842,7 @@ export class WhatsAppClient extends EventEmitter {
       let buf: Buffer
       try {
         // sem ctx/reuploadRequest: nunca pedir ao celular do remetente para reenviar a mídia
-        buf = await this.download(msg, 'buffer', {})
+        buf = await this.download(msg, 'buffer', signal ? { options: { signal } } : {})
       } catch (e) {
         const code = statusOf(e)
         if (code === 404 || code === 410) {
@@ -756,12 +851,15 @@ export class WhatsAppClient extends EventEmitter {
         }
         throw e
       }
+      // o job estourou o prazo enquanto baixava: outra tentativa cuida disso (não grava nada)
+      signal?.throwIfAborted()
       await mkdir(mediaDir, { recursive: true })
       const file = join(mediaDir, `${audioFileId(row.id)}.ogg`)
       await writeFile(`${file}.tmp`, buf)
       await rename(`${file}.tmp`, file)
       repo.setAudioPath(row.id, file)
     }
+    signal?.throwIfAborted()
     queue.enqueue(
       'transcribe',
       `transcribe:${row.id}`,

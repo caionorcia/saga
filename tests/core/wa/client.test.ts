@@ -285,6 +285,81 @@ describe('WhatsAppClient', () => {
       expect(repo.listContacts({ includeHidden: true })[0].pushName).toBeNull()
     })
 
+    describe('nomes de contatos', () => {
+      const names = () => Object.fromEntries(repo.listContacts({ includeHidden: true }).map((c) => [c.jid, c.displayName]))
+      const msgFrom = (jid: string, id: string, pushName?: string) =>
+        emit('messages.upsert', { type: 'notify', messages: [wamsg({ id, jid, ts: NOW - 1000, pushName })] })
+
+      it('contacts.upsert: nome da agenda > notify > verifiedName; não cria contato sem mensagem', async () => {
+        await msgFrom(JID, 'm1')
+        await msgFrom(JID2, 'm2')
+        const changed = vi.fn()
+        client.on('contacts', changed)
+        await emit('contacts.upsert', [
+          { id: JID, name: 'Ana da agenda', notify: 'Ana perfil' },
+          { id: JID2, notify: 'Bruno perfil', verifiedName: 'Bruno Ltda' },
+          { id: '5511900000000@s.whatsapp.net', name: 'Sem mensagem' }
+        ])
+        expect(names()).toEqual({ [JID]: 'Ana da agenda', [JID2]: 'Bruno perfil' })
+        expect(changed).toHaveBeenCalledTimes(1)
+        expect(diagLines.find(([k]) => k === 'wa_names')?.[1]).toBe('contacts.upsert: 3 contatos, 3 com nome, 2 aplicados')
+      })
+
+      it('nome que chega antes da primeira mensagem é aplicado quando o contato aparece', async () => {
+        await emit('contacts.upsert', [{ id: JID2, name: 'Bruno' }])
+        expect(repo.listContacts({ includeHidden: true })).toEqual([])
+        await msgFrom(JID2, 'm1', 'b.perfil')
+        expect(names()[JID2]).toBe('Bruno')
+      })
+
+      it('precedência: nome personalizado > agenda > notify > pushName (um pushName novo não sobrescreve a agenda)', async () => {
+        await msgFrom(JID, 'm1', 'push1')
+        expect(names()[JID]).toBe('push1')
+        await emit('contacts.update', [{ id: JID, notify: 'notify1' }])
+        expect(names()[JID]).toBe('notify1')
+        await msgFrom(JID, 'm2', 'push2')
+        expect(names()[JID]).toBe('notify1')
+        await emit('contacts.update', [{ id: JID, name: 'Agenda' }])
+        await emit('contacts.update', [{ id: JID, notify: 'notify2' }])
+        expect(names()[JID]).toBe('Agenda')
+        repo.renameContact(JID, 'Meu nome')
+        await emit('contacts.update', [{ id: JID, name: 'Agenda 2' }])
+        expect(names()[JID]).toBe('Meu nome')
+        expect(repo.listContacts({ includeHidden: true })[0].pushName).toBe('Agenda 2')
+      })
+
+      it('@lid: nome guardado e aplicado no contato do telefone quando o mapeamento chega', async () => {
+        await msgFrom(JID2, 'm1')
+        await emit('contacts.upsert', [{ id: '999@lid', notify: 'Bruno via lid' }])
+        expect(names()[JID2]).not.toBe('Bruno via lid')
+        await emit('lid-mapping.update', { lid: '999@lid', pn: JID2 })
+        expect(names()[JID2]).toBe('Bruno via lid')
+      })
+
+      it('@lid já mapeado: vai direto para o telefone; contato com phoneNumber também', async () => {
+        await emit('lid-mapping.update', { lid: '888@lid', pn: JID })
+        await msgFrom(JID, 'm1')
+        await msgFrom(JID2, 'm2')
+        await emit('contacts.upsert', [
+          { id: '888@lid', name: 'Ana' },
+          { id: '777@lid', phoneNumber: JID2, notify: 'Bruno' }
+        ])
+        expect(names()).toEqual({ [JID]: 'Ana', [JID2]: 'Bruno' })
+      })
+
+      it('messaging-history.set: nomes dos contatos e dos chats; chats.upsert também', async () => {
+        await emit('messaging-history.set', {
+          chats: [{ id: JID2, name: 'Bruno (chat)' }],
+          contacts: [{ id: JID, notify: 'Ana' }],
+          messages: [wamsg({ id: 'a', jid: JID, ts: NOW - DAY }), wamsg({ id: 'b', jid: JID2, ts: NOW - DAY })]
+        })
+        expect(names()).toEqual({ [JID]: 'Ana', [JID2]: 'Bruno (chat)' })
+        await msgFrom('5511933334444@s.whatsapp.net', 'c')
+        await emit('chats.upsert', [{ id: '5511933334444@s.whatsapp.net', name: 'Carla' }, { id: '120363000000000000@g.us', name: 'Grupo' }])
+        expect(names()['5511933334444@s.whatsapp.net']).toBe('Carla')
+      })
+    })
+
     it('LID: usa remoteJidAlt, depois o mapa do histórico, depois o @lid', async () => {
       await emit('messaging-history.set', {
         chats: [],
@@ -374,7 +449,9 @@ describe('WhatsAppClient', () => {
       expect(msg.key.id).toBe('AUD1')
       expect(Buffer.isBuffer(msg.message.audioMessage.mediaKey)).toBe(true)
       expect(type).toBe('buffer')
-      expect(opts).toEqual({})
+      // só o sinal de cancelamento para o fetch; nunca `reuploadRequest`
+      expect(Object.keys(opts)).toEqual(['options'])
+      expect(opts.options.signal).toBeInstanceOf(AbortSignal)
       expect(ctx).toBeUndefined()
       const file = join(tmp, 'media', 'AUD1.ogg')
       expect(readFileSync(file, 'utf8')).toBe('OggS-fake-audio')
@@ -406,6 +483,27 @@ describe('WhatsAppClient', () => {
       const j = repo.listJobs('pending').find((x) => x.key === 'AUD1')!
       expect(j.attempts).toBe(1)
       expect(repo.getMessage('AUD1')!.transcriptStatus).toBeNull()
+    })
+
+    it('download que nunca responde: estoura o prazo (120 s), conta tentativa e a fila segue; a resposta atrasada é descartada', async () => {
+      let late: ((b: Buffer) => void) | null = null
+      download.mockImplementationOnce(() => new Promise<Buffer>((r) => (late = r)))
+      const t = queue.tick()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(await t).toBe('ran')
+      const j = repo.listJobs('pending').find((x) => x.key === 'AUD1')!
+      expect(j).toMatchObject({ attempts: 1 })
+      expect(j.lastError).toMatch(/tempo esgotado/)
+      expect(download.mock.calls[0][2].options.signal.aborted).toBe(true)
+      late!(Buffer.from('tarde'))
+      await vi.advanceTimersByTimeAsync(10)
+      expect(repo.getMessage('AUD1')!.audioPath).toBeNull()
+      expect(existsSync(join(tmp, 'media', 'AUD1.ogg'))).toBe(false)
+      expect(repo.listJobs('pending').filter((x) => x.type === 'transcribe')).toEqual([])
+      // na nova tentativa, baixa normalmente
+      clock.advance(30_000)
+      expect(await queue.tick()).toBe('ran')
+      expect(repo.getMessage('AUD1')!.audioPath).toBe(join(tmp, 'media', 'AUD1.ogg'))
     })
 
     it('disco com menos de 1 GB → pausa o download, registra disk_low, sem baixar e sem gastar tentativa', async () => {

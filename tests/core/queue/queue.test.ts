@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FakeClock } from '../../../src/core/clock'
 import { openDb } from '../../../src/core/db/db'
 import { Repo } from '../../../src/core/db/repo'
-import { DeferJobError, JobQueue, type JobType } from '../../../src/core/queue/queue'
+import { DEFAULT_JOB_TIMEOUTS_MS, DeferJobError, JobQueue, type JobType } from '../../../src/core/queue/queue'
 import { LIMITS, RateLimiter } from '../../../src/core/queue/limiter'
 import type { NormalizedMessage } from '../../../src/core/types'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -368,5 +368,124 @@ describe('JobQueue', () => {
     await new Promise((r) => setTimeout(r, 300))
     await rq.stop()
     expect(n).toBe(1)
+  })
+  describe('prazo por tipo de job', () => {
+    it('um handler que nunca resolve: depois do prazo conta como falha (com backoff) e o próximo job roda', async () => {
+      const diag: string[] = []
+      const tq = new JobQueue(repo, clock, makeLimiters(clock), {
+        timeoutsMs: { download_audio: 30 },
+        diag: (k, d) => diag.push(`${k} ${d}`)
+      })
+      let release: (() => void) | null = null
+      let signal: AbortSignal | undefined
+      const seen: string[] = []
+      tq.register('download_audio', (p: { id: string }, s?: AbortSignal) => {
+        seen.push(p.id)
+        if (p.id === 'a') {
+          signal = s
+          return new Promise<void>((r) => (release = r))
+        }
+        return Promise.resolve()
+      })
+      const done: number[] = []
+      tq.onJobDone((j) => done.push(j.id))
+      tq.enqueue('download_audio', 'a', { id: 'a', ts: 2 })
+      tq.enqueue('download_audio', 'b', { id: 'b', ts: 1 })
+      expect(await tq.tick()).toBe('ran')
+      expect(signal?.aborted).toBe(true)
+      const [a] = repo.listJobs('pending').filter((j) => j.key === 'a')
+      expect(a.attempts).toBe(1)
+      expect(a.lastError).toMatch(/tempo esgotado/)
+      expect(a.nextRunAt).toBe(clock.now() + 30_000)
+      expect(diag.some((l) => l.startsWith('job_timeout download_audio'))).toBe(true)
+      clock.advance(10_000)
+      expect(await tq.tick()).toBe('ran')
+      expect(seen).toEqual(['a', 'b'])
+      expect(repo.listJobs('done').map((j) => j.key)).toEqual(['b'])
+      // a resposta atrasada do job que estourou o prazo é ignorada
+      release!()
+      await new Promise((r) => setTimeout(r, 5))
+      const after = repo.listJobs('pending').find((j) => j.key === 'a')!
+      expect(after).toMatchObject({ status: 'pending', attempts: 1 })
+      expect(done).toHaveLength(1)
+    })
+
+    it('estourar o prazo 3 vezes vira falha definitiva; rejeição atrasada não escapa', async () => {
+      const tq = new JobQueue(repo, clock, makeLimiters(clock), { timeoutsMs: { fetch_profile: 10 } })
+      const rejects: Array<(e: Error) => void> = []
+      tq.register('fetch_profile', () => new Promise<void>((_, rej) => rejects.push(rej)))
+      tq.enqueue('fetch_profile', 'p', {})
+      for (const wait of [0, 30_000, 2 * 60_000]) {
+        clock.advance(wait)
+        expect(await tq.tick()).toBe('ran')
+      }
+      expect(repo.listJobs('failed')).toHaveLength(1)
+      expect(repo.listJobs('failed')[0].attempts).toBe(3)
+      for (const r of rejects) r(new Error('tarde'))
+      await new Promise((r) => setTimeout(r, 5))
+      expect(repo.listJobs('failed')[0].lastError).toMatch(/tempo esgotado/)
+    })
+
+    it('job que retoma depois de estourar o prazo: a resposta atrasada da 1ª tentativa não conclui a 2ª', async () => {
+      const tq = new JobQueue(repo, clock, makeLimiters(clock), { timeoutsMs: { fetch_profile: 200 } })
+      const releases: Array<() => void> = []
+      tq.register('fetch_profile', () => new Promise<void>((r) => releases.push(r)))
+      tq.enqueue('fetch_profile', 'p', {})
+      expect(await tq.tick()).toBe('ran')
+      clock.advance(30_000)
+      // 2ª tentativa em andamento quando a 1ª responde
+      const second = tq.tick()
+      await new Promise((r) => setTimeout(r, 2))
+      releases[0]()
+      await new Promise((r) => setTimeout(r, 2))
+      expect(repo.listJobs('running')).toHaveLength(1)
+      releases[1]()
+      expect(await second).toBe('ran')
+      expect(repo.listJobs('done')).toHaveLength(1)
+    })
+
+    it('prazos padrão: download 120 s, transcrição 180 s, perfil 60 s', () => {
+      expect(DEFAULT_JOB_TIMEOUTS_MS).toEqual({ download_audio: 120_000, transcribe: 180_000, fetch_profile: 60_000 })
+    })
+  })
+
+  describe('diagnóstico', () => {
+    it('registra início, sucesso (ms), falha, adiamento; nunca o payload', async () => {
+      const diag: string[] = []
+      const dq = new JobQueue(repo, clock, makeLimiters(clock), { diag: (k, d) => diag.push(`${k} ${d}`) })
+      dq.register('download_audio', async () => {})
+      dq.register('transcribe', async () => {
+        throw new DeferJobError('sem chave', 1000)
+      })
+      dq.register('fetch_profile', async () => {
+        throw new Error('falhou em https://mmg.whatsapp.net/v/t62/abc?token=SEGREDO')
+      })
+      dq.enqueue('download_audio', 'a', { id: 'SEGREDO-ID', text: 'conteúdo secreto' })
+      dq.enqueue('transcribe', 't', { id: 'x', durationSec: 3 })
+      dq.enqueue('fetch_profile', 'p', { jid: '5511999999999@s.whatsapp.net' })
+      for (let i = 0; i < 3; i++) await dq.tick()
+      const text = diag.join('\n')
+      expect(text).toMatch(/job_start download_audio #\d+ tentativa 1/)
+      expect(text).toMatch(/job_done download_audio #\d+ \d+ ms/)
+      expect(text).toMatch(/job_deferred transcribe #\d+/)
+      expect(text).toMatch(/job_failed fetch_profile #\d+ .*mmg\.whatsapp\.net/)
+      expect(text).not.toMatch(/SEGREDO|conteúdo secreto|5511999999999/)
+    })
+
+    it('resumo da fila: contagens por tipo, pausas e próximo horário do limitador', () => {
+      const diag: string[] = []
+      const dq = new JobQueue(repo, clock, makeLimiters(clock), { diag: (k, d) => diag.push(`${k} ${d}`) })
+      dq.register('download_audio', async () => {})
+      dq.enqueue('download_audio', 'a', {})
+      dq.enqueue('download_audio', 'b', {})
+      dq.pauseType('download_audio')
+      dq.logSummary()
+      expect(diag).toHaveLength(1)
+      expect(diag[0]).toMatch(/^queue_summary /)
+      expect(diag[0]).toContain('download_audio: pending=2 running=0 done=0 failed=0')
+      expect(diag[0]).toContain('paused_types=download_audio')
+      expect(diag[0]).toContain('global_pause=no')
+      expect(diag[0]).toMatch(/download_audio: .*next_allowed=(now|\+\d+s)/)
+    })
   })
 })

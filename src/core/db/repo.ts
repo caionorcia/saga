@@ -2,6 +2,9 @@ import type { DatabaseSync } from 'node:sqlite'
 import { systemClock, type Clock } from '../clock'
 import type { NormalizedMessage } from '../types'
 
+/** Qualidade da fonte do nome guardado em `push_name` (maior vence; empate: o mais novo). */
+export const NAME_RANK = { push: 1, profile: 2, addressBook: 3 } as const
+
 export type TranscriptStatus = 'done' | 'failed' | 'unavailable'
 
 export interface ContactRow {
@@ -135,13 +138,32 @@ export class Repo {
 
   // --- contatos ---
 
-  upsertContact(c: { jid: string; pushName?: string | null }): void {
+  /**
+   * Cria o contato se preciso e guarda o nome se ele não for pior que o atual (`nameRank`:
+   * 1 = pushName de mensagem, 2 = perfil/chat, 3 = agenda; veja `NAME_RANK`). O nome personalizado
+   * (`custom_name`) fica separado e sempre vence na exibição.
+   */
+  upsertContact(c: { jid: string; pushName?: string | null; nameRank?: number }): void {
+    const name = c.pushName ?? null
+    const rank = name === null ? 0 : (c.nameRank ?? NAME_RANK.push)
     this.db
       .prepare(
-        `INSERT INTO contacts(jid, push_name) VALUES (?, ?)
-         ON CONFLICT(jid) DO UPDATE SET push_name = COALESCE(excluded.push_name, push_name)`
+        `INSERT INTO contacts(jid, push_name, name_rank) VALUES (?1, ?2, ?3)
+         ON CONFLICT(jid) DO UPDATE SET
+           push_name = CASE WHEN excluded.push_name IS NOT NULL AND excluded.name_rank >= name_rank
+                            THEN excluded.push_name ELSE push_name END,
+           name_rank = CASE WHEN excluded.push_name IS NOT NULL AND excluded.name_rank >= name_rank
+                            THEN excluded.name_rank ELSE name_rank END`
       )
-      .run(c.jid, c.pushName ?? null)
+      .run(c.jid, name, rank)
+  }
+
+  /** Guarda o nome de um contato que já existe, se não for pior que o atual. `true` se mudou. */
+  setContactName(jid: string, name: string, rank: number): boolean {
+    const res = this.db
+      .prepare('UPDATE contacts SET push_name = ?1, name_rank = ?2 WHERE jid = ?3 AND name_rank <= ?2 AND (push_name IS NOT ?1 OR name_rank < ?2)')
+      .run(name, rank, jid)
+    return Number(res.changes) > 0
   }
 
   renameContact(jid: string, name: string): void {
