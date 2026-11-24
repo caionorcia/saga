@@ -133,7 +133,7 @@ describe('SagaService', () => {
       expect(service.state().retryAt).toBeNull()
       last().emit('connection.update', {
         connection: 'close',
-        lastDisconnect: { error: Object.assign(new Error('x'), { output: { statusCode: 428 } }) }
+        lastDisconnect: { error: Object.assign(new Error('x'), { output: { statusCode: 408 } }) }
       })
       await client().whenIdle()
       const st = service.state()

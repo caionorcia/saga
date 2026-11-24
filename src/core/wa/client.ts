@@ -80,6 +80,18 @@ const SLEEP_WARMUP_THRESHOLD_MS = 3_600_000
 /** conexão aberta por este tempo sem cair = estável (escada de reconexão volta ao começo) */
 const STABLE_AFTER_MS = 5 * 60_000
 const RESTART_REQUIRED = 515
+const CONNECTION_CLOSED = 428
+/**
+ * Como o app se apresenta ao WhatsApp, em ordem de tentativa. Desde o fim de 2026 o WhatsApp
+ * derruba (428, antes do QR) quem se apresenta como app de desktop (sub-plataforma WIN32/DARWIN);
+ * como navegador Chrome (sub-plataforma WEB_BROWSER) o QR aparece. O último fica como reserva.
+ */
+const BROWSER_LADDER: Array<[string, string, string]> = [
+  Browsers.windows('Chrome'),
+  Browsers.ubuntu('Chrome'),
+  Browsers.windows('Desktop')
+]
+const BROWSER_SETTING = 'wa.browserIdx'
 /** com a conexão aberta, mede o disco de novo a cada 10 min */
 const DISK_CHECK_MS = 10 * 60_000
 
@@ -172,6 +184,10 @@ export class WhatsAppClient extends EventEmitter {
   private forceVersionRefresh = false
   /** já mostrou um QR neste socket (o registro anota só o primeiro) */
   private qrLogged = false
+  /** este socket chegou a mostrar QR ou abrir (então um 428 não é recusa da identidade) */
+  private socketProgressed = false
+  /** já abriu alguma vez nesta execução */
+  private everOpened = false
   private pausedByConnection = false
   /** menos de 1 GB livre: downloads pausados até a próxima medição com espaço */
   private diskLow = false
@@ -240,6 +256,8 @@ export class WhatsAppClient extends EventEmitter {
     this.policy.manualRetry()
     this.last515 = false
     this.outdatedRetried = false
+    // nenhuma identidade funcionou ainda: o clique recomeça a lista do início
+    if (!this.browserConfirmed) this.deps.repo.setSetting(BROWSER_SETTING, '0')
     this.dropSocket()
     this.schedule(() => this.connect())
     await this.whenIdle()
@@ -390,6 +408,7 @@ export class WhatsAppClient extends EventEmitter {
   private async openSocket(gen: number): Promise<void> {
     this.setStatus('connecting')
     this.qrLogged = false
+    this.socketProgressed = false
     await this.auth?.close()
     const auth = await this.authStateFactory(this.deps.authDir, this.deps.backupDir)
     if (gen !== this.gen || !this.running) return
@@ -405,7 +424,7 @@ export class WhatsAppClient extends EventEmitter {
     const sock = this.socketFactory({
       ...(v.version ? { version: v.version } : {}),
       auth: auth.state,
-      browser: Browsers.windows('Desktop'),
+      browser: BROWSER_LADDER[this.browserIdx()],
       // presença "indisponível" ao conectar: o celular continua recebendo notificações
       // e os recibos automáticos do Baileys saem como 'inactive' (entregue, nunca "lido")
       markOnlineOnConnect: false,
@@ -437,6 +456,8 @@ export class WhatsAppClient extends EventEmitter {
   }): Promise<void> {
     if (u.connection) this.diag('wa_connection_update', u.connection)
     if (u.qr) {
+      this.socketProgressed = true
+      this.rememberBrowser()
       // nunca o conteúdo do QR: só que ele chegou
       if (!this.qrLogged) {
         this.qrLogged = true
@@ -447,7 +468,12 @@ export class WhatsAppClient extends EventEmitter {
       this.emit('qr', dataUrl)
       this.setStatus('needs_qr')
     }
-    if (u.connection === 'open') await this.onOpen()
+    if (u.connection === 'open') {
+      this.socketProgressed = true
+      this.everOpened = true
+      this.rememberBrowser()
+      await this.onOpen()
+    }
     else if (u.connection === 'close') await this.onClose(u.lastDisconnect?.error)
   }
 
@@ -499,6 +525,37 @@ export class WhatsAppClient extends EventEmitter {
     }
   }
 
+  private browserIdx(): number {
+    const n = Number(this.deps.repo.getSetting(BROWSER_SETTING) ?? 0)
+    return Number.isInteger(n) && n >= 0 && n < BROWSER_LADDER.length ? n : 0
+  }
+
+  /** a identidade atual funcionou (QR ou conexão aberta): fica gravada para as próximas vezes */
+  private rememberBrowser(): void {
+    if (!this.browserConfirmed) {
+      this.browserConfirmed = true
+      this.diag('wa_browser', `identidade aceita: ${BROWSER_LADDER[this.browserIdx()].join(' / ')}`)
+    }
+  }
+  private browserConfirmed = false
+
+  /**
+   * 428 logo depois de conectar, sem QR nem abertura: o WhatsApp recusou a identidade.
+   * Passa para a próxima da lista e reconecta já (sem contar); depois da última, segue a política normal.
+   */
+  private tryNextBrowser(detail: string): boolean {
+    if (this.browserConfirmed) return false
+    const next = this.browserIdx() + 1
+    if (next >= BROWSER_LADDER.length) return false
+    this.deps.repo.setSetting(BROWSER_SETTING, String(next))
+    const msg = `${detail}; tentando como ${BROWSER_LADDER[next].join(' / ')}`
+    this.deps.repo.logEvent('wa_browser_switch', msg)
+    this.diag('wa_browser_switch', msg)
+    this.setStatus('waiting_retry')
+    this.retryIn(0)
+    return true
+  }
+
   private async onClose(error: unknown): Promise<void> {
     if (!this.running) return
     // um socket fecha uma vez só: eventos seguintes dele são ignorados
@@ -509,6 +566,7 @@ export class WhatsAppClient extends EventEmitter {
     const code = statusOf(error)
     const detail = `código ${code ?? '?'}: ${error ? errMsg(error).slice(0, 300) : 'sem detalhe'}`
     this.diag('wa_close', detail)
+    if (code === CONNECTION_CLOSED && !this.socketProgressed && !this.everOpened && this.tryNextBrowser(detail)) return
     const isRestart = code === RESTART_REQUIRED
     if (isRestart && !this.last515) {
       // "reinicie": normal depois de parear; reconecta já, sem contar (uma vez seguida)

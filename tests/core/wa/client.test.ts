@@ -167,7 +167,7 @@ describe('WhatsAppClient', () => {
       expect(cfg.syncFullHistory).toBe(true)
       expect(cfg.generateHighQualityLinkPreview).toBe(false)
       expect(cfg.shouldSyncHistoryMessage({})).toBe(true)
-      expect(cfg.browser).toEqual(['Windows', 'Desktop', expect.any(String)])
+      expect(cfg.browser).toEqual(['Windows', 'Chrome', expect.any(String)])
       expect(cfg.auth.creds).toBeDefined()
       expect(statuses).toEqual(['connecting'])
     })
@@ -429,7 +429,51 @@ describe('WhatsAppClient', () => {
     })
   })
 
+  describe('identidade (navegador) recusada com 428 antes do QR', () => {
+    it('troca para a próxima identidade e reconecta já, sem contar', async () => {
+      expect(last().config.browser).toEqual(['Windows', 'Chrome', expect.any(String)])
+      await close(428, 'Connection Terminated')
+      await advance(0)
+      expect(sockets).toHaveLength(2)
+      expect(last().config.browser).toEqual(['Ubuntu', 'Chrome', expect.any(String)])
+      expect(repo.recentEvents(5).map((e) => e.kind)).toContain('wa_browser_switch')
+      await close(428, 'Connection Terminated')
+      await advance(0)
+      expect(sockets).toHaveLength(3)
+      expect(last().config.browser).toEqual(['Windows', 'Desktop', expect.any(String)])
+      // lista esgotada: segue a política normal (espera 10 s)
+      await close(428, 'Connection Terminated')
+      await advance(0)
+      expect(sockets).toHaveLength(3)
+      await advance(10_000)
+      expect(sockets).toHaveLength(4)
+    })
+
+    it('a identidade que mostrou QR fica gravada e um 428 depois do QR não troca', async () => {
+      await close(428, 'Connection Terminated')
+      await advance(0)
+      await emit('connection.update', { qr: 'qr-teste' })
+      expect(repo.getSetting('wa.browserIdx')).toBe('1')
+      await close(428, 'Connection Terminated')
+      await advance(0)
+      expect(sockets).toHaveLength(2)
+      expect(last().config.browser).toEqual(['Ubuntu', 'Chrome', expect.any(String)])
+    })
+
+    it('Tentar de novo sem nenhuma identidade aceita recomeça a lista', async () => {
+      await close(428, 'Connection Terminated')
+      await advance(0)
+      await client.manualReconnect()
+      expect(last().config.browser).toEqual(['Windows', 'Chrome', expect.any(String)])
+    })
+  })
+
   describe('desconexão', () => {
+    // estes testes tratam da política de reconexão: a identidade já está confirmada (sem troca no 428)
+    beforeEach(() => {
+      ;(client as any).browserConfirmed = true
+    })
+
     it.each([
       [401, 'stopped_logged_out'],
       [403, 'stopped_restricted']
