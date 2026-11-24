@@ -1,0 +1,30 @@
+{
+  "name": "saga",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Saga - leitor somente leitura do WhatsApp do mentor",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "test": "NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run --environment node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "6.3.0",
+    "electron": "45.4.1",
+    "electron-vite": "6.0.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.1"
+  }
+}
