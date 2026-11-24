@@ -14,7 +14,7 @@ fila com limite de ritmo, WhatsApp, IA, memória) e é testável sem Electron.
 ação de rede para o WhatsApp passa por `core/queue`.
 
 **Tech Stack:** Node 22, TypeScript (strict), electron-vite, Electron,
-React 18, `@whiskeysockets/baileys`, `better-sqlite3` (com FTS5), Vitest,
+React 18, `@whiskeysockets/baileys`, `node:sqlite` embutido no Node/Electron (`DatabaseSync`, com FTS5; sem módulo nativo), Vitest,
 electron-builder (NSIS) + electron-updater, GitHub Actions (windows-latest).
 
 **Spec:** `docs/superpowers/specs/2026-11-23-whatsapp-mentor-analyzer-design.md`
@@ -82,21 +82,21 @@ docs/guia-instalacao.md  guia em pt-BR com imagens
 ### Task 1: Esqueleto do projeto e banco de dados
 
 **Files:**
-- Create: `package.json`, `tsconfig.json`, `electron.vite.config.ts`, `vitest.config.ts`, `.gitignore`, `src/core/db/schema.sql`, `src/core/db/db.ts`, `src/core/db/repo.ts`, `src/core/clock.ts`
+- Create (scaffold manual, sem comandos interativos): `package.json`, `tsconfig.json`, `electron.vite.config.ts`, `vitest.config.ts`, `.gitignore`, `src/core/db/schema.sql`, `src/core/db/db.ts`, `src/core/db/repo.ts`, `src/core/clock.ts`
 - Test: `tests/core/db/repo.test.ts`
 
 **Interfaces:**
 - Produces:
-  - `openDb(file: string | ':memory:'): Database` (aplica `PRAGMA journal_mode=WAL; foreign_keys=ON` e as migrações)
+  - `openDb(file: string | ':memory:'): DatabaseSync` de `node:sqlite` (aplica `PRAGMA journal_mode=WAL; foreign_keys=ON` e as migrações)
   - `class Repo(db)` com:
     - `upsertContact(c: {jid, pushName?})`, `renameContact(jid, name)`, `setHidden(jid, bool)`, `setNotes(jid, text)`, `listContacts({includeHidden}): ContactRow[]` (ordenados pela última mensagem desc; com `awaitingReply: boolean` = a última mensagem não é `fromMe`)
     - `insertMessage(m: NormalizedMessage): boolean` (`INSERT OR IGNORE` pelo id; devolve se inseriu), `listMessages(jid, limit?): MessageRow[]`, `setTranscript(id, text | null, status: 'done'|'failed'|'unavailable')`
     - `saveAnalysis(jid, lastMsgId, provider, summary, suggestions: string[])`, `getAnalysis(jid): AnalysisRow | null`
     - `logEvent(kind: string, detail: string)`, `recentEvents(limit): EventRow[]`
   - `interface Clock { now(): number /*epoch ms*/; monotonic(): number }`, `systemClock`, `class FakeClock` (`advance(ms)`)
-  - Tabelas: `contacts(jid PK, push_name, custom_name, hidden, notes)`, `messages(id PK, jid, from_me, ts, kind 'text'|'audio'|'other', text, media_key_json, audio_path, transcript, transcript_status)`, `analyses(jid PK, last_msg_id, provider, summary, suggestions_json, created_at)`, `approved_replies(id PK, jid, context_text, original_suggestion, final_text, sent_text, provider, created_at)` + FTS5 `approved_fts(context_text, final_text)`, `jobs(id PK, type, key UNIQUE, payload_json, status, attempts, next_run_at, priority, last_error)`, `events(id, ts, kind, detail)`, `settings_kv(key PK, value)`
+  - Tabelas: `contacts(jid PK, push_name, custom_name, hidden, notes)`, `messages(id PK, jid, from_me, ts, kind 'text'|'audio'|'other', text, media_key_json, audio_path, transcript, transcript_status)`, `analyses(jid PK, last_msg_id, provider, summary, suggestions_json, created_at)`, `approved_replies(id PK, jid, context_text, original_suggestion, final_text, sent_text, provider, created_at)` + FTS5 `approved_fts(context_text, final_text, tokenize='unicode61 remove_diacritics 2')`, `jobs(id PK, type, key UNIQUE, payload_json, status, attempts, next_run_at, priority, last_error)`, `events(id, ts, kind, detail)`, `settings_kv(key PK, value)`
 
-- [ ] **Step 1: Scaffold.** `npm create @quick-start/electron` (template react-ts) ou equivalente manual; adicionar `better-sqlite3`, `@whiskeysockets/baileys`, `vitest`. Em `.gitignore`: `node_modules`, `out`, `dist`, `*.db`, `auth*/`, `media/`. Os testes do núcleo rodam no Node (`vitest --environment node`); script `"test": "vitest run"`.
+- [ ] **Step 1: Scaffold manual** (electron-vite + React + TS; Electron atual, cujo Node tem `node:sqlite`). Adicionar `@whiskeysockets/baileys` (fixar a versão exata instalada), `vitest`. Não usar `better-sqlite3`. Silenciar o `ExperimentalWarning` do SQLite nos testes (`NODE_OPTIONS=--no-warnings=ExperimentalWarning` no script de teste) para a saída ficar limpa. Em `.gitignore`: `node_modules`, `out`, `dist`, `*.db`, `auth*/`, `media/`. Os testes do núcleo rodam no Node (`vitest --environment node`); script `"test": "vitest run"`.
 - [ ] **Step 2: Testes que falham** em `repo.test.ts`:
   - `insertMessage` com o mesmo id duas vezes → a segunda devolve `false`, e `listMessages` tem 1 item.
   - `listContacts` ordena pela mensagem mais recente; `awaitingReply` é `true` quando a última é do contato e `false` quando é do mentor.
@@ -129,7 +129,8 @@ docs/guia-instalacao.md  guia em pt-BR com imagens
     - `start()` / `stop()` (laço com `setTimeout` até `nextAllowedAt`)
     - `stats(): {pending, running, failed, done, paused, nextRunAt}`
   - Falha: `attempts++`, `next_run_at = now + [30s, 2min, 10min][attempts-1]`; na 3ª falha, `status='failed'`. `retryFailed(id)` volta para `pending`.
-  - Os dias e horas dos tetos contam em janela deslizante pelo `clock.monotonic()`. O estado dos tetos persiste em `settings_kv` para sobreviver a reinícios: a contagem diária não zera ao reabrir o app.
+  - Mapeamento tipo de job → limitador: `download_audio`→`wa_media`, `transcribe`→`groq_audio`, `fetch_profile`→`wa_profile` (`llm` é usado direto pela Task 6). O custo do `transcribe` vem de `payload.durationSec`.
+  - Intervalo entre ações: medido por `clock.monotonic()` dentro do processo. Tetos por hora/dia: janela deslizante com os horários (`clock.now()`) das ações registradas, persistida em `settings_kv` para sobreviver a reinícios (a contagem diária não zera ao reabrir). Se o relógio voltar para trás (`now` menor que o último registro), tratar o registro como se fosse agora (conservador: nunca libera mais cedo).
 
 - [ ] **Step 1: Testes que falham** (`FakeClock`, `rng` fixo):
   - `limiter`: com `rng=()=>0`, dois `record()` seguidos → `nextAllowedAt` = último + 4000. Com `rng=()=>1` → +12000.
@@ -289,7 +290,7 @@ docs/guia-instalacao.md  guia em pt-BR com imagens
 - Create: `electron-builder.yml`, `src/main/updater.ts`, `.github/workflows/ci.yml`, `docs/guia-instalacao.md`, `README.md`, `build/icon.ico`
 
 **Interfaces:**
-- `electron-builder.yml`: `appId: br.com.saga.mentoria`, `productName: Saga`, alvo `nsis` (`oneClick: false`, `perMachine: false`, atalho na área de trabalho), `asarUnpack` para `better-sqlite3`, `npmRebuild: true`, `publish: github`.
+- `electron-builder.yml`: `appId: br.com.saga.mentoria`, `productName: Saga`, alvo `nsis` (`oneClick: false`, `perMachine: false`, atalho na área de trabalho), sem módulos nativos, `publish: github`.
 - `updater.ts`: `autoUpdater.autoDownload = false`; ao achar uma versão, mostra o aviso "Nova versão disponível — Atualizar" no StatusBar; o clique baixa e instala ao sair. Se o repositório for privado, as atualizações automáticas exigem token: deixar o updater desligado por configuração (`SAGA_UPDATES=off`) e o guia explica como baixar o novo `.exe` manualmente.
 - CI (`windows-latest`, Node 22): `npm ci`, `npm test`, `npm run build`, `npx electron-builder --win --publish never`; o `.exe` sobe como artefato do workflow.
 - `guia-instalacao.md` (pt-BR, para quem não usa terminal): baixar o `.exe` em GitHub › Actions/Releases; o aviso "O Windows protegeu o computador" › "Mais informações" › "Executar assim mesmo"; criar a chave Groq; escanear o QR Code; o que significa cada estado do StatusBar; o que fazer se aparecer "vincule novamente".
