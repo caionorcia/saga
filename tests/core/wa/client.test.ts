@@ -202,7 +202,7 @@ describe('WhatsAppClient', () => {
       expect(repo.listContacts({ includeHidden: true }).map((c) => c.jid)).toEqual([JID])
     })
 
-    it('relógio do PC muito atrasado: a janela de 30 dias conta a partir da mensagem mais nova do WhatsApp', async () => {
+    it('relógio do PC muito atrasado: a janela nunca encolhe (âncora limitada a PC + 1 dia só alarga)', async () => {
       const waNow = NOW + 60 * DAY // o PC está 60 dias atrás
       await emit('messaging-history.set', {
         chats: [],
@@ -213,10 +213,39 @@ describe('WhatsAppClient', () => {
           wamsg({ id: 'nova', ts: waNow - 1000 })
         ]
       })
+      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['velha', 'dentro', 'nova'])
+    })
+
+    it('relógio do PC adiantado: a janela conta a partir da mensagem mais nova do WhatsApp', async () => {
+      clock.advance(60 * DAY) // o PC está 60 dias à frente
+      await emit('messaging-history.set', {
+        chats: [],
+        contacts: [],
+        messages: [
+          wamsg({ id: 'velha', ts: NOW - 31 * DAY }),
+          wamsg({ id: 'dentro', ts: NOW - 29 * DAY }),
+          wamsg({ id: 'nova', ts: NOW - 1000 })
+        ]
+      })
       expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['dentro', 'nova'])
       // um lote depois, só com mensagem velha, usa a mais nova já vista no banco
-      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'velha2', jid: JID2, ts: waNow - 40 * DAY })] })
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'velha2', jid: JID2, ts: NOW - 40 * DAY })] })
       expect(repo.listMessages(JID2)).toEqual([])
+    })
+
+    it('uma mensagem com horário absurdo no futuro não derruba as mensagens reais (nem neste lote, nem nos próximos)', async () => {
+      await emit('messaging-history.set', {
+        chats: [],
+        contacts: [],
+        messages: [
+          wamsg({ id: 'futuro', jid: JID2, ts: NOW + 10 * 365 * DAY }),
+          wamsg({ id: 'ontem', ts: NOW - DAY }),
+          wamsg({ id: 'semana', ts: NOW - 7 * DAY })
+        ]
+      })
+      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['semana', 'ontem'])
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'hoje', ts: NOW - 1000 }), wamsg({ id: 'mes', ts: NOW - 20 * DAY })] })
+      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['mes', 'semana', 'ontem', 'hoje'])
     })
 
     it('contato escondido: o áudio é gravado mas não entra na fila de download', async () => {

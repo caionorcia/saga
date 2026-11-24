@@ -159,6 +159,7 @@ describe('Repo', () => {
     repo.insertMessage(msg({ id: 'a', ts: 500 }))
     repo.insertMessage(msg({ id: 'b', ts: 300 }))
     expect(repo.newestMessageTs()).toBe(500)
+    expect(repo.newestMessageTs(400)).toBe(300)
     expect(repo.isHidden(JID_A)).toBe(false)
     repo.setHidden(JID_A, true)
     expect(repo.isHidden(JID_A)).toBe(true)

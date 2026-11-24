@@ -219,6 +219,21 @@ describe('Suggestions: sem chamadas pagas à toa', () => {
     expect(saga.getAnalysis).toHaveBeenCalledTimes(2)
   })
 
+  it('análise feita com áudio pendente: mesmo com só mensagem do mentor depois, atualiza (a transcrição pode ter terminado)', async () => {
+    install(async () => ({ ok: true, analysis: { ...analysis, pendingAudios: 1 } }))
+    saga.onMessages.mockImplementation(((_j: string, f: () => void) => {
+      notify = f
+      return () => {}
+    }) as never)
+    render(<Suggestions jid={JID} />)
+    await screen.findAllByRole('textbox')
+    saga.listMessages.mockResolvedValue([view('M1', false), view('EU1', true)])
+    vi.useFakeTimers()
+    notify()
+    await fire()
+    expect(saga.getAnalysis).toHaveBeenCalledTimes(2)
+  })
+
   it('janela escondida (bandeja): não atualiza; ao voltar a aparecer, atualiza uma vez', async () => {
     render(<Suggestions jid={JID} />)
     await screen.findAllByRole('textbox')

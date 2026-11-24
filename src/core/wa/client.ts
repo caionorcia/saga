@@ -504,20 +504,29 @@ export class WhatsAppClient extends EventEmitter {
     return jid
   }
 
+  /** Horários acima disto (PC + 1 dia) são tratados como absurdos e nunca viram a âncora da janela. */
+  private anchorBound(): number {
+    return this.deps.clock.now() + DAY
+  }
+
   /**
-   * "Agora" pelo horário do WhatsApp: a mensagem mais nova já vista (no banco ou em `batchMaxTs`);
-   * o relógio do PC só quando ainda não há nenhuma mensagem. Assim um PC com a data errada não muda a janela.
+   * "Agora" pelo horário do WhatsApp: a mensagem mais nova já vista (no banco ou em `batchMaxTs`),
+   * limitada a PC + 1 dia; o relógio do PC só quando ainda não há nenhuma mensagem. Um PC adiantado não
+   * encolhe a janela, e uma mensagem com horário absurdo no futuro não derruba as reais (o limite só alarga).
    */
   private waNow(batchMaxTs = -Infinity): number {
-    const newest = Math.max(this.deps.repo.newestMessageTs() ?? -Infinity, batchMaxTs)
-    return Number.isFinite(newest) ? newest : this.deps.clock.now()
+    const bound = this.anchorBound()
+    const batch = batchMaxTs <= bound ? batchMaxTs : -Infinity
+    const newest = Math.max(this.deps.repo.newestMessageTs(bound) ?? -Infinity, batch)
+    return Number.isFinite(newest) ? Math.min(newest, bound) : this.deps.clock.now()
   }
 
   private async ingest(messages: WAMessage[], names?: Map<string, string>): Promise<void> {
     const { repo, queue } = this.deps
     const ownJid = this.auth?.state.creds.me?.id
     const normalized = messages.map((raw) => ({ raw, n: normalize(raw, { ownJid }) }))
-    const batchMax = normalized.reduce((m, { n }) => (n && n.ts > m ? n.ts : m), -Infinity)
+    const bound = this.anchorBound()
+    const batchMax = normalized.reduce((m, { n }) => (n && n.ts > m && n.ts <= bound ? n.ts : m), -Infinity)
     // janela de 30 dias pelo horário das mensagens do WhatsApp, nunca pelo relógio do PC
     const cutoff = this.waNow(batchMax) - HISTORY_WINDOW_MS
     const audios: NormalizedMessage[] = []

@@ -208,9 +208,11 @@ export class Repo {
     return rows.map(toMessage)
   }
 
-  /** Horário (WhatsApp) da mensagem mais nova do banco, ou null sem mensagens. */
-  newestMessageTs(): number | null {
-    const r = this.db.prepare('SELECT MAX(ts) AS t FROM messages').get() as Row | undefined
+  /** Horário (WhatsApp) da mensagem mais nova do banco (até `maxTs`, se dado), ou null sem mensagens. */
+  newestMessageTs(maxTs?: number): number | null {
+    const r = this.db
+      .prepare('SELECT MAX(ts) AS t FROM messages WHERE (?1 IS NULL OR ts <= ?1)')
+      .get(maxTs ?? null) as Row | undefined
     return typeof r?.t === 'number' ? r.t : null
   }
 

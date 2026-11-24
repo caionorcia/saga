@@ -152,8 +152,14 @@ function main(): void {
         if (!u?.isReady()) return
         // fecha tudo com cuidado antes: o instalador encontra o banco e a sessão do WhatsApp gravados
         quitting = true
-        await shutdownOnce()
-        if (!u.install()) app.quit()
+        try {
+          await shutdownOnce()
+          if (!u.install()) app.quit()
+        } catch (err) {
+          // o banco já pode estar fechado: nunca deixar o app aberto assim
+          console.warn('[saga] falha ao instalar a atualização:', err instanceof Error ? err.message.slice(0, 300) : err)
+          app.quit()
+        }
       },
       getWindow: () => win,
       isTrustedSender: (url) => isAppUrl(url, appOrigin),

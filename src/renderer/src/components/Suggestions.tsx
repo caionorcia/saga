@@ -141,7 +141,8 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
     }
     staleWhileHidden.current = false
     const cur = current.current
-    if (cur) {
+    // análise feita com áudio pendente: a novidade pode ser a transcrição terminando, então deixa o serviço decidir
+    if (cur && cur.pendingAudios === 0) {
       try {
         if (onlyOwnNewMessages(await window.saga.listMessages(jid), cur.lastMsgId)) return
       } catch {
