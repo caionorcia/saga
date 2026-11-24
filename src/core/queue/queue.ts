@@ -43,8 +43,17 @@ export class JobQueue {
     this.wake()
   }
 
+  /** Jobs `running` de uma execução interrompida contam como uma falha (evita laço de quedas). */
   recoverAfterCrash(): number {
-    return this.repo.resetRunningJobs()
+    const jobs = this.repo.listJobs('running')
+    for (const job of jobs) this.failJob(job, 'interrompido (o app fechou durante a execução)')
+    return jobs.length
+  }
+
+  private failJob(job: JobRow, msg: string): void {
+    const attempts = job.attempts + 1
+    const next = attempts >= BACKOFF_MS.length ? null : this.clock.now() + BACKOFF_MS[attempts - 1]
+    this.repo.markJobFailed(job.id, attempts, msg, next)
   }
 
   retryFailed(id: number): void {
@@ -93,17 +102,16 @@ export class JobQueue {
     if (!job) return 'waiting'
 
     const limiter = this.limiters[job.type as JobType]
+    // conta contra o ritmo mesmo que o job falhe (antes de marcar running: se lançar, nada fica preso)
+    limiter.record(job.type === 'transcribe' ? Number((job.payload as any)?.durationSec) : 1)
     this.repo.markJobRunning(job.id)
-    // conta contra o ritmo mesmo que o job falhe
-    limiter.record(job.type === 'transcribe' ? Number((job.payload as any)?.durationSec) || 0 : 1)
     try {
       await this.handlers.get(job.type as JobType)!(job.payload)
       this.repo.markJobDone(job.id)
     } catch (e) {
-      const attempts = job.attempts + 1
-      const msg = e instanceof Error ? e.message : String(e)
-      const next = attempts >= BACKOFF_MS.length ? null : this.clock.now() + BACKOFF_MS[attempts - 1]
-      this.repo.markJobFailed(job.id, attempts, msg, next)
+      this.failJob(job, e instanceof Error ? e.message : String(e))
+    } finally {
+      limiter.markFinished()
     }
     return 'ran'
   }
@@ -112,8 +120,8 @@ export class JobQueue {
     const c = this.repo.jobCounts()
     let nextRunAt: number | null = null
     for (const { type, nextRunAt: n } of this.repo.pendingNextRunByType()) {
+            if (!this.handlers.has(type as JobType)) continue // sem handler, o laço nunca rodaria: não acordar à toa
       const lim = this.limiters[type as JobType]
-      if (!lim) continue
       const t = Math.max(n, lim.nextAllowedAt())
       if (nextRunAt === null || t < nextRunAt) nextRunAt = t
     }

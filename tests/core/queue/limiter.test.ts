@@ -25,6 +25,25 @@ describe('RateLimiter', () => {
     expect(l.nextAllowedAt()).toBe(clock.now() + 12000)
   })
 
+  it('markFinished reinicia o intervalo a partir do fim da ação', () => {
+    const clock = new FakeClock(T0)
+    const l = new RateLimiter(LIMITS.wa_media, clock, () => 0)
+    l.record()
+    clock.advance(10_000)
+    expect(l.nextAllowedAt()).toBeLessThanOrEqual(clock.now())
+    l.markFinished()
+    expect(l.nextAllowedAt()).toBe(clock.now() + 4000)
+  })
+
+  it('record com custo inválido não corrompe a persistência', () => {
+    const clock = new FakeClock(T0)
+    const l = new RateLimiter(LIMITS.groq_audio, clock, () => 0)
+    l.record(Infinity)
+    l.record(NaN)
+    l.record(-1)
+    expect(() => l.nextAllowedAt()).not.toThrow()
+  })
+
   it('sem registros, permite imediatamente', () => {
     const clock = new FakeClock(T0)
     const l = new RateLimiter(LIMITS.wa_media, clock, () => 0)

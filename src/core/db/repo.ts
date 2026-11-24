@@ -279,10 +279,6 @@ export class Repo {
       .run(id)
   }
 
-  resetRunningJobs(): number {
-    return Number(this.db.prepare(`UPDATE jobs SET status = 'pending' WHERE status = 'running'`).run().changes)
-  }
-
   jobCounts(): Record<JobStatus, number> {
     const out: Record<JobStatus, number> = { pending: 0, running: 0, done: 0, failed: 0 }
     for (const r of this.db.prepare('SELECT status, COUNT(*) AS c FROM jobs GROUP BY status').all() as Row[]) {

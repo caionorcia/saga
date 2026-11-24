@@ -57,10 +57,8 @@ export class RateLimiter {
 
   /** Registra uma ação. Para limitadores de áudio, `costUnits` são os segundos do áudio. */
   record(costUnits = 1): void {
-    const mono = this.clock.monotonic()
-    const mult = mono < this.warmupUntilMono ? 2 : 1
-    this.gapMs = (this.cfg.minGapMs + this.rng() * (this.cfg.maxGapMs - this.cfg.minGapMs)) * mult
-    this.lastMono = mono
+    if (!Number.isFinite(costUnits) || costUnits < 0) costUnits = this.cfg.minBilledSec ?? 1
+    this.startGap()
     this.normalize()
     if (this.cfg.audioSecondsPerDay !== undefined) {
       this.entries.push([this.clock.now(), 1, Math.max(this.cfg.minBilledSec ?? 0, costUnits)])
@@ -68,6 +66,18 @@ export class RateLimiter {
       this.entries.push([this.clock.now(), costUnits, 0])
     }
     this.save()
+  }
+
+  /** A ação terminou: o próximo intervalo conta a partir do fim, não só do início. */
+  markFinished(): void {
+    this.startGap()
+  }
+
+  private startGap(): void {
+    const mono = this.clock.monotonic()
+    const mult = mono < this.warmupUntilMono ? 2 : 1
+    this.gapMs = (this.cfg.minGapMs + this.rng() * (this.cfg.maxGapMs - this.cfg.minGapMs)) * mult
+    this.lastMono = mono
   }
 
   /** Epoch (ms) a partir do qual a próxima ação é permitida; <= now quando já é permitida. */

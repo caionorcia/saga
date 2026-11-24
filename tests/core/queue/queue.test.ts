@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FakeClock } from '../../../src/core/clock'
 import { openDb } from '../../../src/core/db/db'
 import { Repo } from '../../../src/core/db/repo'
 import { JobQueue, type JobType } from '../../../src/core/queue/queue'
 import { LIMITS, RateLimiter } from '../../../src/core/queue/limiter'
 import type { NormalizedMessage } from '../../../src/core/types'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -25,8 +25,10 @@ describe('JobQueue', () => {
   let repo: Repo
   let q: JobQueue
   let ran: string[]
+  let tmp: string
 
   beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'saga-q-'))
     clock = new FakeClock(T0)
     repo = new Repo(openDb(':memory:'), clock)
     q = new JobQueue(repo, clock, makeLimiters(clock, repo))
@@ -34,6 +36,10 @@ describe('JobQueue', () => {
     q.register('download_audio', async (p) => {
       ran.push(String((p as any).id))
     })
+  })
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true })
   })
 
   it('500 downloads sem avançar o relógio: exatamente 1 roda, o resto espera', async () => {
@@ -100,7 +106,7 @@ describe('JobQueue', () => {
     expect(stored[0][2]).toBe(10)
   })
 
-  it('falha 3 vezes: backoff 30 s / 2 min / 10 min e então failed; retryFailed volta a pending', async () => {
+  it('falha 3 vezes: backoff 30 s e 2 min, falha definitiva na 3ª; retryFailed volta a pending', async () => {
     q.register('fetch_profile', async () => {
       throw new Error('boom')
     })
@@ -123,9 +129,8 @@ describe('JobQueue', () => {
     expect(q.stats()).toMatchObject({ pending: 1, failed: 0 })
   })
 
-  it('recuperação após queda: running volta a pending e o handler idempotente não duplica', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'saga-q-'))
-    const file = join(dir, 'saga.db')
+  it('recuperação após queda: o trabalho feito antes da queda não é duplicado', async () => {
+    const file = join(tmp, 'saga.db')
     const db1 = openDb(file)
     const repo1 = new Repo(db1, clock)
     const m: NormalizedMessage = {
@@ -140,26 +145,80 @@ describe('JobQueue', () => {
       setTranscriptCalls++
       r.setTranscript('m1', 'olá', 'done')
     }
+    // 1ª execução: faz o trabalho e "morre" antes de o job ser marcado como done
     const q1 = new JobQueue(repo1, clock, makeLimiters(clock, repo1))
     q1.register('transcribe', async () => {
-      throw new Error('simulado')
+      await handlerFor(repo1)()
+      return new Promise<void>(() => {}) // nunca termina: a queda acontece aqui
     })
-    // simula queda: job fica 'running' sem terminar
     q1.enqueue('transcribe', 'tr:m1', { messageId: 'm1', durationSec: 30 })
-    repo1.markJobRunning(repo1.listJobs('pending')[0].id)
+    void q1.tick()
+    await new Promise((r) => setTimeout(r, 20))
     expect(q1.stats().running).toBe(1)
-    db1.close()
+    expect(setTranscriptCalls).toBe(1)
+    db1.close() // abandona a fila 1
 
     const repo2 = new Repo(openDb(file), clock)
     const q2 = new JobQueue(repo2, clock, makeLimiters(clock, repo2))
     q2.register('transcribe', handlerFor(repo2))
     expect(q2.recoverAfterCrash()).toBe(1)
+    expect(await q2.tick()).toBe('idle') // a queda conta como falha: espera o backoff
+    clock.advance(30_000)
     expect(await q2.tick()).toBe('ran')
     expect(q2.stats()).toMatchObject({ done: 1, pending: 0, running: 0 })
-    // reexecução do mesmo trabalho (ex.: segundo disparo) não duplica
-    await handlerFor(repo2)()
     expect(setTranscriptCalls).toBe(1)
     expect(repo2.listMessages(m.jid).find((x) => x.id === 'm1')?.transcript).toBe('olá')
+  })
+
+  it('job que derruba o app em laço vira failed na 3ª queda', () => {
+    q.enqueue('download_audio', 'k', {})
+    for (let i = 0; i < 3; i++) {
+      clock.advance(10 * 60_000)
+      const id = repo.nextPendingJob('download_audio', clock.now())!.id
+      repo.markJobRunning(id)
+      expect(q.recoverAfterCrash()).toBe(1)
+    }
+    expect(q.stats()).toMatchObject({ failed: 1, pending: 0, running: 0 })
+  })
+
+  it('durationSec inválido (NaN, Infinity, negativo) cai no mínimo de 10 s', async () => {
+    q.register('transcribe', async () => {})
+    for (const [i, d] of [NaN, Infinity, -5].entries()) {
+      q.enqueue('transcribe', `t${i}`, { durationSec: d }, 0)
+      clock.advance(10_000)
+      expect(await q.tick()).toBe('ran')
+    }
+    const stored = JSON.parse(repo.getSetting('limiter:groq_audio')!)
+    expect(stored.map((e: number[]) => e[2])).toEqual([10, 10, 10])
+  })
+
+  it('o intervalo recomeça quando o job termina', async () => {
+    q.register('fetch_profile', async () => {})
+    q = new JobQueue(repo, clock, makeLimiters(clock, repo))
+    q.register('download_audio', async () => {
+      clock.advance(10_000) // download demorado
+    })
+    q.enqueue('download_audio', 'a', {})
+    q.enqueue('download_audio', 'b', {})
+    expect(await q.tick()).toBe('ran')
+    // 10 s se passaram durante o job; sem markFinished já estaria liberado (gap de 4 s)
+    expect(await q.tick()).toBe('waiting')
+    clock.advance(4000)
+    expect(await q.tick()).toBe('ran')
+  })
+
+  it('não gira em falso quando há jobs pendentes de um tipo sem handler', async () => {
+    vi.useFakeTimers()
+    try {
+      const spy = vi.spyOn(q, 'tick')
+      q.enqueue('fetch_profile', 'p', {}) // sem handler registrado
+      q.start()
+      await vi.advanceTimersByTimeAsync(30_000)
+      await q.stop()
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('start/stop: o laço roda jobs sem girar em falso', async () => {
