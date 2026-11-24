@@ -45,7 +45,35 @@ export interface EventRow {
   detail: string
 }
 
+export type JobStatus = 'pending' | 'running' | 'done' | 'failed'
+
+export interface JobRow {
+  id: number
+  type: string
+  key: string
+  payload: unknown
+  status: JobStatus
+  attempts: number
+  nextRunAt: number
+  priority: number
+  lastError: string | null
+}
+
 type Row = Record<string, any>
+
+function toJob(r: Row): JobRow {
+  return {
+    id: r.id,
+    type: r.type,
+    key: r.key,
+    payload: JSON.parse(r.payload_json),
+    status: r.status,
+    attempts: r.attempts,
+    nextRunAt: r.next_run_at,
+    priority: r.priority,
+    lastError: r.last_error
+  }
+}
 
 /** `5547999998888@s.whatsapp.net` -> `+55 47 99999-8888` */
 export function formatPhone(jid: string): string {
@@ -194,5 +222,72 @@ export class Repo {
     this.db
       .prepare('INSERT INTO settings_kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
       .run(key, value)
+  }
+
+  // --- fila de jobs ---
+
+  insertJobIgnore(type: string, key: string, payload: unknown, priority: number): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO jobs(type, key, payload_json, status, priority) VALUES (?, ?, ?, 'pending', ?)`
+      )
+      .run(type, key, JSON.stringify(payload), priority)
+  }
+
+  /** Melhor job pendente elegível (prioridade maior, depois id menor) de um tipo. */
+  nextPendingJob(type: string, now: number): JobRow | null {
+    const r = this.db
+      .prepare(
+        `SELECT * FROM jobs WHERE status = 'pending' AND type = ? AND next_run_at <= ?
+         ORDER BY priority DESC, id ASC LIMIT 1`
+      )
+      .get(type, now) as Row | undefined
+    return r ? toJob(r) : null
+  }
+
+  listJobs(status: JobStatus): JobRow[] {
+    return (this.db.prepare('SELECT * FROM jobs WHERE status = ? ORDER BY id').all(status) as Row[]).map(toJob)
+  }
+
+  /** Para cada tipo, o menor next_run_at entre os pendentes. */
+  pendingNextRunByType(): Array<{ type: string; nextRunAt: number }> {
+    return (
+      this.db
+        .prepare(`SELECT type, MIN(next_run_at) AS n FROM jobs WHERE status = 'pending' GROUP BY type`)
+        .all() as Row[]
+    ).map((r) => ({ type: r.type, nextRunAt: r.n }))
+  }
+
+  markJobRunning(id: number): void {
+    this.db.prepare(`UPDATE jobs SET status = 'running' WHERE id = ?`).run(id)
+  }
+
+  markJobDone(id: number): void {
+    this.db.prepare(`UPDATE jobs SET status = 'done', last_error = NULL WHERE id = ?`).run(id)
+  }
+
+  /** Registra a falha: volta a pending com `nextRunAt`, ou failed se `nextRunAt` for null. */
+  markJobFailed(id: number, attempts: number, error: string, nextRunAt: number | null): void {
+    this.db
+      .prepare(`UPDATE jobs SET status = ?, attempts = ?, last_error = ?, next_run_at = COALESCE(?, next_run_at) WHERE id = ?`)
+      .run(nextRunAt === null ? 'failed' : 'pending', attempts, error, nextRunAt, id)
+  }
+
+  retryJob(id: number): void {
+    this.db
+      .prepare(`UPDATE jobs SET status = 'pending', attempts = 0, next_run_at = 0 WHERE id = ? AND status = 'failed'`)
+      .run(id)
+  }
+
+  resetRunningJobs(): number {
+    return Number(this.db.prepare(`UPDATE jobs SET status = 'pending' WHERE status = 'running'`).run().changes)
+  }
+
+  jobCounts(): Record<JobStatus, number> {
+    const out: Record<JobStatus, number> = { pending: 0, running: 0, done: 0, failed: 0 }
+    for (const r of this.db.prepare('SELECT status, COUNT(*) AS c FROM jobs GROUP BY status').all() as Row[]) {
+      out[r.status as JobStatus] = r.c
+    }
+    return out
   }
 }
