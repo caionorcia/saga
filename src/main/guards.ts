@@ -102,7 +102,8 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
     isObj(i) &&
     nonEmpty(i.jid) &&
     nonEmpty(i.finalText) &&
-    (i.originalSuggestion === null || i.originalSuggestion === undefined || isStr(i.originalSuggestion)),
+    (i.originalSuggestion === null || i.originalSuggestion === undefined || isStr(i.originalSuggestion)) &&
+    (i.analysisLastMsgId === null || i.analysisLastMsgId === undefined || isStr(i.analysisLastMsgId)),
   copyToClipboard: ([t]) => isStr(t),
   renameContact: ([j, n]) => nonEmpty(j) && isStr(n),
   setHidden: ([j, h]) => nonEmpty(j) && isBool(h),
@@ -112,6 +113,7 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   manualReconnect: () => true,
   retryFailedJobs: () => true,
   downloadUpdate: () => true,
+  installUpdate: (a) => a.length === 0,
   getSettings: () => true,
   saveSettings: ([p]) => isObj(p) && Object.entries(p).every(([k, v]) => v === undefined || (SETTINGS_FIELDS[k]?.(v) ?? false)),
   testKey: ([k, key]) => isStr(k) && KEY_KINDS.has(k) && isStr(key),

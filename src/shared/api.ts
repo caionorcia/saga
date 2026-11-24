@@ -13,7 +13,10 @@ export type Analysis = AnalysisRow
 export type SettingsView = Settings
 export type SaveSettingsInput = SettingsPatch
 
-/** Atualização do app: `available` → botão "Atualizar" (`downloadUpdate`); `ready` → instala ao sair. */
+/**
+ * Atualização do app: `available` → botão "Atualizar" (`downloadUpdate`);
+ * `ready` → instala ao sair, ou já com "Reiniciar e atualizar" (`installUpdate`).
+ */
 export type UpdateState =
   | { status: 'none' }
   | { status: 'available' | 'downloading' | 'ready'; version: string }
@@ -34,8 +37,15 @@ export interface AppState {
   paused: boolean
   /** menos de 1 GB livre: downloads pausados → "Retomar" (`resumeAll`) re-checa o disco */
   diskLow: boolean
-  /** transcrições pausadas (chave ausente ou recusada) → configurar a chave ou "Retomar" */
+  /** transcrições pausadas (chave, teto de gasto ou sem internet) → configurar a chave ou "Retomar" */
   transcribePaused: boolean
+  /**
+   * por que as transcrições estão pausadas (null = não estão): `key` chave ausente/recusada,
+   * `budget` teto diário de gasto atingido (OpenAI; volta amanhã), `network` sem internet (volta em 2 min)
+   */
+  transcribePausedReason: 'key' | 'budget' | 'network' | null
+  /** áudios a baixar no lote atual: `remaining` pendentes/rodando, `done` concluídos desde que o lote começou */
+  downloads: { remaining: number; done: number }
   costTodayUsd: number
   /** chave Groq configurada e o WhatsApp já conectou alguma vez */
   setupDone: boolean
@@ -81,6 +91,8 @@ export interface SaveReplyInput {
   /** a sugestão da IA de onde a resposta partiu (null = escrita do zero) */
   originalSuggestion: string | null
   finalText: string
+  /** `lastMsgId` da análise que gerou a sugestão: o contexto salvo é o daquela análise */
+  analysisLastMsgId?: string | null
 }
 
 export interface RecentEvent {
@@ -122,6 +134,8 @@ export interface SagaApi {
   retryFailedJobs(): Promise<number>
   /** baixa a nova versão (instala ao fechar o app); sem efeito se não houver atualização */
   downloadUpdate(): Promise<void>
+  /** com a atualização baixada (`ready`): fecha o Saga com cuidado, instala e abre de novo; senão nada */
+  installUpdate(): Promise<void>
 
   getSettings(): Promise<SettingsView>
   saveSettings(patch: SaveSettingsInput): Promise<SaveSettingsResult>
@@ -150,6 +164,7 @@ export const INVOKE_METHODS = [
   'manualReconnect',
   'retryFailedJobs',
   'downloadUpdate',
+  'installUpdate',
   'getSettings',
   'saveSettings',
   'testKey',

@@ -128,8 +128,33 @@ function main(): void {
     })
 
     let updater: Updater | null = null
+
+    // para a fila (espera o job atual por até 5 s), desconecta o WhatsApp (até 5 s) e fecha o banco; uma vez só
+    let shutdown: Promise<void> | null = null
+    const shutdownOnce = (): Promise<void> =>
+      (shutdown ??= svc
+        .stop({ timeoutMs: 5_000 })
+        .catch(() => {})
+        .finally(() => {
+          stopped = true
+          try {
+            db.close()
+          } catch {
+            // já fechado
+          }
+          if (fake) rmSync(data, { recursive: true, force: true })
+        }))
+
     registerIpc(svc, {
       onDownloadUpdate: async () => updater?.download(),
+      onInstallUpdate: async () => {
+        const u = updater
+        if (!u?.isReady()) return
+        // fecha tudo com cuidado antes: o instalador encontra o banco e a sessão do WhatsApp gravados
+        quitting = true
+        await shutdownOnce()
+        if (!u.install()) app.quit()
+      },
       getWindow: () => win,
       isTrustedSender: (url) => isAppUrl(url, appOrigin),
       onRefused: (method, url) => {
@@ -168,27 +193,13 @@ function main(): void {
       if (!quitting) svc.onResumeFromSleep(slept)
     })
 
-    // ao sair: para a fila (espera o job atual por até 5 s), desconecta o WhatsApp (até 5 s) e fecha o banco
-    let shuttingDown = false
+    // ao sair: desliga tudo com cuidado (shutdownOnce) e só então deixa o app fechar
     app.on('before-quit', (e) => {
       quitting = true
       if (stopped) return
       e.preventDefault()
-      if (shuttingDown) return
-      shuttingDown = true
-      void svc
-        .stop({ timeoutMs: 5_000 })
-        .catch(() => {})
-        .finally(() => {
-          stopped = true
-          try {
-            db.close()
-          } catch {
-            // já fechado
-          }
-          if (fake) rmSync(data, { recursive: true, force: true })
-          app.quit()
-        })
+      if (shutdown) return
+      void shutdownOnce().then(() => app.quit())
     })
 
     svc.start().catch((err) => {

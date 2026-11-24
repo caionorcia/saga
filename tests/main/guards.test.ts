@@ -144,3 +144,19 @@ describe('downloadUpdate', () => {
     expect(() => validateIpcArgs('downloadUpdate', [])).not.toThrow()
   })
 })
+
+describe('installUpdate', () => {
+  it('sem argumentos (qualquer argumento é recusado)', () => {
+    expect(() => validateIpcArgs('installUpdate', [])).not.toThrow()
+    expect(() => validateIpcArgs('installUpdate', [true])).toThrow(InvalidIpcArgsError)
+  })
+})
+
+describe('saveReply: id da análise', () => {
+  it('analysisLastMsgId opcional: texto, null ou ausente', () => {
+    const base = { jid: 'a@s.whatsapp.net', originalSuggestion: null, finalText: 'oi' }
+    expect(() => validateIpcArgs('saveReply', [{ ...base, analysisLastMsgId: 'M1' }])).not.toThrow()
+    expect(() => validateIpcArgs('saveReply', [{ ...base, analysisLastMsgId: null }])).not.toThrow()
+    expect(() => validateIpcArgs('saveReply', [{ ...base, analysisLastMsgId: 5 }])).toThrow(InvalidIpcArgsError)
+  })
+})

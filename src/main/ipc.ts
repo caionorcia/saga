@@ -15,6 +15,8 @@ export interface IpcOptions {
   onSettingsSaved?: () => void
   /** o usuário clicou em "Atualizar" */
   onDownloadUpdate?: () => Promise<void>
+  /** o usuário clicou em "Reiniciar e atualizar" */
+  onInstallUpdate?: () => Promise<void>
 }
 
 /** Liga cada método de `window.saga` ao serviço e repassa os eventos do serviço para a janela. */
@@ -36,6 +38,9 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     retryFailedJobs: () => service.retryFailedJobs(),
     downloadUpdate: async () => {
       await opts.onDownloadUpdate?.()
+    },
+    installUpdate: async () => {
+      await opts.onInstallUpdate?.()
     },
     getSettings: () => service.getSettings(),
     saveSettings: async (patch) => {
