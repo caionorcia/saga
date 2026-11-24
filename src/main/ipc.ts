@@ -42,6 +42,7 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
       return r
     },
     testKey: (kind, key) => service.testKey(kind, String(key)),
+    recentEvents: (n) => service.recentEvents(Number(n)),
     audioUrl: (id) => service.audioUrl(String(id))
   }
 

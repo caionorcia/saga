@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, nativeImage, net, powerMonitor, protocol, shell, Tray } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { openDb } from '../core/db/db'
@@ -102,8 +103,11 @@ function main(): void {
   }
   app.on('second-instance', showWindow)
 
-  app.whenReady().then(() => {
-    const data = app.getPath('userData')
+  app.whenReady().then(async () => {
+    // `SAGA_FAKE_WA=1`: sem rede, com dados de demonstração num banco temporário (nunca no banco real)
+    const fake = process.env['SAGA_FAKE_WA'] === '1'
+    const FakeWa = fake ? (await import('./fakeWa')).FakeWaClient : null
+    const data = fake ? mkdtempSync(join(tmpdir(), 'saga-fake-')) : app.getPath('userData')
     const mediaDir = join(data, 'media')
     const db = openDb(join(data, 'saga.db'))
     const repo = new Repo(db)
@@ -111,7 +115,8 @@ function main(): void {
     const svc = new SagaService({
       repo,
       settings,
-      paths: { authDir: join(data, 'auth'), backupDir: join(data, 'auth-backup'), mediaDir }
+      paths: { authDir: join(data, 'auth'), backupDir: join(data, 'auth-backup'), mediaDir },
+      waClientFactory: FakeWa ? () => new FakeWa(repo) : undefined
     })
     service = svc
 

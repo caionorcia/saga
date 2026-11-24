@@ -28,6 +28,7 @@ import type {
   AnalysisResult,
   AppState,
   MessageView,
+  RecentEvent,
   SaveReplyInput,
   SaveSettingsResult,
   SettingsView,
@@ -472,6 +473,10 @@ export class SagaService extends EventEmitter {
   }
 
   // --- configurações ---
+
+  async recentEvents(limit: number): Promise<RecentEvent[]> {
+    return this.repo.recentEvents(limit)
+  }
 
   async getSettings(): Promise<SettingsView> {
     return this.settings.get()

@@ -1,0 +1,209 @@
+{
+ "contacts": [
+  {
+   "jid": "5547999998888@s.whatsapp.net",
+   "pushName": "Ana Paula Souza",
+   "messages": [
+    {
+     "id": "A1",
+     "fromMe": true,
+     "minutesAgo": 2880,
+     "kind": "text",
+     "text": "Oi Ana, como foi a semana? Conseguiu avançar no plano de conteúdo?"
+    },
+    {
+     "id": "A2",
+     "fromMe": false,
+     "minutesAgo": 2870,
+     "kind": "text",
+     "text": "Oi! Avancei bem, só travei na parte dos preços."
+    },
+    {
+     "id": "A3",
+     "fromMe": false,
+     "minutesAgo": 185,
+     "kind": "audio",
+     "durationSec": 42,
+     "hasAudio": true,
+     "transcriptStatus": "done",
+     "transcript": "Então, mentor, eu estou em dúvida se eu cobro por hora ou se eu faço um pacote fechado com quatro encontros. Tenho medo de assustar o cliente e acabar perdendo a venda."
+    },
+    {
+     "id": "A4",
+     "fromMe": true,
+     "minutesAgo": 180,
+     "kind": "text",
+     "text": "Pacote costuma funcionar melhor no começo. Quer que eu te mostre um exemplo?"
+    },
+    {
+     "id": "A5",
+     "fromMe": false,
+     "minutesAgo": 35,
+     "kind": "text",
+     "text": "Quero sim! E será que a gente pode adiar a nossa reunião de amanhã? Surgiu um imprevisto no trabalho."
+    },
+    {
+     "id": "A6",
+     "fromMe": false,
+     "minutesAgo": 12,
+     "kind": "audio",
+     "durationSec": 18,
+     "hasAudio": true,
+     "transcriptStatus": "done",
+     "transcript": "Ah, e se der, pode ser na sexta de manhã, tá? Obrigada!"
+    }
+   ],
+   "analysis": {
+    "provider": "groq",
+    "summary": "Ana quer ver um exemplo de pacote de preços e pede para adiar a reunião de amanhã para sexta de manhã, por causa de um imprevisto no trabalho.",
+    "suggestions": [
+     "Claro, Ana! Sexta de manhã está ótimo, pode ser às 9h? Vou te mandar o exemplo de pacote ainda hoje.",
+     "Sem problema! Vamos para sexta às 9h. Antes disso, te envio o modelo de pacote com quatro encontros para você olhar com calma.",
+     "Tudo bem, imprevisto acontece. Sexta de manhã fica combinado. Me avisa o horário que for melhor para você."
+    ]
+   }
+  },
+  {
+   "jid": "5511988887777@s.whatsapp.net",
+   "pushName": "Carlos Eduardo",
+   "notes": "Dono de padaria. Quer abrir a segunda loja em 2027.",
+   "messages": [
+    {
+     "id": "C1",
+     "fromMe": false,
+     "minutesAgo": 600,
+     "kind": "text",
+     "text": "Bom dia, mentor!"
+    },
+    {
+     "id": "C2",
+     "fromMe": true,
+     "minutesAgo": 590,
+     "kind": "text",
+     "text": "Bom dia, Carlos! Me conta as novidades."
+    },
+    {
+     "id": "C3",
+     "fromMe": false,
+     "minutesAgo": 8,
+     "kind": "audio",
+     "durationSec": 95,
+     "hasAudio": true,
+     "transcriptStatus": null,
+     "transcript": null
+    }
+   ]
+  },
+  {
+   "jid": "5521977776666@s.whatsapp.net",
+   "pushName": "Mariana Lima",
+   "messages": [
+    {
+     "id": "M1",
+     "fromMe": false,
+     "minutesAgo": 4300,
+     "kind": "text",
+     "text": "Mentor, enviei o relatório por e-mail."
+    },
+    {
+     "id": "M2",
+     "fromMe": true,
+     "minutesAgo": 4290,
+     "kind": "text",
+     "text": "Recebi, obrigado. Vou ler hoje à noite."
+    },
+    {
+     "id": "M3",
+     "fromMe": false,
+     "minutesAgo": 300,
+     "kind": "audio",
+     "durationSec": 23,
+     "hasAudio": false,
+     "transcriptStatus": "unavailable",
+     "transcript": null
+    },
+    {
+     "id": "M4",
+     "fromMe": false,
+     "minutesAgo": 299,
+     "kind": "text",
+     "text": "Ops, o áudio acima não foi. Pode me ligar quando puder?"
+    }
+   ],
+   "analysis": {
+    "provider": "claude",
+    "summary": "Mariana pediu para você ligar quando puder; um áudio dela não pôde ser recuperado.",
+    "suggestions": [
+     "Oi Mariana! Posso te ligar hoje às 17h. Serve para você?",
+     "Claro, te ligo assim que terminar uma reunião. Só não consegui ouvir o seu áudio, pode me contar em uma frase do que se trata?"
+    ]
+   }
+  },
+  {
+   "jid": "5585966665555@s.whatsapp.net",
+   "pushName": "João Pedro",
+   "customName": "João Pedro (Consultório)",
+   "messages": [
+    {
+     "id": "J1",
+     "fromMe": false,
+     "minutesAgo": 9000,
+     "kind": "text",
+     "text": "Segue a foto do material que falei."
+    },
+    {
+     "id": "J2",
+     "fromMe": false,
+     "minutesAgo": 8990,
+     "kind": "audio",
+     "durationSec": 60,
+     "hasAudio": true,
+     "transcriptStatus": "failed",
+     "transcript": null
+    },
+    {
+     "id": "J3",
+     "fromMe": true,
+     "minutesAgo": 8900,
+     "kind": "text",
+     "text": "Perfeito, João. Vamos revisar na próxima sessão."
+    }
+   ],
+   "analysis": {
+    "provider": "groq",
+    "summary": "Sem pedido novo: você combinou revisar o material na próxima sessão.",
+    "suggestions": [
+     "Tudo certo, João! Na próxima sessão revisamos o material juntos."
+    ]
+   }
+  },
+  {
+   "jid": "5547955554444@s.whatsapp.net",
+   "pushName": "Fernanda Costa",
+   "notes": "Prefere conversar à noite.",
+   "messages": [
+    {
+     "id": "F1",
+     "fromMe": false,
+     "minutesAgo": 1500,
+     "kind": "text",
+     "text": "Boa noite! Queria sua opinião: devo aceitar a proposta da agência ou continuar sozinha?"
+    },
+    {
+     "id": "F2",
+     "fromMe": true,
+     "minutesAgo": 1490,
+     "kind": "text",
+     "text": "Boa noite, Fernanda! Qual é o valor e o prazo que eles propuseram?"
+    },
+    {
+     "id": "F3",
+     "fromMe": false,
+     "minutesAgo": 1400,
+     "kind": "text",
+     "text": "R$ 3.000 por mês, contrato de 6 meses."
+    }
+   ]
+  }
+ ]
+}

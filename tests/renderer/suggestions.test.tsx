@@ -1,0 +1,100 @@
+// @vitest-environment jsdom
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Suggestions } from '../../src/renderer/src/components/Suggestions'
+import type { Analysis, AnalysisResult, SagaApi } from '../../src/shared/api'
+
+const JID = '5547999998888@s.whatsapp.net'
+
+const analysis: Analysis = {
+  jid: JID,
+  lastMsgId: 'M1',
+  provider: 'groq',
+  summary: 'Quer saber se pode adiar a reunião.',
+  suggestions: ['Claro, podemos adiar para quinta.', 'Pode ser sexta, às 10h?'],
+  createdAt: 1
+}
+
+let saga: Record<string, ReturnType<typeof vi.fn>>
+
+function install(getAnalysis: () => Promise<AnalysisResult>): void {
+  saga = {
+    getAnalysis: vi.fn(getAnalysis),
+    regenerate: vi.fn(async () => ({ ok: true, analysis }) as AnalysisResult),
+    saveReply: vi.fn(async () => 1),
+    copyToClipboard: vi.fn(async () => {}),
+    onMessages: vi.fn(() => () => {})
+  }
+  ;(window as unknown as { saga: Partial<SagaApi> }).saga = saga as unknown as Partial<SagaApi>
+}
+
+beforeEach(() => install(async () => ({ ok: true, analysis })))
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
+
+describe('Suggestions', () => {
+  it('Salvar grava o texto gerado e o editado, e vira "Salvo ✓"', async () => {
+    render(<Suggestions jid={JID} />)
+    const box = (await screen.findAllByRole('textbox'))[0]
+    fireEvent.change(box, { target: { value: 'Claro! Quinta às 15h serve?' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Salvar' })[0])
+    await waitFor(() =>
+      expect(saga.saveReply).toHaveBeenCalledWith({
+        jid: JID,
+        originalSuggestion: 'Claro, podemos adiar para quinta.',
+        finalText: 'Claro! Quinta às 15h serve?'
+      })
+    )
+    expect(await screen.findByRole('button', { name: 'Salvo ✓' })).toBeTruthy()
+  })
+
+  it('Copiar envia o texto editado e mostra "Copiado ✓" por 2 segundos', async () => {
+    render(<Suggestions jid={JID} />)
+    const box = (await screen.findAllByRole('textbox'))[0]
+    fireEvent.change(box, { target: { value: 'Texto editado' } })
+    vi.useFakeTimers()
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Copiar' })[0])
+    })
+    expect(saga.copyToClipboard).toHaveBeenCalledWith('Texto editado')
+    expect(screen.getByRole('button', { name: 'Copiado ✓' })).toBeTruthy()
+    await act(async () => {
+      vi.advanceTimersByTime(2100)
+    })
+    expect(screen.queryByRole('button', { name: 'Copiado ✓' })).toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Copiar' })).toHaveLength(2)
+  })
+
+  it('com getAnalysis rejeitando mostra "Tentar de novo" e tenta outra vez ao clicar', async () => {
+    install(async () => {
+      throw new Error('falha')
+    })
+    render(<Suggestions jid={JID} />)
+    const retry = await screen.findByRole('button', { name: 'Tentar de novo' })
+    saga.getAnalysis.mockResolvedValueOnce({ ok: true, analysis })
+    fireEvent.click(retry)
+    expect(await screen.findAllByRole('textbox')).toHaveLength(2)
+    expect(saga.getAnalysis).toHaveBeenCalledTimes(2)
+  })
+
+  it('resultado ok:false mostra a mensagem; limite de gasto não oferece nova tentativa', async () => {
+    install(async () => ({
+      ok: false,
+      code: 'budget_exceeded',
+      message: 'O teto diário de gasto com IA foi atingido.',
+      provider: 'claude'
+    }))
+    render(<Suggestions jid={JID} />)
+    expect(await screen.findByText(/limite de gasto/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Tentar de novo' })).toBeNull()
+  })
+
+  it('mostra qual IA gerou e "Gerar novas" chama regenerate', async () => {
+    render(<Suggestions jid={JID} />)
+    expect(await screen.findByText('Gerado por: Groq (grátis)')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Gerar novas' }))
+    await waitFor(() => expect(saga.regenerate).toHaveBeenCalledWith(JID))
+  })
+})

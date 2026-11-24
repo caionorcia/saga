@@ -75,6 +75,14 @@ export interface SaveReplyInput {
   finalText: string
 }
 
+export interface RecentEvent {
+  id: number
+  /** epoch ms */
+  ts: number
+  kind: string
+  detail: string
+}
+
 export type Unsubscribe = () => void
 
 export interface SagaApi {
@@ -108,6 +116,8 @@ export interface SagaApi {
   getSettings(): Promise<SettingsView>
   saveSettings(patch: SaveSettingsInput): Promise<SaveSettingsResult>
   testKey(kind: KeyKind, key: string): Promise<boolean>
+  /** eventos recentes do app (mais novos primeiro), para a tela de configurações */
+  recentEvents(limit: number): Promise<RecentEvent[]>
 
   /** `saga-media://audio/<id>` do áudio original, ou null se ainda não foi baixado */
   audioUrl(id: string): Promise<string | null>
@@ -132,6 +142,7 @@ export const INVOKE_METHODS = [
   'getSettings',
   'saveSettings',
   'testKey',
+  'recentEvents',
   'audioUrl'
 ] as const satisfies ReadonlyArray<keyof SagaApi>
 

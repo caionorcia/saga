@@ -1,0 +1,88 @@
+import { useEffect, useState } from 'react'
+import type { Analysis, AppState, Contact } from '../../shared/api'
+import { ContactList } from './components/ContactList'
+import { Conversation } from './components/Conversation'
+import { Settings } from './components/Settings'
+import { SetupWizard } from './components/SetupWizard'
+import { StatusBar } from './components/StatusBar'
+import { Suggestions } from './components/Suggestions'
+
+export function App() {
+  const [state, setState] = useState<AppState | null>(null)
+  const [wizard, setWizard] = useState<boolean | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [selected, setSelected] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    const off = window.saga.onState((s) => alive && setState(s))
+    window.saga
+      .getState()
+      .then((s) => {
+        if (!alive) return
+        setState((old) => old ?? s)
+        // o assistente fica na tela até o fim, mesmo que o app já conste como configurado no meio dele
+        setWizard((w) => w ?? !s.setupDone)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+      off()
+    }
+  }, [])
+
+  if (!state || wizard === null) return <div className="boot" role="status">Carregando…</div>
+  if (wizard) return <SetupWizard state={state} onFinish={() => setWizard(false)} />
+
+  return (
+    <div className="app">
+      <StatusBar state={state} settingsOpen={settingsOpen} onOpenSettings={() => setSettingsOpen((o) => !o)} />
+      {settingsOpen ? <Settings /> : <Main selected={selected} onSelect={setSelected} />}
+    </div>
+  )
+}
+
+function Main({ selected, onSelect }: { selected: string | null; onSelect: (jid: string | null) => void }) {
+  const [contact, setContact] = useState<Contact | null>(null)
+  const [analysis, setAnalysis] = useState<Analysis | null>(null)
+
+  // mantém o cabeçalho da conversa em dia (renomear, notas)
+  useEffect(() => {
+    if (!selected) {
+      setContact(null)
+      return
+    }
+    let alive = true
+    const load = () =>
+      window.saga
+        .listContacts(true)
+        .then((l) => alive && setContact(l.find((c) => c.jid === selected) ?? null))
+        .catch(() => {})
+    void load()
+    const off = window.saga.onContactsChanged(() => void load())
+    return () => {
+      alive = false
+      off()
+    }
+  }, [selected])
+
+  useEffect(() => setAnalysis(null), [selected])
+
+  return (
+    <div className="columns">
+      <ContactList selected={selected} onSelect={onSelect} />
+      {contact ? (
+        <Conversation key={contact.jid} contact={contact} analysis={analysis} />
+      ) : (
+        <section className="conversation conversation-empty">
+          <p>Escolha uma pessoa na lista para ver a conversa.</p>
+        </section>
+      )}
+      <aside className="suggestions" aria-label="Sugestões de resposta">
+        <h2>Sugestões de resposta</h2>
+        <p className="muted small">Edite como quiser, depois copie e cole no WhatsApp. O Saga não envia nada.</p>
+        {contact ? <Suggestions key={contact.jid} jid={contact.jid} onAnalysis={setAnalysis} /> : <p className="empty">As sugestões aparecem aqui.</p>}
+      </aside>
+    </div>
+  )
+}

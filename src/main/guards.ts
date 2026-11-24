@@ -114,6 +114,7 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   getSettings: () => true,
   saveSettings: ([p]) => isObj(p) && Object.entries(p).every(([k, v]) => v === undefined || (SETTINGS_FIELDS[k]?.(v) ?? false)),
   testKey: ([k, key]) => isStr(k) && KEY_KINDS.has(k) && isStr(key),
+  recentEvents: ([n]) => typeof n === 'number' && Number.isInteger(n) && n > 0 && n <= 200,
   audioUrl: ([id]) => nonEmpty(id)
 }
 
