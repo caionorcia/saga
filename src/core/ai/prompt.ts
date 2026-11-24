@@ -28,7 +28,8 @@ Regras:
 - "sugestoes": 2 ou 3 respostas prontas para enviar, cada uma com uma abordagem diferente: uma direta, uma acolhedora e, se houver terceira, uma com pergunta de aprofundamento.
 - Imite o tom, o vocabulário, o tamanho e o jeito de escrever do mentor nos exemplos (se houver). Sem exemplos, use um tom natural, próximo e profissional de WhatsApp.
 - Escreva como se fosse o próprio mentor, em primeira pessoa. Não invente fatos, preços, datas ou compromissos que não aparecem na conversa.
-- Se o mentorado mandou áudio, use a transcrição; "[áudio indisponível]" significa que não foi possível transcrever.`
+- Se o mentorado mandou áudio, use a transcrição; "[áudio indisponível]" significa que não foi possível transcrever.
+- "[áudio ainda sendo transcrito]" é um áudio que ainda não foi transcrito: não adivinhe o conteúdo dele.`
 
 const MAX_EXAMPLE_CONTEXT = 500
 const MAX_EXAMPLE_REPLY = 800
@@ -42,7 +43,8 @@ function render(m: MessageRow): string {
   let body: string
   if (m.kind === 'text') body = m.text?.trim() || '[mensagem vazia]'
   else if (m.kind === 'audio') {
-    body = m.transcriptStatus === 'done' && m.transcript?.trim() ? `[áudio transcrito] ${m.transcript.trim()}` : '[áudio indisponível]'
+    if (m.transcriptStatus === null) body = '[áudio ainda sendo transcrito]'
+    else body = m.transcriptStatus === 'done' && m.transcript?.trim() ? `[áudio transcrito] ${m.transcript.trim()}` : '[áudio indisponível]'
   } else body = '[mídia sem texto]'
   return `${who}: ${body}`
 }

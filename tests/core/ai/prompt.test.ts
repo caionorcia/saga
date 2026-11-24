@@ -40,6 +40,22 @@ describe('buildPrompt', () => {
   })
 })
 
+describe('buildPrompt áudio pendente', () => {
+  it('áudio ainda sem transcrição aparece como "[áudio ainda sendo transcrito]", diferente de indisponível', () => {
+    const p = buildPrompt({
+      contactName: 'Ana', notes: null,
+      newMessages: [
+        m('a', false, { kind: 'audio', text: null, transcriptStatus: null }),
+        m('b', false, { kind: 'audio', text: null, transcriptStatus: 'unavailable' })
+      ],
+      priorMessages: [], examples: []
+    })
+    expect(p.user).toContain('Mentorado: [áudio ainda sendo transcrito]')
+    expect(p.user).toContain('Mentorado: [áudio indisponível]')
+    expect(p.system).toContain('[áudio ainda sendo transcrito]')
+  })
+})
+
 describe('buildPrompt truncamento', () => {
   it('corta contexto (500) e resposta (800) dos exemplos com reticências', () => {
     const p = buildPrompt({

@@ -9,6 +9,7 @@ import { BudgetExceededError, CostTracker } from '../../../src/core/ai/budget'
 import {
   LlmRateLimitError,
   LlmRefusalError,
+  analysisContext,
   createLlm,
   generateAnalysis,
   type LlmProvider
@@ -80,6 +81,32 @@ describe('generateAnalysis', () => {
     await generateAnalysis(deps(llm), JID, { force: true })
     expect(llm.calls).toHaveLength(1)
   })
+  it('áudio transcrito depois da análise invalida o cache (mesma última mensagem)', async () => {
+    repo.insertMessage({ id: 'm3', jid: JID, fromMe: false, ts: T0 + 3000, kind: 'audio', text: null, mediaKeyJson: null, durationSec: 9 })
+    addMsg('m4', false, 'Ouviu?')
+    const llm = fakeLlm([GOOD])
+    const a = await generateAnalysis(deps(llm), JID)
+    expect(a.pendingAudios).toBe(1)
+    expect(llm.calls[0].user).toContain('[áudio ainda sendo transcrito]')
+    await generateAnalysis(deps(llm), JID)
+    expect(llm.calls).toHaveLength(1)
+    repo.setTranscript('m3', 'quero saber o preço do plano', 'done')
+    const b = await generateAnalysis(deps(llm), JID)
+    expect(llm.calls).toHaveLength(2)
+    expect(llm.calls[1].user).toContain('[áudio transcrito] quero saber o preço do plano')
+    expect(b.pendingAudios).toBe(0)
+    await generateAnalysis(deps(llm), JID)
+    expect(llm.calls).toHaveLength(2)
+  })
+
+  it('analysisContext até uma mensagem: contexto como era na hora da análise', () => {
+    addMsg('m3', false, 'É para minha filha')
+    addMsg('m4', true, 'Claro, custa R$ 100')
+    expect(analysisContext(repo, JID).contextText).toBe('')
+    expect(analysisContext(repo, JID, 'm3').contextText).toBe('Preciso de ajuda com preços\nÉ para minha filha')
+    expect(analysisContext(repo, JID, 'nao-existe').contextText).toBe('')
+  })
+
   it('separa novas (após o último fromMe) e anteriores no prompt', async () => {
     const llm = fakeLlm([GOOD])
     await generateAnalysis(deps(llm), JID)

@@ -504,12 +504,24 @@ export class WhatsAppClient extends EventEmitter {
     return jid
   }
 
+  /**
+   * "Agora" pelo horário do WhatsApp: a mensagem mais nova já vista (no banco ou em `batchMaxTs`);
+   * o relógio do PC só quando ainda não há nenhuma mensagem. Assim um PC com a data errada não muda a janela.
+   */
+  private waNow(batchMaxTs = -Infinity): number {
+    const newest = Math.max(this.deps.repo.newestMessageTs() ?? -Infinity, batchMaxTs)
+    return Number.isFinite(newest) ? newest : this.deps.clock.now()
+  }
+
   private async ingest(messages: WAMessage[], names?: Map<string, string>): Promise<void> {
-    const { repo, queue, clock } = this.deps
-    const cutoff = clock.now() - HISTORY_WINDOW_MS
+    const { repo, queue } = this.deps
+    const ownJid = this.auth?.state.creds.me?.id
+    const normalized = messages.map((raw) => ({ raw, n: normalize(raw, { ownJid }) }))
+    const batchMax = normalized.reduce((m, { n }) => (n && n.ts > m ? n.ts : m), -Infinity)
+    // janela de 30 dias pelo horário das mensagens do WhatsApp, nunca pelo relógio do PC
+    const cutoff = this.waNow(batchMax) - HISTORY_WINDOW_MS
     const audios: NormalizedMessage[] = []
-    for (const raw of messages) {
-      const n = normalize(raw, { ownJid: this.auth?.state.creds.me?.id })
+    for (const { raw, n } of normalized) {
       if (!n || n.ts < cutoff) continue
       const lid = n.jid
       n.jid = await this.resolveJid(n.jid)
@@ -519,20 +531,24 @@ export class WhatsAppClient extends EventEmitter {
       this.emit('message', n)
       if (n.kind === 'audio') audios.push(n)
     }
-    // prioridade depois de gravar o lote inteiro (o histórico chega fora de ordem)
-    for (const a of audios) queue.enqueue('download_audio', a.id, { id: a.id }, this.priorityFor(a.jid, a.ts))
+    // prioridade depois de gravar o lote inteiro (o histórico chega fora de ordem);
+    // contatos escondidos não têm os áudios baixados (voltam para a fila se forem mostrados de novo)
+    for (const a of audios) {
+      if (repo.isHidden(a.jid)) continue
+      queue.enqueue('download_audio', a.id, { id: a.id, ts: a.ts }, this.priorityFor(a.jid, a.ts))
+    }
   }
 
-  /** 10 se o contato aguarda resposta e a mensagem tem menos de 3 dias; senão 0. */
+  /** 10 se o contato aguarda resposta e a mensagem tem menos de 3 dias (horário do WhatsApp); senão 0. */
   private priorityFor(jid: string, ts: number): number {
-    if (ts < this.deps.clock.now() - URGENT_WINDOW_MS) return 0
+    if (ts < this.waNow() - URGENT_WINDOW_MS) return 0
     const lastMsg = this.deps.repo.listMessages(jid, 1)[0]
     return lastMsg && !lastMsg.fromMe ? URGENT_PRIORITY : 0
   }
 
   // --- handlers da fila ---
 
-  private async downloadAudio(payload: { id: string }): Promise<void> {
+  private async downloadAudio(payload: { id: string; ts?: number }): Promise<void> {
     const { repo, queue, mediaDir } = this.deps
     if (!(await this.hasFreeSpace(mediaDir, ONE_GB))) {
       // pausa só os downloads e devolve o job sem gastar tentativa; voltam na próxima medição com espaço
@@ -541,6 +557,8 @@ export class WhatsAppClient extends EventEmitter {
     }
     const row = repo.getMessage(payload.id)
     if (!row || row.transcriptStatus === 'unavailable') return
+    // contato escondido depois de enfileirar: não baixa (volta para a fila se ele for mostrado de novo)
+    if (repo.isHidden(row.jid)) return
 
     if (!row.audioPath || !existsSync(row.audioPath)) {
       let msg: WAMessage
@@ -568,7 +586,12 @@ export class WhatsAppClient extends EventEmitter {
       await rename(`${file}.tmp`, file)
       repo.setAudioPath(row.id, file)
     }
-    queue.enqueue('transcribe', `transcribe:${row.id}`, { id: row.id, durationSec: row.durationSec }, this.priorityFor(row.jid, row.ts))
+    queue.enqueue(
+      'transcribe',
+      `transcribe:${row.id}`,
+      { id: row.id, durationSec: row.durationSec, ts: row.ts },
+      this.priorityFor(row.jid, row.ts)
+    )
   }
 
   /**

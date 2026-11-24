@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import Anthropic from '@anthropic-ai/sdk'
 import type { Clock } from '../clock'
 import type { AnalysisRow, MessageRow, Repo } from '../db/repo'
@@ -193,14 +194,30 @@ export interface AnalysisContext {
   priorMessages: MessageRow[]
   /** texto das mensagens novas (contexto da memória e de `approved_replies.context_text`) */
   contextText: string
+  /** impressão do estado das transcrições dos áudios do contexto (novas + anteriores) */
+  transcriptFp: string
+  /** áudios do contexto ainda sem transcrição (nem pronta, nem indisponível, nem falha) */
+  pendingAudios: number
+}
+
+/** Muda sempre que um áudio do contexto termina de ser transcrito (ou vira indisponível/falha). */
+function transcriptFingerprint(msgs: MessageRow[]): string {
+  const parts = msgs.filter((m) => m.kind === 'audio').map((m) => `${m.id}=${m.transcriptStatus ?? ''}`)
+  return parts.length ? createHash('sha1').update(parts.join('\n')).digest('hex') : ''
 }
 
 /**
  * Novas = mensagens depois do último fromMe (sem nenhum fromMe: as últimas 40).
  * Se o mentor falou por último, novas = [] (botão "Gerar novas" continua permitido).
+ * `upToId`: o contexto como era quando essa mensagem era a última (ex.: a análise que gerou a sugestão salva);
+ * se ela não estiver entre as mensagens recentes, usa todas.
  */
-export function analysisContext(repo: Repo, jid: string): AnalysisContext {
-  const all = repo.listMessages(jid, PRIOR_LIMIT + NO_MENTOR_REPLY_LIMIT + 200)
+export function analysisContext(repo: Repo, jid: string, upToId?: string | null): AnalysisContext {
+  let all = repo.listMessages(jid, PRIOR_LIMIT + NO_MENTOR_REPLY_LIMIT + 200)
+  if (upToId) {
+    const idx = all.findIndex((m) => m.id === upToId)
+    if (idx >= 0) all = all.slice(0, idx + 1)
+  }
   let lastMe = -1
   for (let i = all.length - 1; i >= 0; i--) {
     if (all[i].fromMe) {
@@ -211,10 +228,28 @@ export function analysisContext(repo: Repo, jid: string): AnalysisContext {
   const newMessages = lastMe === -1 ? all.slice(-NO_MENTOR_REPLY_LIMIT) : all.slice(lastMe + 1)
   const newStart = all.length - newMessages.length
   const priorMessages = all.slice(Math.max(0, newStart - PRIOR_LIMIT), newStart)
-  return { all, newMessages, priorMessages, contextText: newMessages.map(textOf).join('\n') }
+  const used = [...priorMessages, ...newMessages]
+  return {
+    all,
+    newMessages,
+    priorMessages,
+    contextText: newMessages.map(textOf).join('\n'),
+    transcriptFp: transcriptFingerprint(used),
+    pendingAudios: used.filter((m) => m.kind === 'audio' && m.transcriptStatus === null).length
+  }
 }
 
-/** Gera (ou devolve do cache, se a última mensagem não mudou) a análise do contato; o prompt pede como retomar quando não há novas. */
+/** A análise guardada ainda vale: feita sobre a mesma última mensagem e com as mesmas transcrições. */
+export function isAnalysisFresh(repo: Repo, jid: string, ctx: AnalysisContext = analysisContext(repo, jid)): boolean {
+  const last = ctx.all[ctx.all.length - 1]
+  const cached = repo.getAnalysis(jid)
+  return !!last && !!cached && cached.lastMsgId === last.id && cached.transcriptFp === ctx.transcriptFp
+}
+
+/**
+ * Gera (ou devolve do cache, se a última mensagem e as transcrições do contexto não mudaram) a análise do contato;
+ * o prompt pede como retomar quando não há novas.
+ */
 export async function generateAnalysis(
   deps: AnalysisDeps,
   jid: string,
@@ -222,14 +257,12 @@ export async function generateAnalysis(
 ): Promise<AnalysisRow> {
   const { repo, llm, limiter, cost, capUsd, clock } = deps
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
-  const { all, newMessages, priorMessages, contextText } = analysisContext(repo, jid)
+  const ctx = analysisContext(repo, jid)
+  const { all, newMessages, priorMessages, contextText } = ctx
   if (all.length === 0) throw new NoMessagesError()
   const lastId = all[all.length - 1].id
 
-  if (!opts.force) {
-    const cached = repo.getAnalysis(jid)
-    if (cached && cached.lastMsgId === lastId) return cached
-  }
+  if (!opts.force && isAnalysisFresh(repo, jid, ctx)) return repo.getAnalysis(jid)!
 
   const contact = repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)
   const prompt = buildPrompt({
@@ -258,7 +291,10 @@ export async function generateAnalysis(
       }
       cost.add(llm.name, res.inputTokens, res.outputTokens, res.model)
       const parsed = parseSuggestions(res.text)
-      repo.saveAnalysis(jid, lastId, llm.name, parsed.summary, parsed.suggestions)
+      repo.saveAnalysis(jid, lastId, llm.name, parsed.summary, parsed.suggestions, {
+        transcriptFp: ctx.transcriptFp,
+        pendingAudios: ctx.pendingAudios
+      })
       return repo.getAnalysis(jid)!
     } catch (e) {
       // saída inválida (do parser ou 400 json_validate_failed da Groq): tenta de novo

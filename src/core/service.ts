@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { systemClock, type Clock } from './clock'
 import type { ContactRow, MessageRow, Repo } from './db/repo'
@@ -11,12 +12,19 @@ import {
   analysisContext,
   createLlm,
   generateAnalysis,
+  isAnalysisFresh,
   type CreateLlmOpts,
   type LlmProvider
 } from './ai/llm'
 import { InvalidOutputError } from './ai/prompt'
-import { InvalidKeyError, createTranscriber, registerTranscribeHandler, type Transcriber } from './ai/transcriber'
-import { reconcileSent, saveApproved } from './memory/memory'
+import {
+  InvalidKeyError,
+  createTranscriber,
+  registerTranscribeHandler,
+  type TranscribePauseReason,
+  type Transcriber
+} from './ai/transcriber'
+import { reconcileSaved, reconcileSent, saveApproved } from './memory/memory'
 import { audioUrlFor } from './media'
 import { LIMITS, RateLimiter, type LimiterName } from './queue/limiter'
 import { JobQueue, type JobType } from './queue/queue'
@@ -68,6 +76,9 @@ export interface SagaServiceOpts {
 }
 
 const EVER_CONNECTED = 'wa.everConnected'
+/** parada definitiva (restrição, versão, outro lugar): vale também depois de reiniciar o app */
+const STOPPED_STATE = 'wa.stoppedState'
+const PERSISTED_STOPS: ReadonlySet<ConnState> = new Set(['stopped_restricted', 'stopped_outdated', 'stopped_replaced'])
 const EMIT_DELAY_MS = 150
 const DEFAULT_STOP_TIMEOUT_MS = 5_000
 
@@ -141,6 +152,13 @@ export class SagaService extends EventEmitter {
   private update: UpdateState = { status: 'none' }
   private emitTimer: ReturnType<typeof setTimeout> | null = null
   private stopping: Promise<void> | null = null
+  /** parada definitiva lida do banco ao iniciar: não conecta até "Reconectar" */
+  private persistedStop: ConnState | null = null
+  /** a fila foi pausada por causa de `persistedStop` (volta ao reconectar) */
+  private pausedByPersistedStop = false
+  private transcribePauseReason: TranscribePauseReason | null = null
+  /** downloads de áudio concluídos no lote atual (zera quando o lote termina) */
+  private downloadsDone = 0
 
   constructor(opts: SagaServiceOpts) {
     super()
@@ -164,8 +182,22 @@ export class SagaService extends EventEmitter {
     }
     this.queue = new JobQueue(repo, clock, byType)
 
-    registerTranscribeHandler({ queue: this.queue, repo, getTranscriber: () => this.currentTranscriber() })
+    registerTranscribeHandler({
+      queue: this.queue,
+      repo,
+      getTranscriber: () => this.currentTranscriber(),
+      cost: this.cost,
+      getCapUsd: () => this.settings.get().dailyCapUsd,
+      onPause: (reason) => {
+        this.transcribePauseReason = reason
+        this.markState()
+      }
+    })
     this.queue.onJobFailed((job) => {
+      if (job.type === 'download_audio') {
+        const c = repo.jobCounts('download_audio')
+        if (c.pending + c.running === 0) this.downloadsDone = 0
+      }
       const id = (job.payload as { id?: unknown } | null)?.id
       // áudio sem transcrição depois da última tentativa: estado "falhou" com "Tentar de novo"
       if ((job.type === 'transcribe' || job.type === 'download_audio') && typeof id === 'string') {
@@ -178,6 +210,10 @@ export class SagaService extends EventEmitter {
       this.markState()
     })
     this.queue.onJobDone((job) => {
+      if (job.type === 'download_audio') {
+        const c = repo.jobCounts('download_audio')
+        this.downloadsDone = c.pending + c.running === 0 ? 0 : this.downloadsDone + 1
+      }
       const id = (job.payload as { id?: unknown } | null)?.id
       if (typeof id === 'string') {
         const msg = repo.getMessage(id)
@@ -203,6 +239,7 @@ export class SagaService extends EventEmitter {
     this.wa.on('status', (s: ConnState) => {
       if (s !== 'needs_qr') this.qr = null
       if (s === 'open') repo.setSetting(EVER_CONNECTED, '1')
+      if (PERSISTED_STOPS.has(s)) repo.setSetting(STOPPED_STATE, s)
       this.markState()
     })
     this.wa.on('disk', () => this.markState())
@@ -218,11 +255,25 @@ export class SagaService extends EventEmitter {
 
   // --- ciclo de vida ---
 
-  /** Recupera a fila, aquece os limitadores, conecta e liga a fila. Não chama a IA. */
+  /**
+   * Recupera a fila, aquece os limitadores, conecta e liga a fila. Não chama a IA.
+   * Se o WhatsApp parou de vez da última vez (restrição, versão, outro lugar), não conecta e a fila fica
+   * pausada até o mentor clicar em "Reconectar".
+   */
   async start(): Promise<void> {
     this.queue.recoverAfterCrash()
     for (const l of Object.values(this.limiters)) l.startWarmup()
-    await this.wa.start()
+    const stopped = this.repo.getSetting(STOPPED_STATE) as ConnState | null
+    if (stopped && PERSISTED_STOPS.has(stopped)) {
+      this.persistedStop = stopped
+      if (!this.queue.isPaused()) {
+        this.queue.pause()
+        this.pausedByPersistedStop = true
+      }
+      this.repo.logEvent(`wa_${stopped}`, 'parado desde a última vez; aguardando "Reconectar"')
+    } else {
+      await this.wa.start()
+    }
     this.queue.start()
     this.markState()
   }
@@ -257,18 +308,25 @@ export class SagaService extends EventEmitter {
   state(): AppState {
     const s = this.settings.get()
     return {
-      conn: this.wa.getStatus() ?? 'connecting',
+      conn: this.persistedStop ?? this.wa.getStatus() ?? 'connecting',
       qr: this.qr,
       retryAt: this.wa.getRetryAt?.() ?? null,
       queue: this.queue.stats(),
       paused: this.queue.isPaused(),
       diskLow: this.wa.isDiskLow(),
       transcribePaused: this.queue.isTypePaused('transcribe'),
+      transcribePausedReason: this.queue.isTypePaused('transcribe') ? (this.transcribePauseReason ?? 'key') : null,
+      downloads: this.downloadsState(),
       costTodayUsd: this.cost.todayUsd(),
       setupDone: s.keys.groq && this.repo.getSetting(EVER_CONNECTED) === '1',
       provider: s.provider,
       update: this.update
     }
+  }
+
+  private downloadsState(): AppState['downloads'] {
+    const c = this.repo.jobCounts('download_audio')
+    return { remaining: c.pending + c.running, done: this.downloadsDone }
   }
 
   /** Chamado pelo atualizador (processo principal) quando o estado da atualização muda. */
@@ -348,9 +406,21 @@ export class SagaService extends EventEmitter {
     this.scheduleEmit()
   }
 
+  /** Esconder para de baixar/transcrever os áudios do contato; mostrar de novo devolve os que faltam à fila. */
   async setHidden(jid: string, hidden: boolean): Promise<void> {
     this.repo.setHidden(jid, hidden)
+    if (!hidden) {
+      for (const m of this.repo.listMessages(jid)) {
+        if (m.kind !== 'audio' || m.transcriptStatus !== null) continue
+        if (m.audioPath && existsSync(m.audioPath)) {
+          this.queue.requeue('transcribe', `transcribe:${m.id}`, { id: m.id, durationSec: m.durationSec, ts: m.ts })
+        } else {
+          this.queue.requeue('download_audio', m.id, { id: m.id, ts: m.ts })
+        }
+      }
+    }
     this.pendingContacts = true
+    this.pendingState = true
     this.scheduleEmit()
   }
 
@@ -400,10 +470,9 @@ export class SagaService extends EventEmitter {
     return entry.p
   }
 
-  /** A análise guardada ainda vale (foi feita sobre a última mensagem do contato)? */
+  /** A análise guardada ainda vale (mesma última mensagem e mesmas transcrições)? */
   private cacheFresh(jid: string): boolean {
-    const last = this.repo.listMessages(jid, 1)[0]
-    return !!last && this.repo.getAnalysis(jid)?.lastMsgId === last.id
+    return isAnalysisFresh(this.repo, jid)
   }
 
   private async doAnalyze(jid: string, force: boolean): Promise<AnalysisResult> {
@@ -436,25 +505,39 @@ export class SagaService extends EventEmitter {
     }
   }
 
-  /** Grava a resposta aprovada; o contexto são as mensagens novas do contato (mesma definição da análise). */
+  /**
+   * Grava a resposta aprovada. O contexto são as mensagens novas do contato como eram na análise que gerou
+   * a sugestão (o mentor pode ter copiado e enviado antes de salvar). Se essa resposta já foi enviada
+   * (mensagem minha parecida nas últimas 6 h), liga o texto enviado na hora.
+   */
   async saveReply(input: SaveReplyInput): Promise<number> {
     const finalText = input.finalText.trim()
     if (!finalText) throw new Error('resposta vazia')
-    const { contextText } = analysisContext(this.repo, input.jid)
-    const provider = this.repo.getAnalysis(input.jid)?.provider ?? this.settings.get().provider
-    return saveApproved(this.repo, {
+    const stored = this.repo.getAnalysis(input.jid)
+    const { contextText } = analysisContext(this.repo, input.jid, input.analysisLastMsgId ?? stored?.lastMsgId)
+    const provider = stored?.provider ?? this.settings.get().provider
+    const id = saveApproved(this.repo, {
       jid: input.jid,
       contextText,
       originalSuggestion: input.originalSuggestion,
       finalText,
       provider
     })
+    try {
+      reconcileSaved(this.repo, { id, jid: input.jid, finalText }, this.clock.now())
+    } catch (e) {
+      this.repo.logEvent('reconcile_error', e instanceof Error ? e.message : String(e))
+    }
+    return id
   }
 
   private currentTranscriber(): Transcriber | null {
     const kind = this.settings.get().transcriber
     const key = this.settings.getKey(kind)
-    return key ? this.transcriberFactory(kind, key) : null
+    if (!key) return null
+    const t = this.transcriberFactory(kind, key)
+    // o tipo vem da configuração (custo: OpenAI é paga), não do objeto criado
+    return { kind, transcribe: (file, sec) => t.transcribe(file, sec) }
   }
 
   // --- fila ---
@@ -472,7 +555,14 @@ export class SagaService extends EventEmitter {
     this.markState()
   }
 
+  /** "Reconectar" / "Gerar novo QR Code": limpa a parada definitiva guardada e conecta já. */
   async manualReconnect(): Promise<void> {
+    this.repo.deleteSetting(STOPPED_STATE)
+    this.persistedStop = null
+    if (this.pausedByPersistedStop) {
+      this.pausedByPersistedStop = false
+      this.queue.resume()
+    }
     await this.wa.manualReconnect()
     this.markState()
   }
@@ -502,7 +592,8 @@ export class SagaService extends EventEmitter {
       return { ok: false, code: 'invalid', message: e instanceof Error ? e.message : String(e) }
     }
     // uma chave nova pode destravar as transcrições pausadas por falta de chave (ou chave recusada)
-    if (patch.groqKey || patch.openaiKey || patch.transcriber) this.queue.resumeType('transcribe')
+    // e um teto novo pode destravar as pausadas pelo gasto
+    if (patch.groqKey || patch.openaiKey || patch.transcriber || patch.dailyCapUsd !== undefined) this.queue.resumeType('transcribe')
     this.markState()
     return { ok: true, settings: this.settings.get() }
   }

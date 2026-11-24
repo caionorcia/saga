@@ -7,6 +7,9 @@ export const CLAUDE_PRICING: Record<string, { input: number; output: number }> =
   'claude-sonnet-5-5': { input: 2, output: 10 }
 }
 
+/** Transcrição pela OpenAI (whisper-1), em USD por minuto de áudio. Verificar preço atual. */
+export const OPENAI_TRANSCRIBE_USD_PER_MIN = 0.006
+
 /** Modelo desconhecido: preço do Opus (conservador). */
 const FALLBACK_PRICING = CLAUDE_PRICING['claude-opus-5-5']
 
@@ -41,8 +44,21 @@ export class CostTracker {
     if (provider === 'groq') return
     const pr = claudePricing(model)
     const usd = (inTok * pr.input + outTok * pr.output) / 1_000_000
-    if (!(usd > 0)) return
+    this.addUsd(usd)
+  }
+
+  /** Soma um gasto já em USD (ex.: transcrição paga) ao total de hoje. */
+  addUsd(usd: number): void {
+    if (!(usd > 0) || !Number.isFinite(usd)) return
     this.repo.setSetting(this.key(), String(this.todayUsd() + usd))
+  }
+
+  /** Milissegundos até a próxima meia-noite local (quando o gasto de hoje volta a zero). */
+  msUntilTomorrow(): number {
+    const now = this.clock.now()
+    const d = new Date(now)
+    d.setHours(24, 0, 0, 0)
+    return Math.max(60_000, d.getTime() - now)
   }
 
   todayUsd(): number {

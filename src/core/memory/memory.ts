@@ -115,3 +115,19 @@ export function reconcileSent(repo: Repo, msg: NormalizedMessage): void {
   }
   if (best) repo.setApprovedSentText(best.id, msg.text)
 }
+
+/**
+ * Ao salvar: o mentor pode ter copiado, enviado e só depois clicado em Salvar. Procura uma mensagem minha
+ * parecida enviada a esse contato nas últimas 6 h e, se achar, grava como o texto de fato enviado.
+ */
+export function reconcileSaved(repo: Repo, a: { id: number; jid: string; finalText: string }, now: number): void {
+  const from = now - SIX_HOURS - CLOCK_SLACK
+  const to = now + CLOCK_SLACK
+  let best: { text: string; score: number } | null = null
+  for (const m of repo.listMessages(a.jid, 300)) {
+    if (!m.fromMe || m.kind !== 'text' || !m.text?.trim() || m.ts < from || m.ts > to) continue
+    const score = similarity(a.finalText, m.text)
+    if (score >= 0.6 && (!best || score >= best.score)) best = { text: m.text, score }
+  }
+  if (best) repo.setApprovedSentText(a.id, best.text)
+}

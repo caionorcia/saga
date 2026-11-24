@@ -145,6 +145,42 @@ describe('Repo', () => {
     expect(repo.getMessage('a1')!.audioPath).toBe('/m/a1.ogg')
   })
 
+  it('análise guarda a impressão das transcrições e quantos áudios estavam pendentes', () => {
+    repo.upsertContact({ jid: JID_A })
+    repo.saveAnalysis(JID_A, 'm1', 'groq', 'r', ['a', 'b'], { transcriptFp: 'fp1', pendingAudios: 2 })
+    expect(repo.getAnalysis(JID_A)).toMatchObject({ transcriptFp: 'fp1', pendingAudios: 2 })
+    repo.saveAnalysis(JID_A, 'm1', 'groq', 'r', ['a', 'b'])
+    expect(repo.getAnalysis(JID_A)).toMatchObject({ transcriptFp: '', pendingAudios: 0 })
+  })
+
+  it('newestMessageTs, isHidden, jobCounts por tipo e requeueJob', () => {
+    expect(repo.newestMessageTs()).toBeNull()
+    repo.upsertContact({ jid: JID_A })
+    repo.insertMessage(msg({ id: 'a', ts: 500 }))
+    repo.insertMessage(msg({ id: 'b', ts: 300 }))
+    expect(repo.newestMessageTs()).toBe(500)
+    expect(repo.isHidden(JID_A)).toBe(false)
+    repo.setHidden(JID_A, true)
+    expect(repo.isHidden(JID_A)).toBe(true)
+    expect(repo.isHidden('nada')).toBe(false)
+
+    repo.insertJobIgnore('download_audio', 'a', { id: 'a' }, 0)
+    repo.insertJobIgnore('transcribe', 't', { id: 'a' }, 0)
+    expect(repo.jobCounts('download_audio')).toMatchObject({ pending: 1, done: 0 })
+    const [j] = repo.listJobs('pending')
+    repo.markJobDone(j.id)
+    expect(repo.jobCounts('download_audio')).toMatchObject({ pending: 0, done: 1 })
+    expect(repo.jobCounts()).toMatchObject({ pending: 1, done: 1 })
+    // concluído volta a pendente; novo é inserido; pendente fica como está
+    repo.requeueJob('download_audio', 'a', { id: 'a', ts: 5 }, 3)
+    repo.requeueJob('download_audio', 'novo', { id: 'novo' }, 0)
+    repo.requeueJob('transcribe', 't', { id: 'mudou' }, 0)
+    const pend = Object.fromEntries(repo.listJobs('pending').map((x) => [x.key, x]))
+    expect(pend['a']).toMatchObject({ attempts: 0, priority: 3, payload: { id: 'a', ts: 5 } })
+    expect(pend['novo']).toBeTruthy()
+    expect(pend['t'].payload).toEqual({ id: 'a' })
+  })
+
   it('openDb ativa foreign_keys e é idempotente em arquivo', () => {
     const fk = db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }
     expect(fk.foreign_keys).toBe(1)

@@ -259,6 +259,38 @@ describe('JobQueue', () => {
     }
   })
 
+  it('mesma prioridade: roda primeiro a mensagem mais nova (payload.ts DESC); sem ts fica por último', async () => {
+    q.enqueue('download_audio', 'velho', { id: 'velho', ts: 1_000 })
+    q.enqueue('download_audio', 'semts', { id: 'semts' })
+    q.enqueue('download_audio', 'novo', { id: 'novo', ts: 3_000 })
+    q.enqueue('download_audio', 'meio', { id: 'meio', ts: 2_000 })
+    q.enqueue('download_audio', 'urgente', { id: 'urgente', ts: 500 }, 10)
+    for (let i = 0; i < 5; i++) {
+      expect(await q.tick()).toBe('ran')
+      clock.advance(20_000)
+    }
+    expect(ran).toEqual(['urgente', 'novo', 'meio', 'velho', 'semts'])
+  })
+
+  it('pauseTypeFor: pausa o tipo por um tempo e volta sozinho; resumeType/pauseType cancelam o timer', async () => {
+    vi.useFakeTimers()
+    try {
+      q.pauseTypeFor('download_audio', 120_000)
+      expect(q.isTypePaused('download_audio')).toBe(true)
+      await vi.advanceTimersByTimeAsync(119_000)
+      expect(q.isTypePaused('download_audio')).toBe(true)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(q.isTypePaused('download_audio')).toBe(false)
+      // uma pausa sem prazo depois não é desfeita pelo timer antigo
+      q.pauseTypeFor('download_audio', 1_000)
+      q.pauseType('download_audio')
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(q.isTypePaused('download_audio')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('DeferJobError devolve o job a pending sem gastar tentativa', async () => {
     q.register('download_audio', async () => {
       throw new DeferJobError('sem espaço', 5_000)

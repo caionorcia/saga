@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { FakeClock } from '../../../src/core/clock'
 import { openDb } from '../../../src/core/db/db'
 import { Repo } from '../../../src/core/db/repo'
-import { reconcileSent, saveApproved, selectExamples, similarity } from '../../../src/core/memory/memory'
+import { reconcileSaved, reconcileSent, saveApproved, selectExamples, similarity } from '../../../src/core/memory/memory'
 import type { NormalizedMessage } from '../../../src/core/types'
 
 const T0 = 1_700_000_000_000
@@ -115,5 +115,28 @@ describe('FTS sincronizado por trigger', () => {
     expect(repo.searchApproved('"preco"', 5)).toHaveLength(0)
     db.prepare('DELETE FROM approved_replies WHERE id = ?').run(id)
     expect(repo.searchApproved('"assunto"', 5)).toHaveLength(0)
+  })
+})
+
+describe('reconcileSaved (copiou, enviou e só depois salvou)', () => {
+  const saved = 'Oi Michael, pode sim! Vamos marcar amanhã?'
+  const add = (m: NormalizedMessage) => repo.insertMessage(m)
+
+  it('liga a resposta salva à mensagem minha parecida enviada nas últimas 6 h', () => {
+    add(msg('s0', A, true, clock.now() - 8 * 3_600_000, saved)) // velha demais
+    add(msg('s1', A, true, clock.now() - 5 * 60_000, 'Oi Michael, pode sim! Vamos marcar amanhã às 15h?'))
+    add(msg('r1', A, false, clock.now() - 60_000, saved)) // recebida, não conta
+    const id = save(A, 'ctx', saved)
+    reconcileSaved(repo, { id, jid: A, finalText: saved }, clock.now())
+    expect(repo.listApproved({ jid: A, limit: 1 })[0].sentText).toBe('Oi Michael, pode sim! Vamos marcar amanhã às 15h?')
+  })
+
+  it('sem mensagem parecida (ou só de outro contato, ou de mais de 6 h): não grava', () => {
+    add(msg('s1', B, true, clock.now() - 60_000, saved))
+    add(msg('s2', A, true, clock.now() - 60_000, 'Bom dia, segue o link da reunião'))
+    add(msg('s3', A, true, clock.now() - 7 * 3_600_000, saved))
+    const id = save(A, 'ctx', saved)
+    reconcileSaved(repo, { id, jid: A, finalText: saved }, clock.now())
+    expect(repo.listApproved({ jid: A, limit: 1 })[0].sentText).toBeNull()
   })
 })

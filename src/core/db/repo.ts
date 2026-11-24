@@ -36,6 +36,10 @@ export interface AnalysisRow {
   summary: string
   suggestions: string[]
   createdAt: number
+  /** impressão das transcrições do contexto usado (muda quando um áudio termina de ser transcrito) */
+  transcriptFp: string
+  /** áudios do contexto que ainda estavam sendo transcritos quando a análise foi feita */
+  pendingAudios: number
 }
 
 export interface ApprovedRow {
@@ -148,6 +152,11 @@ export class Repo {
     this.db.prepare('UPDATE contacts SET hidden = ? WHERE jid = ?').run(hidden ? 1 : 0, jid)
   }
 
+  isHidden(jid: string): boolean {
+    const r = this.db.prepare('SELECT hidden FROM contacts WHERE jid = ?').get(jid) as Row | undefined
+    return r?.hidden === 1
+  }
+
   setNotes(jid: string, text: string): void {
     this.db.prepare('UPDATE contacts SET notes = ? WHERE jid = ?').run(text, jid)
   }
@@ -199,6 +208,12 @@ export class Repo {
     return rows.map(toMessage)
   }
 
+  /** Horário (WhatsApp) da mensagem mais nova do banco, ou null sem mensagens. */
+  newestMessageTs(): number | null {
+    const r = this.db.prepare('SELECT MAX(ts) AS t FROM messages').get() as Row | undefined
+    return typeof r?.t === 'number' ? r.t : null
+  }
+
   getMessage(id: string): MessageRow | null {
     const r = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as Row | undefined
     return r ? toMessage(r) : null
@@ -214,13 +229,29 @@ export class Repo {
 
   // --- análises ---
 
-  saveAnalysis(jid: string, lastMsgId: string, provider: string, summary: string, suggestions: string[]): void {
+  saveAnalysis(
+    jid: string,
+    lastMsgId: string,
+    provider: string,
+    summary: string,
+    suggestions: string[],
+    extra: { transcriptFp?: string; pendingAudios?: number } = {}
+  ): void {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO analyses(jid, last_msg_id, provider, summary, suggestions_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT OR REPLACE INTO analyses(jid, last_msg_id, provider, summary, suggestions_json, created_at, transcript_fp, pending_audios)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(jid, lastMsgId, provider, summary, JSON.stringify(suggestions), this.clock.now())
+      .run(
+        jid,
+        lastMsgId,
+        provider,
+        summary,
+        JSON.stringify(suggestions),
+        this.clock.now(),
+        extra.transcriptFp ?? '',
+        extra.pendingAudios ?? 0
+      )
   }
 
   getAnalysis(jid: string): AnalysisRow | null {
@@ -232,7 +263,9 @@ export class Repo {
       provider: r.provider,
       summary: r.summary,
       suggestions: JSON.parse(r.suggestions_json) as string[],
-      createdAt: r.created_at
+      createdAt: r.created_at,
+      transcriptFp: r.transcript_fp ?? '',
+      pendingAudios: r.pending_audios ?? 0
     }
   }
 
@@ -334,12 +367,30 @@ export class Repo {
       .run(type, key, JSON.stringify(payload), priority)
   }
 
-  /** Melhor job pendente elegível (prioridade maior, depois id menor) de um tipo. */
+  /**
+   * Insere o job, ou devolve um já concluído (`done`) para a fila com tentativas zeradas
+   * (ex.: áudio pulado enquanto o contato estava escondido). Pendente, rodando ou falho fica como está.
+   */
+  requeueJob(type: string, key: string, payload: unknown, priority: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO jobs(type, key, payload_json, status, priority) VALUES (?, ?, ?, 'pending', ?)
+         ON CONFLICT(key) DO UPDATE SET status = 'pending', attempts = 0, next_run_at = 0, last_error = NULL,
+           payload_json = excluded.payload_json, priority = excluded.priority
+         WHERE jobs.status = 'done'`
+      )
+      .run(type, key, JSON.stringify(payload), priority)
+  }
+
+  /**
+   * Melhor job pendente elegível de um tipo: prioridade maior, depois a mensagem mais nova
+   * (`payload.ts`; sem ts por último), depois id menor.
+   */
   nextPendingJob(type: string, now: number): JobRow | null {
     const r = this.db
       .prepare(
         `SELECT * FROM jobs WHERE status = 'pending' AND type = ? AND next_run_at <= ?
-         ORDER BY priority DESC, id ASC LIMIT 1`
+         ORDER BY priority DESC, json_extract(payload_json, '$.ts') DESC, id ASC LIMIT 1`
       )
       .get(type, now) as Row | undefined
     return r ? toJob(r) : null
@@ -379,9 +430,13 @@ export class Repo {
       .run(id)
   }
 
-  jobCounts(): Record<JobStatus, number> {
+  /** Quantidade de jobs por status (de um tipo, ou de todos). */
+  jobCounts(type?: string): Record<JobStatus, number> {
     const out: Record<JobStatus, number> = { pending: 0, running: 0, done: 0, failed: 0 }
-    for (const r of this.db.prepare('SELECT status, COUNT(*) AS c FROM jobs GROUP BY status').all() as Row[]) {
+    const rows = this.db
+      .prepare('SELECT status, COUNT(*) AS c FROM jobs WHERE (?1 IS NULL OR type = ?1) GROUP BY status')
+      .all(type ?? null) as Row[]
+    for (const r of rows) {
       out[r.status as JobStatus] = r.c
     }
     return out

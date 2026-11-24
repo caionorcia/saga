@@ -31,6 +31,12 @@ export class DeferJobError extends Error {
 }
 
 const BACKOFF_MS = [30_000, 2 * 60_000, 10 * 60_000]
+
+/** Horário (WhatsApp) da mensagem do job, para desempate; sem ts = mais antigo de todos. */
+function payloadTs(j: JobRow): number {
+  const ts = Number((j.payload as { ts?: unknown } | null)?.ts)
+  return Number.isFinite(ts) ? ts : -Infinity
+}
 const MAX_SLEEP_MS = 60_000
 const MIN_SLEEP_MS = 50
 
@@ -43,6 +49,8 @@ export class JobQueue {
   private handlers = new Map<JobType, Handler>()
   private paused = false
   private pausedTypes = new Set<JobType>()
+  /** pausas por tempo (`pauseTypeFor`): o timer que retoma o tipo */
+  private typeTimers = new Map<JobType, ReturnType<typeof setTimeout>>()
   private started = false
   private timer: ReturnType<typeof setTimeout> | null = null
   private loop: Promise<void> | null = null
@@ -58,6 +66,12 @@ export class JobQueue {
 
   enqueue(type: JobType, key: string, payload: unknown, priority = 0): void {
     this.repo.insertJobIgnore(type, key, payload, priority)
+    this.wake()
+  }
+
+  /** Como `enqueue`, mas um job já concluído com a mesma chave volta para a fila (tentativas zeradas). */
+  requeue(type: JobType, key: string, payload: unknown, priority = 0): void {
+    this.repo.requeueJob(type, key, payload, priority)
     this.wake()
   }
 
@@ -115,13 +129,32 @@ export class JobQueue {
     return this.paused
   }
 
-  /** Pausa só um tipo de job; os outros continuam rodando. */
+  /** Pausa só um tipo de job; os outros continuam rodando. Cancela uma pausa por tempo do mesmo tipo. */
   pauseType(type: JobType): void {
+    this.clearTypeTimer(type)
     this.pausedTypes.add(type)
   }
 
+  /** Pausa um tipo por `ms` e retoma sozinho (ex.: sem internet, teto de gasto até a meia-noite). */
+  pauseTypeFor(type: JobType, ms: number): void {
+    this.pauseType(type)
+    const t = setTimeout(() => {
+      this.typeTimers.delete(type)
+      this.resumeType(type)
+    }, Math.max(0, ms))
+    ;(t as { unref?: () => void }).unref?.()
+    this.typeTimers.set(type, t)
+  }
+
   resumeType(type: JobType): void {
+    this.clearTypeTimer(type)
     if (this.pausedTypes.delete(type)) this.wake()
+  }
+
+  private clearTypeTimer(type: JobType): void {
+    const t = this.typeTimers.get(type)
+    if (t) clearTimeout(t)
+    this.typeTimers.delete(type)
   }
 
   isTypePaused(type: JobType): boolean {
@@ -156,7 +189,8 @@ export class JobQueue {
       if (job) candidates.push(job)
     }
     if (candidates.length === 0) return 'idle'
-    candidates.sort((a, b) => b.priority - a.priority || a.id - b.id)
+    // mesma prioridade: primeiro a mensagem mais nova (payload.ts), depois a mais antiga na fila
+    candidates.sort((a, b) => b.priority - a.priority || payloadTs(b) - payloadTs(a) || a.id - b.id)
     const job = candidates.find((j) => this.limiters[j.type as JobType].nextAllowedAt() <= now)
     if (!job) return 'waiting'
 
@@ -203,6 +237,8 @@ export class JobQueue {
     this.started = false
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
+    for (const t of this.typeTimers.values()) clearTimeout(t)
+    this.typeTimers.clear()
     await this.loop
     await this.ticking?.catch(() => {})
   }

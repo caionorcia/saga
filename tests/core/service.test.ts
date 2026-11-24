@@ -389,6 +389,122 @@ describe('SagaService', () => {
     })
   })
 
+  describe('revisão final', () => {
+    const close = async (code: number) =>
+      emit('connection.update', { connection: 'close', lastDisconnect: { error: Object.assign(new Error('x'), { output: { statusCode: code } }) } })
+    const audio = (id: string, o: { file?: boolean; ts?: number } = {}) => {
+      repo.upsertContact({ jid: JID })
+      repo.insertMessage({ id, jid: JID, fromMe: false, ts: o.ts ?? NOW - 1000, kind: 'audio', text: null, mediaKeyJson: null, durationSec: 30 })
+      if (o.file) {
+        const f = join(tmp, `${id}.ogg`)
+        writeFileSync(f, 'OggS')
+        repo.setAudioPath(id, f)
+      }
+    }
+
+    it.each([
+      [403, 'stopped_restricted'],
+      [405, 'stopped_outdated'],
+      [440, 'stopped_replaced']
+    ])('código %i (%s) sobrevive ao reinício: não conecta, mostra o estado; Reconectar limpa', async (code, state) => {
+      await service.start()
+      await close(code)
+      expect(service.state().conn).toBe(state)
+      await service.stop()
+      const before = sockets.length
+      service = make()
+      await service.start()
+      expect(sockets.length).toBe(before)
+      expect(service.state()).toMatchObject({ conn: state, paused: true })
+      await service.manualReconnect()
+      expect(sockets.length).toBe(before + 1)
+      expect(service.state()).toMatchObject({ conn: 'connecting', paused: false })
+      await service.stop()
+      service = make()
+      await service.start()
+      expect(sockets.length).toBe(before + 2)
+    })
+
+    it('transcrição concluída depois da análise: a próxima leitura gera de novo', async () => {
+      settings.save({ groqKey: GROQ_KEY })
+      audio('au1')
+      expect(await service.getAnalysis(JID)).toMatchObject({ ok: true, analysis: { pendingAudios: 1 } })
+      await service.getAnalysis(JID)
+      expect(llm.calls).toBe(1)
+      repo.setTranscript('au1', 'quero saber o preço', 'done')
+      expect(await service.getAnalysis(JID)).toMatchObject({ ok: true, analysis: { pendingAudios: 0 } })
+      expect(llm.calls).toBe(2)
+    })
+
+    it('copiou, enviou e só depois salvou: contexto da análise e sent_text pela mensagem já enviada', async () => {
+      settings.save({ groqKey: GROQ_KEY })
+      repo.upsertContact({ jid: JID })
+      repo.insertMessage({ id: 'q1', jid: JID, fromMe: false, ts: NOW - 60_000, kind: 'text', text: 'Quanto custa?', mediaKeyJson: null, durationSec: null })
+      const r = await service.getAnalysis(JID)
+      expect(r.ok && r.analysis.lastMsgId).toBe('q1')
+      await service.start()
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'me1', fromMe: true, ts: NOW - 30_000, text: 'Oi! Custa R$ 120,00.' })] })
+      await service.saveReply({ jid: JID, originalSuggestion: 'Oi! Custa R$ 100.', finalText: 'Oi! Custa R$ 120.', analysisLastMsgId: 'q1' })
+      let [a] = repo.listApproved({ jid: JID, limit: 1 })
+      expect(a.contextText).toBe('Quanto custa?')
+      expect(a.sentText).toBe('Oi! Custa R$ 120,00.')
+      // sem o id da análise vindo da interface: usa a análise guardada
+      await service.saveReply({ jid: JID, originalSuggestion: null, finalText: 'Outra coisa totalmente diferente aqui' })
+      ;[a] = repo.listApproved({ jid: JID, limit: 1 })
+      expect(a.contextText).toBe('Quanto custa?')
+      expect(a.sentText).toBeNull()
+    })
+
+    it('OpenAI: custo da transcrição entra no gasto de hoje; acima do teto pausa a transcrição com o motivo', async () => {
+      settings.save({ groqKey: GROQ_KEY, openaiKey: 'sk-SEGREDO', transcriber: 'openai', dailyCapUsd: 0.001 })
+      audio('t1', { file: true })
+      audio('t2', { file: true })
+      service.queue.enqueue('transcribe', 'transcribe:t1', { id: 't1', durationSec: 30 })
+      expect(await service.queue.tick()).toBe('ran')
+      expect(repo.getMessage('t1')!.transcriptStatus).toBe('done')
+      expect(service.state().costTodayUsd).toBeCloseTo(0.003, 10)
+      clock.advance(60_000)
+      service.queue.enqueue('transcribe', 'transcribe:t2', { id: 't2', durationSec: 30 })
+      expect(await service.queue.tick()).toBe('ran')
+      expect(repo.getMessage('t2')!.transcriptStatus).toBeNull()
+      expect(service.state()).toMatchObject({ transcribePaused: true, transcribePausedReason: 'budget' })
+      await service.saveSettings({ dailyCapUsd: 5 })
+      expect(service.state()).toMatchObject({ transcribePaused: false, transcribePausedReason: null })
+    })
+
+    it('progresso dos downloads: só download_audio do lote atual (pendentes + concluídos desde o início)', async () => {
+      repo.insertJobIgnore('download_audio', 'antigo', { id: 'antigo' }, 0)
+      repo.markJobDone(repo.listJobs('pending')[0].id)
+      service = make()
+      service.queue.register('download_audio', async () => {})
+      service.queue.resumeType('download_audio')
+      for (const k of ['d1', 'd2', 'd3']) service.queue.enqueue('download_audio', k, { id: k })
+      service.queue.enqueue('transcribe', 'transcribe:x', { id: 'x', durationSec: 5 })
+      expect(service.state().downloads).toEqual({ remaining: 3, done: 0 })
+      service.queue.pauseType('transcribe')
+      expect(await service.queue.tick()).toBe('ran')
+      expect(service.state().downloads).toEqual({ remaining: 2, done: 1 })
+      for (let i = 0; i < 2; i++) {
+        clock.advance(60_000)
+        expect(await service.queue.tick()).toBe('ran')
+      }
+      // lote terminou: o próximo começa do zero
+      expect(service.state().downloads).toEqual({ remaining: 0, done: 0 })
+    })
+
+    it('mostrar de novo um contato escondido volta a baixar/transcrever os áudios dele', async () => {
+      audio('h1')
+      audio('h2', { file: true })
+      audio('h3')
+      repo.setTranscript('h3', 'já feito', 'done')
+      await service.setHidden(JID, true)
+      expect(repo.listJobs('pending')).toEqual([])
+      await service.setHidden(JID, false)
+      const keys = repo.listJobs('pending').map((j) => `${j.type}:${j.key}`).sort()
+      expect(keys).toEqual(['download_audio:h1', 'transcribe:transcribe:h2'])
+    })
+  })
+
   describe('configurações', () => {
     it('getSettings nunca contém o texto da chave', async () => {
       const r = await service.saveSettings({ groqKey: GROQ_KEY, claudeKey: 'sk-ant-SEGREDO', openaiKey: 'sk-SEGREDO2' })

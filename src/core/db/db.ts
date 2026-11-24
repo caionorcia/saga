@@ -1,9 +1,10 @@
 import { DatabaseSync } from 'node:sqlite'
 import schemaV1 from './schema.sql?raw'
 import schemaV2 from './schema-v2.sql?raw'
+import schemaV3 from './schema-v3.sql?raw'
 
 /** Migrações em ordem; o índice + 1 é o `user_version` resultante. */
-const MIGRATIONS: string[] = [schemaV1, schemaV2]
+const MIGRATIONS: string[] = [schemaV1, schemaV2, schemaV3]
 
 export function openDb(file: string | ':memory:'): DatabaseSync {
   const db = new DatabaseSync(file)

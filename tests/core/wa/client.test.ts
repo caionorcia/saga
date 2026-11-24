@@ -193,12 +193,42 @@ describe('WhatsAppClient', () => {
         messages: [
           wamsg({ id: 'old', ts: NOW - 31 * DAY }),
           wamsg({ id: 'new', ts: NOW - 29 * DAY }),
+          wamsg({ id: 'today', ts: NOW - 1000 }),
           wamsg({ id: 'grp', jid: '120363000000000000@g.us', ts: NOW - DAY }),
           wamsg({ id: 'sts', jid: 'status@broadcast', ts: NOW - DAY })
         ]
       })
-      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['new'])
+      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['new', 'today'])
       expect(repo.listContacts({ includeHidden: true }).map((c) => c.jid)).toEqual([JID])
+    })
+
+    it('relógio do PC muito atrasado: a janela de 30 dias conta a partir da mensagem mais nova do WhatsApp', async () => {
+      const waNow = NOW + 60 * DAY // o PC está 60 dias atrás
+      await emit('messaging-history.set', {
+        chats: [],
+        contacts: [],
+        messages: [
+          wamsg({ id: 'velha', ts: waNow - 31 * DAY }),
+          wamsg({ id: 'dentro', ts: waNow - 29 * DAY }),
+          wamsg({ id: 'nova', ts: waNow - 1000 })
+        ]
+      })
+      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['dentro', 'nova'])
+      // um lote depois, só com mensagem velha, usa a mais nova já vista no banco
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'velha2', jid: JID2, ts: waNow - 40 * DAY })] })
+      expect(repo.listMessages(JID2)).toEqual([])
+    })
+
+    it('contato escondido: o áudio é gravado mas não entra na fila de download', async () => {
+      repo.upsertContact({ jid: JID2 })
+      repo.setHidden(JID2, true)
+      await emit('messages.upsert', {
+        type: 'notify',
+        messages: [wamsg({ id: 'h1', jid: JID2, audio: 10, ts: NOW - 1000 }), wamsg({ id: 'v1', jid: JID, audio: 10, ts: NOW - 900 })]
+      })
+      expect(repo.getMessage('h1')).not.toBeNull()
+      expect(repo.listJobs('pending').map((j) => j.key)).toEqual(['v1'])
+      expect(repo.listJobs('pending')[0].payload).toEqual({ id: 'v1', ts: Math.floor((NOW - 900) / 1000) * 1000 })
     })
 
     it('contato nunca visto: cria o contato antes da mensagem (FK) com o pushName', async () => {
@@ -315,6 +345,14 @@ describe('WhatsAppClient', () => {
       const t = repo.listJobs('pending').find((j) => j.type === 'transcribe')!
       expect(t).toMatchObject({ key: 'transcribe:AUD1', payload: { id: 'AUD1', durationSec: 37 }, priority: 10 })
       expect(repo.listJobs('done').map((j) => j.key)).toEqual(['AUD1'])
+    })
+
+    it('contato escondido depois de enfileirar: o download é pulado (sem rede)', async () => {
+      repo.setHidden(JID, true)
+      expect(await queue.tick()).toBe('ran')
+      expect(download).not.toHaveBeenCalled()
+      expect(repo.getMessage('AUD1')!.audioPath).toBeNull()
+      expect(repo.listJobs('pending').filter((j) => j.type === 'transcribe')).toEqual([])
     })
 
     it.each([404, 410])('mídia expirada (%i) → unavailable, sem nova tentativa', async (code) => {
