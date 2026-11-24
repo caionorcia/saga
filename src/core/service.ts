@@ -67,6 +67,13 @@ const EVER_CONNECTED = 'wa.everConnected'
 const EMIT_DELAY_MS = 150
 const DEFAULT_STOP_TIMEOUT_MS = 5_000
 
+/** Espera `p` por até `ms`; erros de `p` (agora ou depois) nunca escapam. */
+async function withDeadline(p: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([p.catch(() => {}), new Promise<void>((r) => (timer = setTimeout(r, ms)))])
+  clearTimeout(timer)
+}
+
 function toView(m: MessageRow): MessageView {
   return {
     id: m.id,
@@ -214,19 +221,19 @@ export class SagaService extends EventEmitter {
     this.markState()
   }
 
-  /** Para a fila (esperando o job atual por até `timeoutMs`) e desconecta o WhatsApp. */
+  /**
+   * Para a fila (espera o job atual por até `timeoutMs`) e depois desconecta o WhatsApp
+   * (também por até `timeoutMs`): o cliente é sempre parado, mesmo com um job travado.
+   * O que ainda rodar depois do prazo termina sozinho; erros dele (ex.: banco já fechado)
+   * são engolidos pela fila e pelo cliente.
+   */
   stop(opts: { timeoutMs?: number } = {}): Promise<void> {
     this.stopping ??= (async () => {
-      const timeoutMs = opts.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
-      let timer: ReturnType<typeof setTimeout> | undefined
-      await Promise.race([
-        this.queue.stop().catch(() => {}),
-        new Promise<void>((r) => (timer = setTimeout(r, timeoutMs)))
-      ])
-      clearTimeout(timer)
-      await this.wa.stop().catch(() => {})
       if (this.emitTimer) clearTimeout(this.emitTimer)
       this.emitTimer = null
+      const timeoutMs = opts.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
+      await withDeadline(this.queue.stop(), timeoutMs)
+      await withDeadline(this.wa.stop(), timeoutMs)
     })()
     return this.stopping
   }
@@ -353,12 +360,15 @@ export class SagaService extends EventEmitter {
     return this.analyze(jid, true)
   }
 
+  /**
+   * Uma geração por contato de cada vez: qualquer chamada (normal ou forçada) enquanto outra
+   * roda recebe o mesmo resultado, que acabou de ser gerado. Evita duas chamadas pagas à IA.
+   */
   private analyze(jid: string, force: boolean): Promise<AnalysisResult> {
-    const k = `${jid}|${force}`
-    const running = this.inflight.get(k)
+    const running = this.inflight.get(jid)
     if (running) return running
-    const p = this.doAnalyze(jid, force).finally(() => this.inflight.delete(k))
-    this.inflight.set(k, p)
+    const p = this.doAnalyze(jid, force).finally(() => this.inflight.delete(jid))
+    this.inflight.set(jid, p)
     return p
   }
 

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, nativeImage, net, powerMonitor, protocol, Tray } from 'electron'
+import { app, BrowserWindow, Menu, nativeImage, net, powerMonitor, protocol, shell, Tray } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -6,6 +6,7 @@ import { openDb } from '../core/db/db'
 import { Repo } from '../core/db/repo'
 import { MEDIA_SCHEME, resolveMediaPath } from '../core/media'
 import { SagaService } from '../core/service'
+import { isAppUrl, isExternalHttpUrl, type AppOrigin } from './guards'
 import { registerIpc } from './ipc'
 import { createSettingsStore } from './settings'
 
@@ -23,6 +24,11 @@ let service: SagaService | null = null
 let quitting = false
 let stopped = false
 
+const appOrigin: AppOrigin = {
+  devUrl: process.env['ELECTRON_RENDERER_URL'],
+  indexFile: join(import.meta.dirname, '../renderer/index.html')
+}
+
 function showWindow(): void {
   if (!win) return
   if (win.isMinimized()) win.restore()
@@ -36,12 +42,26 @@ function createWindow(): BrowserWindow {
     height: 760,
     show: false,
     webPreferences: {
-      preload: join(import.meta.dirname, '../preload/index.mjs'),
+      preload: join(import.meta.dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true
     }
   })
+  // a janela nunca sai da interface do app: links de mensagens abrem no navegador padrão
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    if (isExternalHttpUrl(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  w.webContents.on('will-navigate', (e, url) => {
+    if (isAppUrl(url, appOrigin)) return
+    e.preventDefault()
+    if (isExternalHttpUrl(url)) void shell.openExternal(url)
+  })
+  w.webContents.on('will-redirect', (e, url) => {
+    if (!isAppUrl(url, appOrigin)) e.preventDefault()
+  })
+  w.webContents.on('will-attach-webview', (e) => e.preventDefault())
   w.once('ready-to-show', () => w.show())
   // fechar a janela só esconde: o app continua lendo o WhatsApp na bandeja
   w.on('close', (e) => {
@@ -50,8 +70,8 @@ function createWindow(): BrowserWindow {
       w.hide()
     }
   })
-  if (process.env['ELECTRON_RENDERER_URL']) void w.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  else void w.loadFile(join(import.meta.dirname, '../renderer/index.html'))
+  if (appOrigin.devUrl) void w.loadURL(appOrigin.devUrl)
+  else void w.loadFile(appOrigin.indexFile)
   return w
 }
 
@@ -62,7 +82,7 @@ function updateTrayMenu(paused: boolean): void {
       { label: 'Abrir', click: showWindow },
       {
         label: paused ? 'Retomar' : 'Pausar',
-        click: () => void (paused ? service?.resumeAll() : service?.pauseAll())
+        click: () => void (paused ? service?.resumeAll() : service?.pauseAll())?.catch(() => {})
       },
       { type: 'separator' },
       { label: 'Sair', click: () => app.quit() }
@@ -103,6 +123,7 @@ function main(): void {
 
     registerIpc(svc, {
       getWindow: () => win,
+      isTrustedSender: (url) => isAppUrl(url, appOrigin),
       onSettingsSaved: () => applyLoginItem(settings.get().startWithWindows)
     })
     applyLoginItem(settings.get().startWithWindows)
@@ -127,14 +148,17 @@ function main(): void {
     powerMonitor.on('resume', () => {
       const slept = suspendedAt === null ? 0 : Date.now() - suspendedAt
       suspendedAt = null
-      svc.onResumeFromSleep(slept)
+      if (!quitting) svc.onResumeFromSleep(slept)
     })
 
-    // ao sair: para a fila (espera o job atual por até 5 s) e desconecta o WhatsApp
+    // ao sair: para a fila (espera o job atual por até 5 s), desconecta o WhatsApp (até 5 s) e fecha o banco
+    let shuttingDown = false
     app.on('before-quit', (e) => {
       quitting = true
       if (stopped) return
       e.preventDefault()
+      if (shuttingDown) return
+      shuttingDown = true
       void svc
         .stop({ timeoutMs: 5_000 })
         .catch(() => {})
@@ -150,7 +174,11 @@ function main(): void {
     })
 
     svc.start().catch((err) => {
-      repo.logEvent('start_error', err instanceof Error ? err.message : String(err))
+      try {
+        repo.logEvent('start_error', err instanceof Error ? err.message : String(err))
+      } catch {
+        // banco já fechado (saindo)
+      }
     })
   })
 

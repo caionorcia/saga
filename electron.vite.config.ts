@@ -7,7 +7,9 @@ export default defineConfig({
     resolve: { alias: { '@core': resolve('src/core'), '@shared': resolve('src/shared') } }
   },
   preload: {
-    resolve: { alias: { '@shared': resolve('src/shared') } }
+    resolve: { alias: { '@shared': resolve('src/shared') } },
+    // CommonJS: a janela roda com sandbox: true, que não aceita preload ESM
+    build: { rollupOptions: { output: { format: 'cjs', entryFileNames: '[name].cjs' } } }
   },
   renderer: {
     plugins: [react()],

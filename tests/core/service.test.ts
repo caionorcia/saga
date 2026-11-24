@@ -133,7 +133,9 @@ describe('SagaService', () => {
         order.push('recover')
         return 0
       })
-      const warm = vi.spyOn(RateLimiter.prototype, 'startWarmup')
+      const warm = vi.spyOn(RateLimiter.prototype, 'startWarmup').mockImplementation(function () {
+        order.push('warmup')
+      })
       const qstart = vi.spyOn(JobQueue.prototype, 'start').mockImplementation(function () {
         order.push('queue.start')
       })
@@ -145,7 +147,7 @@ describe('SagaService', () => {
       expect(recover).toHaveBeenCalledTimes(1)
       expect(warm).toHaveBeenCalledTimes(4)
       expect(qstart).toHaveBeenCalledTimes(1)
-      expect(order).toEqual(['recover', 'wa.start', 'queue.start'])
+      expect(order).toEqual(['recover', 'warmup', 'warmup', 'warmup', 'warmup', 'wa.start', 'queue.start'])
       expect(llmFactory).not.toHaveBeenCalled()
       expect(llm.calls).toBe(0)
     })
@@ -315,6 +317,16 @@ describe('SagaService', () => {
       expect(llm.calls).toBe(1)
     })
 
+    it('getAnalysis e regenerate simultâneos para o mesmo contato: uma chamada só', async () => {
+      settings.save({ groqKey: GROQ_KEY })
+      const [a, b] = await Promise.all([service.getAnalysis(JID), service.regenerate(JID)])
+      expect(a.ok && b.ok).toBe(true)
+      expect(llm.calls).toBe(1)
+      const [c, d] = await Promise.all([service.regenerate(JID), service.getAnalysis(JID)])
+      expect(c.ok && d.ok).toBe(true)
+      expect(llm.calls).toBe(2)
+    })
+
     it('erros da IA viram códigos para a interface', async () => {
       settings.save({ groqKey: GROQ_KEY })
       const { InvalidKeyError } = await import('../../src/core/ai/transcriber')
@@ -374,6 +386,37 @@ describe('SagaService', () => {
   })
 
   describe('stop()', () => {
+    it('prazo por etapa: um cliente do WhatsApp que não para também não segura a saída', async () => {
+      await service.start()
+      vi.spyOn(client(), 'stop').mockImplementation(() => new Promise<void>(() => {}))
+      const t0 = Date.now()
+      await service.stop({ timeoutMs: 100 })
+      expect(Date.now() - t0).toBeLessThan(1_000)
+    })
+
+    it('job que termina depois do banco fechado não gera rejeição sem tratamento', async () => {
+      const db = openDb(':memory:')
+      repo = new Repo(db, clock)
+      settings = new SettingsStore(repo, cipher)
+      service = make()
+      let release!: () => void
+      await service.start()
+      service.queue.register('fetch_profile', () => new Promise<void>((r) => (release = r)))
+      service.queue.enqueue('fetch_profile', 'tarde', {})
+      await vi.waitFor(() => expect(repo.listJobs('running')).toHaveLength(1))
+      const unhandled = vi.fn()
+      process.on('unhandledRejection', unhandled)
+      try {
+        await service.stop({ timeoutMs: 50 })
+        db.close()
+        release()
+        await new Promise((r) => setTimeout(r, 200))
+        expect(unhandled).not.toHaveBeenCalled()
+      } finally {
+        process.off('unhandledRejection', unhandled)
+      }
+    })
+
     it('para a fila esperando o job atual por no máximo o tempo dado, e para o cliente', async () => {
       await service.start()
       service.queue.register('fetch_profile', () => new Promise<void>(() => {}))

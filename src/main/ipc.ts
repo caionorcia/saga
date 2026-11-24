@@ -1,11 +1,14 @@
 import { clipboard, dialog, ipcMain, type BrowserWindow } from 'electron'
 import type { SagaService } from '../core/service'
 import { EVENTS, INVOKE_METHODS, invokeChannel, type InvokeMethod, type SagaApi } from '../shared/api'
+import { validateIpcArgs } from './guards'
 
 type Handlers = { [M in InvokeMethod]: (...args: Parameters<SagaApi[M]>) => ReturnType<SagaApi[M]> }
 
 export interface IpcOptions {
   getWindow: () => BrowserWindow | null
+  /** só a interface do próprio app pode chamar (URL do frame que enviou) */
+  isTrustedSender: (frameUrl: string) => boolean
   /** depois de salvar as configurações (ex.: abrir com o Windows) */
   onSettingsSaved?: () => void
 }
@@ -42,7 +45,12 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
 
   for (const m of INVOKE_METHODS) {
     const fn = h[m] as (...args: unknown[]) => unknown
-    ipcMain.handle(invokeChannel(m), (_e, ...args: unknown[]) => fn(...args))
+    ipcMain.handle(invokeChannel(m), (e, ...args: unknown[]) => {
+      const url = e.senderFrame?.url
+      if (!url || !opts.isTrustedSender(url)) throw new Error(`chamada recusada: origem não confiável (${m})`)
+      validateIpcArgs(m, args)
+      return fn(...args)
+    })
   }
 
   const send = (channel: string, ...args: unknown[]) => {
