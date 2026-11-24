@@ -38,6 +38,17 @@ export interface AnalysisRow {
   createdAt: number
 }
 
+export interface ApprovedRow {
+  id: number
+  jid: string
+  contextText: string
+  originalSuggestion: string | null
+  finalText: string
+  sentText: string | null
+  provider: string | null
+  createdAt: number
+}
+
 export interface EventRow {
   id: number
   ts: number
@@ -72,6 +83,19 @@ function toJob(r: Row): JobRow {
     nextRunAt: r.next_run_at,
     priority: r.priority,
     lastError: r.last_error
+  }
+}
+
+function toApproved(r: Row): ApprovedRow {
+  return {
+    id: r.id,
+    jid: r.jid,
+    contextText: r.context_text,
+    originalSuggestion: r.original_suggestion,
+    finalText: r.final_text,
+    sentText: r.sent_text,
+    provider: r.provider,
+    createdAt: r.created_at
   }
 }
 
@@ -210,6 +234,65 @@ export class Repo {
       suggestions: JSON.parse(r.suggestions_json) as string[],
       createdAt: r.created_at
     }
+  }
+
+  // --- respostas aprovadas (memória) ---
+
+  insertApproved(a: {
+    jid: string
+    contextText: string
+    originalSuggestion: string | null
+    finalText: string
+    provider: string | null
+  }): number {
+    const res = this.db
+      .prepare(
+        `INSERT INTO approved_replies(jid, context_text, original_suggestion, final_text, provider, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(a.jid, a.contextText, a.originalSuggestion, a.finalText, a.provider, this.clock.now())
+    return Number(res.lastInsertRowid)
+  }
+
+  /** Mais recentes primeiro. `jid` null = qualquer contato. */
+  listApproved(opts: { jid?: string | null; limit: number; excludeIds?: number[] }): ApprovedRow[] {
+    const ex = opts.excludeIds ?? []
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM approved_replies
+         WHERE (?1 IS NULL OR jid = ?1) AND id NOT IN (SELECT value FROM json_each(?2))
+         ORDER BY created_at DESC, id DESC LIMIT ?3`
+      )
+      .all(opts.jid ?? null, JSON.stringify(ex), opts.limit) as Row[]
+    return rows.map(toApproved)
+  }
+
+  /** Busca FTS5 (`match` já no formato FTS5), melhores primeiro por bm25. */
+  searchApproved(match: string, limit: number, excludeIds: number[] = []): ApprovedRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT a.* FROM approved_fts f JOIN approved_replies a ON a.id = f.rowid
+         WHERE approved_fts MATCH ? AND a.id NOT IN (SELECT value FROM json_each(?))
+         ORDER BY bm25(approved_fts), a.id DESC LIMIT ?`
+      )
+      .all(match, JSON.stringify(excludeIds), limit) as Row[]
+    return rows.map(toApproved)
+  }
+
+  /** Aprovadas do contato, ainda sem `sent_text`, criadas em [fromTs, toTs]. */
+  listUnsentApproved(jid: string, fromTs: number, toTs: number): ApprovedRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM approved_replies
+         WHERE jid = ? AND sent_text IS NULL AND created_at >= ? AND created_at <= ?
+         ORDER BY created_at DESC, id DESC`
+      )
+      .all(jid, fromTs, toTs) as Row[]
+    return rows.map(toApproved)
+  }
+
+  setApprovedSentText(id: number, text: string): void {
+    this.db.prepare('UPDATE approved_replies SET sent_text = ? WHERE id = ?').run(text, id)
   }
 
   // --- eventos ---
