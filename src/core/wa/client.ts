@@ -7,6 +7,7 @@ import makeWASocket, {
   Browsers,
   BufferJSON,
   downloadMediaMessage,
+  fetchLatestWaWebVersion,
   type Contact,
   type LIDMapping,
   type UserFacingSocketConfig,
@@ -22,6 +23,7 @@ import type { NormalizedMessage } from '../types'
 import { useAtomicAuthState, type AtomicAuthState } from './authState'
 import { normalize, stripDevice, toPhoneJid } from './normalize'
 import { ReconnectPolicy, classifyDisconnect } from './reconnect'
+import { WaVersionResolver, formatWaVersion, type WaVersionFetcher } from './version'
 
 export type ConnState =
   | 'connecting'
@@ -61,6 +63,13 @@ export interface WhatsAppClientDeps {
   authStateFactory?: (dir: string, backupDir: string) => Promise<AtomicAuthState>
   download?: DownloadFn
   hasFreeSpace?: (dir: string, minBytes: number) => Promise<boolean>
+  /** busca a versão atual do WhatsApp Web (padrão: `fetchLatestWaWebVersion` do Baileys, até 10 s) */
+  fetchWaVersion?: WaVersionFetcher
+  /**
+   * Registro de diagnóstico (arquivo de log): estados da conexão, códigos de queda, avisos do Baileys.
+   * Nunca recebe conteúdo de mensagens, chaves nem o conteúdo do QR.
+   */
+  diag?: (kind: string, detail: string) => void
 }
 
 const DAY = 86_400_000
@@ -75,15 +84,46 @@ const RESTART_REQUIRED = 515
 const DISK_CHECK_MS = 10 * 60_000
 
 const noop = () => {}
-const silentLogger: any = {
-  level: 'silent',
-  child: () => silentLogger,
-  trace: noop,
-  debug: noop,
-  info: noop,
-  warn: noop,
-  error: noop
+const VERSION_FETCH_TIMEOUT_MS = 10_000
+
+/** Texto curto de um aviso do Baileys: só a mensagem (e a do erro, se houver), nunca o objeto inteiro. */
+function baileysLogText(obj: unknown, msg?: unknown): string {
+  const parts: string[] = []
+  if (typeof msg === 'string') parts.push(msg)
+  else if (typeof obj === 'string') parts.push(obj)
+  const err = obj instanceof Error ? obj : (obj as { err?: unknown; error?: unknown } | null)?.err ?? (obj as { error?: unknown } | null)?.error
+  if (err instanceof Error && err.message) parts.push(err.message)
+  return parts.join(': ').replace(/\s+/g, ' ').slice(0, 300) || '(sem mensagem)'
 }
+
+/**
+ * Logger no formato do pino para o Baileys: só `warn` e `error` vão para o registro de diagnóstico,
+ * com a mensagem apenas (os objetos de contexto podem trazer conteúdo de mensagens e são descartados).
+ */
+export function makeBaileysLogger(diag?: (kind: string, detail: string) => void): any {
+  const forward = (kind: string) => (obj: unknown, msg?: unknown) => {
+    if (!diag) return
+    try {
+      diag(kind, baileysLogText(obj, msg))
+    } catch {
+      // registrar nunca derruba a conexão
+    }
+  }
+  const logger: any = {
+    level: 'warn',
+    child: () => logger,
+    trace: noop,
+    debug: noop,
+    info: noop,
+    warn: forward('baileys_warn'),
+    error: forward('baileys_error'),
+    fatal: forward('baileys_error')
+  }
+  return logger
+}
+
+const defaultFetchWaVersion: WaVersionFetcher = () =>
+  fetchLatestWaWebVersion({ signal: AbortSignal.timeout(VERSION_FETCH_TIMEOUT_MS) }) as ReturnType<WaVersionFetcher>
 
 const defaultSocketFactory: SocketFactory = (config) => makeWASocket(config) as unknown as WaSocket
 const defaultDownload: DownloadFn = (msg, type, options) => downloadMediaMessage(msg, type, options)
@@ -108,6 +148,8 @@ export class WhatsAppClient extends EventEmitter {
   private readonly authStateFactory: (dir: string, backupDir: string) => Promise<AtomicAuthState>
   private readonly download: DownloadFn
   private readonly hasFreeSpace: (dir: string, minBytes: number) => Promise<boolean>
+  private readonly versions: WaVersionResolver
+  private readonly baileysLogger: any
 
   private sock: WaSocket | null = null
   private auth: AtomicAuthState | null = null
@@ -124,6 +166,12 @@ export class WhatsAppClient extends EventEmitter {
   private wipedOnce = false
   /** a última queda foi um 515 que reconectou sem contar */
   private last515 = false
+  /** já buscou a versão de novo e reconectou depois de um 405 desde a última conexão estável */
+  private outdatedRetried = false
+  /** a próxima conexão busca a versão do WhatsApp Web sem usar o cache */
+  private forceVersionRefresh = false
+  /** já mostrou um QR neste socket (o registro anota só o primeiro) */
+  private qrLogged = false
   private pausedByConnection = false
   /** menos de 1 GB livre: downloads pausados até a próxima medição com espaço */
   private diskLow = false
@@ -139,6 +187,8 @@ export class WhatsAppClient extends EventEmitter {
     this.authStateFactory = deps.authStateFactory ?? useAtomicAuthState
     this.download = deps.download ?? defaultDownload
     this.hasFreeSpace = deps.hasFreeSpace ?? hasFreeSpace
+    this.versions = new WaVersionResolver(deps.repo, deps.clock, deps.fetchWaVersion ?? defaultFetchWaVersion)
+    this.baileysLogger = makeBaileysLogger(deps.diag)
     deps.queue.register('download_audio', (p) => this.downloadAudio(p))
     deps.queue.register('fetch_profile', (p) => this.fetchProfile(p))
     // downloads só com a conexão aberta
@@ -189,6 +239,7 @@ export class WhatsAppClient extends EventEmitter {
     this.clearStable()
     this.policy.manualRetry()
     this.last515 = false
+    this.outdatedRetried = false
     this.dropSocket()
     this.schedule(() => this.connect())
     await this.whenIdle()
@@ -222,6 +273,15 @@ export class WhatsAppClient extends EventEmitter {
     })
   }
 
+  /** Registro de diagnóstico (nunca lança). */
+  private diag(kind: string, detail: string): void {
+    try {
+      this.deps.diag?.(kind, detail)
+    } catch {
+      // registrar nunca pode quebrar a conexão
+    }
+  }
+
   private setStatus(s: ConnState): void {
     // downloads de mídia só com a conexão aberta (a volta é em onOpen, depois de checar o disco)
     if (s !== 'open') {
@@ -230,6 +290,7 @@ export class WhatsAppClient extends EventEmitter {
     }
     if (this.status === s) return
     this.status = s
+    this.diag('wa_status', s)
     this.emit('status', s)
   }
 
@@ -305,16 +366,44 @@ export class WhatsAppClient extends EventEmitter {
     }
   }
 
+  /**
+   * Conecta; qualquer erro ao montar a conexão (sessão, versão, criação do socket) vira uma queda comum
+   * (espera da política e "Tentar de novo"), nunca um "Conectando…" eterno.
+   */
   private async connect(): Promise<void> {
     if (!this.running) return
     this.dropSocket()
     const gen = this.gen
+    try {
+      await this.openSocket(gen)
+    } catch (e) {
+      if (gen !== this.gen || !this.running) return
+      this.gen++
+      this.sock = null
+      const detail = `falha ao conectar: ${errMsg(e).slice(0, 300)}`
+      this.deps.repo.logEvent('wa_connect_error', detail)
+      this.diag('wa_connect_error', detail)
+      this.retryWithPolicy(detail)
+    }
+  }
+
+  private async openSocket(gen: number): Promise<void> {
     this.setStatus('connecting')
+    this.qrLogged = false
     await this.auth?.close()
     const auth = await this.authStateFactory(this.deps.authDir, this.deps.backupDir)
     if (gen !== this.gen || !this.running) return
     this.auth = auth
+    const force = this.forceVersionRefresh
+    this.forceVersionRefresh = false
+    const v = await this.versions.resolve({ force })
+    if (gen !== this.gen || !this.running) return
+    this.diag(
+      'wa_version',
+      `WhatsApp Web ${formatWaVersion(v.version)} (${v.source}${force ? ', forçada' : ''})${v.error ? `; busca falhou: ${v.error}` : ''}`
+    )
     const sock = this.socketFactory({
+      ...(v.version ? { version: v.version } : {}),
       auth: auth.state,
       browser: Browsers.windows('Desktop'),
       // presença "indisponível" ao conectar: o celular continua recebendo notificações
@@ -323,7 +412,7 @@ export class WhatsAppClient extends EventEmitter {
       syncFullHistory: true,
       shouldSyncHistoryMessage: () => true,
       generateHighQualityLinkPreview: false,
-      logger: silentLogger
+      logger: this.baileysLogger
     })
     this.sock = sock
     const on = (event: string, fn: (arg: any) => Promise<void> | void) =>
@@ -346,7 +435,14 @@ export class WhatsAppClient extends EventEmitter {
     qr?: string
     lastDisconnect?: { error?: unknown }
   }): Promise<void> {
+    if (u.connection) this.diag('wa_connection_update', u.connection)
     if (u.qr) {
+      // nunca o conteúdo do QR: só que ele chegou
+      if (!this.qrLogged) {
+        this.qrLogged = true
+        this.deps.repo.logEvent('wa_qr', 'QR Code pronto para escanear')
+        this.diag('wa_qr', 'QR Code recebido')
+      }
       const dataUrl = await QRCode.toDataURL(u.qr)
       this.emit('qr', dataUrl)
       this.setStatus('needs_qr')
@@ -364,6 +460,7 @@ export class WhatsAppClient extends EventEmitter {
       this.restoredOnce = false
       this.wipedOnce = false
       this.last515 = false
+      this.outdatedRetried = false
     }, STABLE_AFTER_MS)
     if (this.pausedByConnection) {
       this.pausedByConnection = false
@@ -410,7 +507,8 @@ export class WhatsAppClient extends EventEmitter {
     this.clearStable()
     const auth = this.auth
     const code = statusOf(error)
-    const detail = `código ${code ?? '?'}: ${error ? errMsg(error) : 'sem detalhe'}`
+    const detail = `código ${code ?? '?'}: ${error ? errMsg(error).slice(0, 300) : 'sem detalhe'}`
+    this.diag('wa_close', detail)
     const isRestart = code === RESTART_REQUIRED
     if (isRestart && !this.last515) {
       // "reinicie": normal depois de parear; reconecta já, sem contar (uma vez seguida)
@@ -421,7 +519,9 @@ export class WhatsAppClient extends EventEmitter {
     }
     if (!isRestart) this.last515 = false
 
-    switch (classifyDisconnect(code, error instanceof Error ? error.message : undefined)) {
+    const cls = classifyDisconnect(code, error instanceof Error ? error.message : undefined)
+    if (cls !== 'outdated') this.deps.repo.logEvent('wa_closed', detail)
+    switch (cls) {
       case 'retry':
         this.retryWithPolicy(detail)
         return
@@ -458,6 +558,15 @@ export class WhatsAppClient extends EventEmitter {
         this.stopWith('stopped_restricted', detail)
         return
       case 'outdated':
+        if (!this.outdatedRetried) {
+          // versão do WhatsApp Web recusada (405 antes do QR): busca a versão atual e tenta já, sem contar
+          this.outdatedRetried = true
+          this.forceVersionRefresh = true
+          this.deps.repo.logEvent('wa_outdated_retry', `${detail}; buscando a versão atual do WhatsApp Web`)
+          this.setStatus('waiting_retry')
+          this.retryIn(0)
+          return
+        }
         this.stopWith('stopped_outdated', detail)
         return
       case 'replaced':

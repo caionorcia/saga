@@ -75,6 +75,9 @@ describe('WhatsAppClient', () => {
   let diskGate: Promise<boolean> | null
   let diskChecks: number
   let restoreSpy: ReturnType<typeof vi.fn<(r: boolean) => void>>
+  let fetchVersion: ReturnType<typeof vi.fn>
+  let waRevision: number
+  let diagLines: Array<[string, string]>
 
   const last = () => sockets[sockets.length - 1]
   const advance = async (ms: number) => {
@@ -109,7 +112,12 @@ describe('WhatsAppClient', () => {
     diskChecks = 0
     download = vi.fn(async () => Buffer.from('OggS-fake-audio'))
     restoreSpy = vi.fn<(r: boolean) => void>()
+    waRevision = 1_100_000_001
+    fetchVersion = vi.fn(async () => ({ version: [2, 3000, waRevision] as [number, number, number], isLatest: true }))
+    diagLines = []
     client = new WhatsAppClient({
+      fetchWaVersion: fetchVersion as any,
+      diag: (k, d) => diagLines.push([k, d]),
       repo,
       queue,
       clock,
@@ -424,8 +432,7 @@ describe('WhatsAppClient', () => {
   describe('desconexão', () => {
     it.each([
       [401, 'stopped_logged_out'],
-      [403, 'stopped_restricted'],
-      [405, 'stopped_outdated']
+      [403, 'stopped_restricted']
     ] as const)('%i → pausa a fila, %s, registra evento e não reconecta', async (code, state) => {
       await close(code)
       expect(statuses.at(-1)).toBe(state)
@@ -433,6 +440,105 @@ describe('WhatsAppClient', () => {
       expect(repo.recentEvents(5).map((e) => e.kind)).toContain(`wa_${state}`)
       await advance(2 * 3_600_000)
       expect(sockets).toHaveLength(1)
+    })
+
+    it('405 (versão recusada): busca a versão de novo sem cache e reconecta já, sem contar; o segundo 405 para', async () => {
+      expect(fetchVersion).toHaveBeenCalledTimes(1)
+      expect(last().config.version).toEqual([2, 3000, 1_100_000_001])
+      waRevision = 1_100_000_002
+      await close(405)
+      await advance(0)
+      expect(sockets).toHaveLength(2)
+      // cache de 24 h ignorado: buscou de novo
+      expect(fetchVersion).toHaveBeenCalledTimes(2)
+      expect(last().config.version).toEqual([2, 3000, 1_100_000_002])
+      expect(statuses).not.toContain('stopped_outdated')
+      expect(queue.isPaused()).toBe(false)
+      expect(repo.recentEvents(5).map((e) => e.kind)).toContain('wa_outdated_retry')
+      await close(405)
+      expect(statuses.at(-1)).toBe('stopped_outdated')
+      expect(queue.isPaused()).toBe(true)
+      expect(repo.recentEvents(5).map((e) => e.kind)).toContain('wa_stopped_outdated')
+      await advance(2 * 3_600_000)
+      expect(sockets).toHaveLength(2)
+    })
+
+    it('405 depois de uma conexão estável volta a ganhar a nova tentativa; "Tentar de novo" também', async () => {
+      await close(405)
+      await advance(0)
+      await emit('connection.update', { connection: 'open' })
+      await advance(STABLE_MS + 1000)
+      await close(405)
+      await advance(0)
+      expect(sockets).toHaveLength(3)
+      expect(statuses.at(-1)).not.toBe('stopped_outdated')
+      await close(405)
+      expect(statuses.at(-1)).toBe('stopped_outdated')
+      await client.manualReconnect()
+      await close(405)
+      await advance(0)
+      expect(statuses.at(-1)).not.toBe('stopped_outdated')
+      expect(sockets).toHaveLength(5)
+    })
+
+    it('a versão fica em cache: reconexões comuns não buscam de novo', async () => {
+      await close(428)
+      await advance(10_000)
+      expect(sockets).toHaveLength(2)
+      expect(fetchVersion).toHaveBeenCalledTimes(1)
+    })
+
+    it('busca da versão falhou e sem cache: socket sem `version` (o Baileys usa a embutida)', async () => {
+      fetchVersion.mockImplementation(async () => ({ version: [2, 3000, 1], isLatest: false, error: new Error('Forbidden') }))
+      repo.deleteSetting('wa.webVersion')
+      await client.manualReconnect()
+      expect('version' in last().config).toBe(false)
+      expect(diagLines.some(([k, d]) => k === 'wa_version' && /Forbidden/.test(d))).toBe(true)
+    })
+
+    it('erro ao montar a conexão não deixa "Conectando…" para sempre: registra e espera para tentar de novo', async () => {
+      fetchVersion.mockImplementation(async () => {
+        throw new Error('boom')
+      })
+      repo.deleteSetting('wa.webVersion')
+      // a falha de `fetchVersion` é tratada pelo resolvedor; a de criar o socket vem daqui
+      const sf = (client as any).socketFactory
+      ;(client as any).socketFactory = () => {
+        throw new Error('falha ao carregar o módulo')
+      }
+      await client.manualReconnect()
+      expect(statuses.at(-1)).toBe('waiting_retry')
+      expect(client.getRetryAt()).not.toBeNull()
+      expect(repo.recentEvents(5).find((e) => e.kind === 'wa_connect_error')?.detail).toMatch(/falha ao carregar o módulo/)
+      ;(client as any).socketFactory = sf
+      await advance(15_000)
+      expect(statuses.at(-1)).toBe('connecting')
+      expect(sockets.length).toBeGreaterThanOrEqual(2)
+    })
+
+    it('registro de diagnóstico: estados, código da queda e QR sem o conteúdo', async () => {
+      await emit('connection.update', { qr: '2@SEGREDO-DO-QR,abc' })
+      await close(428, 'Connection Terminated')
+      const all = diagLines.map(([k, d]) => `${k} ${d}`).join('\n')
+      expect(all).toMatch(/wa_qr/)
+      expect(all).toMatch(/wa_close código 428: Connection Terminated/)
+      expect(all).toMatch(/wa_status waiting_retry/)
+      expect(all).not.toMatch(/SEGREDO/)
+      expect(repo.recentEvents(5).map((e) => e.kind)).toEqual(expect.arrayContaining(['wa_qr', 'wa_closed']))
+    })
+
+    it('logger do Baileys: só warn/error, só a mensagem', () => {
+      const lg = last().config.logger
+      expect(lg.level).toBe('warn')
+      lg.info({ msg: 'x' }, 'info ignorado')
+      lg.debug('debug ignorado')
+      lg.child({ a: 1 }).warn({ message: { conversation: 'texto secreto' } }, 'aviso do socket')
+      lg.error({ err: new Error('stream errored') }, 'erro do socket')
+      const b = diagLines.filter(([k]) => k.startsWith('baileys_'))
+      expect(b).toEqual([
+        ['baileys_warn', 'aviso do socket'],
+        ['baileys_error', 'erro do socket: stream errored']
+      ])
     })
 
     it('logged_out apaga a sessão (o próximo conectar pede QR)', async () => {

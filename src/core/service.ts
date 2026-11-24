@@ -31,6 +31,7 @@ import { JobQueue, type JobType } from './queue/queue'
 import { EncryptionUnavailableError, SettingsStore, testKey, type KeyKind, type Provider, type SettingsPatch } from './settings'
 import type { NormalizedMessage } from './types'
 import { WhatsAppClient, type ConnState, type WhatsAppClientDeps } from './wa/client'
+import type { WaVersionFetcher } from './wa/version'
 import type {
   AiErrorCode,
   AnalysisResult,
@@ -73,12 +74,20 @@ export interface SagaServiceOpts {
   transcriberFactory?: (kind: 'groq' | 'openai', apiKey: string) => Transcriber
   /** usado por `testKey` (testes) */
   fetchImpl?: typeof fetch
+  /** busca da versão do WhatsApp Web (testes); padrão: a do Baileys */
+  fetchWaVersion?: WaVersionFetcher
+  /** registro de diagnóstico (arquivo de log no processo principal) */
+  diag?: (kind: string, detail: string) => void
 }
 
 const EVER_CONNECTED = 'wa.everConnected'
-/** parada definitiva (restrição, versão, outro lugar): vale também depois de reiniciar o app */
+/** parada definitiva (restrição, outro lugar): vale também depois de reiniciar o app */
 const STOPPED_STATE = 'wa.stoppedState'
-const PERSISTED_STOPS: ReadonlySet<ConnState> = new Set(['stopped_restricted', 'stopped_outdated', 'stopped_replaced'])
+/**
+ * `stopped_outdated` não entra: ao reiniciar, o app busca a versão atual do WhatsApp Web e tenta de novo
+ * (a versão 0.1.0 guardava essa parada e ficava sem QR para sempre).
+ */
+const PERSISTED_STOPS: ReadonlySet<ConnState> = new Set(['stopped_restricted', 'stopped_replaced'])
 const EMIT_DELAY_MS = 150
 const DEFAULT_STOP_TIMEOUT_MS = 5_000
 
@@ -159,6 +168,9 @@ export class SagaService extends EventEmitter {
   private transcribePauseReason: TranscribePauseReason | null = null
   /** downloads de áudio concluídos no lote atual (zera quando o lote termina) */
   private downloadsDone = 0
+  /** `start()` falhou: a interface mostra o erro em vez de "Conectando…" */
+  private startError: string | null = null
+  private readonly diagFn?: (kind: string, detail: string) => void
 
   constructor(opts: SagaServiceOpts) {
     super()
@@ -169,6 +181,7 @@ export class SagaService extends EventEmitter {
     this.settings = opts.settings
     this.clock = clock
     this.fetchImpl = opts.fetchImpl
+    this.diagFn = opts.diag
     this.llmFactory = opts.llmFactory ?? ((kind, key, o) => createLlm(kind, key, o))
     this.transcriberFactory = opts.transcriberFactory ?? ((kind, key) => createTranscriber(kind, key))
     this.cost = new CostTracker(repo, clock)
@@ -230,7 +243,9 @@ export class SagaService extends EventEmitter {
       rng,
       ...opts.paths,
       limiters: Object.values(this.limiters),
-      hasFreeSpace: opts.hasFreeSpace ?? defaultHasFreeSpace
+      hasFreeSpace: opts.hasFreeSpace ?? defaultHasFreeSpace,
+      ...(opts.fetchWaVersion ? { fetchWaVersion: opts.fetchWaVersion } : {}),
+      ...(opts.diag ? { diag: opts.diag } : {})
     })
     this.wa.on('qr', (dataUrl: string) => {
       this.qr = dataUrl
@@ -261,9 +276,37 @@ export class SagaService extends EventEmitter {
    * pausada até o mentor clicar em "Reconectar".
    */
   async start(): Promise<void> {
+    try {
+      await this.doStart()
+      this.startError = null
+    } catch (e) {
+      const msg = (e instanceof Error ? e.message : String(e)).slice(0, 300)
+      this.startError = msg
+      try {
+        this.repo.logEvent('start_error', msg)
+      } catch {
+        // banco indisponível: o registro de diagnóstico ainda anota
+      }
+      this.diag('start_error', e instanceof Error && e.stack ? e.stack.slice(0, 1000) : msg)
+      this.markState()
+      throw e
+    }
+  }
+
+  private diag(kind: string, detail: string): void {
+    try {
+      this.diagFn?.(kind, detail)
+    } catch {
+      // registrar nunca quebra o app
+    }
+  }
+
+  private async doStart(): Promise<void> {
     this.queue.recoverAfterCrash()
     for (const l of Object.values(this.limiters)) l.startWarmup()
     const stopped = this.repo.getSetting(STOPPED_STATE) as ConnState | null
+    // parada guardada que não vale mais entre reinícios (ex.: versão desatualizada da 0.1.0): descarta
+    if (stopped && !PERSISTED_STOPS.has(stopped)) this.repo.deleteSetting(STOPPED_STATE)
     if (stopped && PERSISTED_STOPS.has(stopped)) {
       this.persistedStop = stopped
       if (!this.queue.isPaused()) {
@@ -320,7 +363,8 @@ export class SagaService extends EventEmitter {
       costTodayUsd: this.cost.todayUsd(),
       setupDone: s.keys.groq && this.repo.getSetting(EVER_CONNECTED) === '1',
       provider: s.provider,
-      update: this.update
+      update: this.update,
+      ...(this.startError ? { startError: this.startError } : {})
     }
   }
 
@@ -557,6 +601,13 @@ export class SagaService extends EventEmitter {
 
   /** "Reconectar" / "Gerar novo QR Code": limpa a parada definitiva guardada e conecta já. */
   async manualReconnect(): Promise<void> {
+    if (this.startError) {
+      // o início falhou: tenta o início inteiro de novo (fila, limitadores e conexão)
+      this.repo.deleteSetting(STOPPED_STATE)
+      this.persistedStop = null
+      await this.start()
+      return
+    }
     this.repo.deleteSetting(STOPPED_STATE)
     this.persistedStop = null
     if (this.pausedByPersistedStop) {

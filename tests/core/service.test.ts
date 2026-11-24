@@ -104,6 +104,7 @@ describe('SagaService', () => {
         }),
       llmFactory: llmFactory as any,
       transcriberFactory: () => transcriber,
+      fetchWaVersion: async () => ({ version: [2, 3000, 1_100_000_001], isLatest: true }),
       ...extra
     })
   }
@@ -402,9 +403,56 @@ describe('SagaService', () => {
       }
     }
 
+    it('405 duas vezes → stopped_outdated, mas NÃO sobrevive ao reinício: conecta de novo com versão nova', async () => {
+      await service.start()
+      await close(405)
+      await new Promise((r) => setTimeout(r, 5))
+      await client().whenIdle()
+      await close(405)
+      expect(service.state().conn).toBe('stopped_outdated')
+      await service.stop()
+      const before = sockets.length
+      service = make()
+      await service.start()
+      expect(sockets.length).toBe(before + 1)
+      expect(service.state()).toMatchObject({ conn: 'connecting', paused: false })
+      expect(repo.getSetting('wa.stoppedState')).toBeNull()
+    })
+
+    it('parada stopped_outdated guardada pela 0.1.0 é descartada ao iniciar', async () => {
+      repo.setSetting('wa.stoppedState', 'stopped_outdated')
+      await service.start()
+      expect(sockets).toHaveLength(1)
+      expect(service.state().conn).toBe('connecting')
+      expect(repo.getSetting('wa.stoppedState')).toBeNull()
+    })
+
+    it('falha no início: evento start_error, registro de diagnóstico e startError no estado; Tentar de novo inicia de novo', async () => {
+      const diag: string[] = []
+      service = make({ diag: (k, d) => diag.push(`${k} ${d}`) })
+      const spy = vi.spyOn(service.queue, 'recoverAfterCrash').mockImplementationOnce(() => {
+        throw new Error('banco travado')
+      })
+      await expect(service.start()).rejects.toThrow('banco travado')
+      expect(service.state().startError).toBe('banco travado')
+      expect(repo.recentEvents(3).map((e) => e.kind)).toContain('start_error')
+      expect(diag.some((l) => l.startsWith('start_error') && l.includes('banco travado'))).toBe(true)
+      expect(sockets).toHaveLength(0)
+      await service.manualReconnect()
+      expect(spy).toHaveBeenCalledTimes(2)
+      expect(service.state().startError).toBeUndefined()
+      expect(sockets).toHaveLength(1)
+    })
+
+    it('repassa o registro de diagnóstico ao cliente do WhatsApp', async () => {
+      const diag: string[] = []
+      service = make({ diag: (k, d) => diag.push(`${k} ${d}`) })
+      await service.start()
+      expect(diag.some((l) => l.startsWith('wa_version WhatsApp Web 2.3000.1100000001'))).toBe(true)
+    })
+
     it.each([
       [403, 'stopped_restricted'],
-      [405, 'stopped_outdated'],
       [440, 'stopped_replaced']
     ])('código %i (%s) sobrevive ao reinício: não conecta, mostra o estado; Reconectar limpa', async (code, state) => {
       await service.start()
