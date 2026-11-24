@@ -54,20 +54,24 @@ export function initials(name: string): string {
 
 export type Tone = 'ok' | 'warn' | 'bad'
 
-/** Texto e cor da bolinha de conexão. */
+/**
+ * Texto e cor da bolinha de conexão. O estado da conexão vem primeiro: "Pausado" só aparece quando o
+ * WhatsApp está conectado, conectando ou esperando para reconectar (uma parada definitiva também pausa
+ * a fila, mas o mentor precisa ver o motivo).
+ */
 export function connectionLabel(
   conn: AppState['conn'],
   paused: boolean,
   retryAt: number | null = null,
   now = Date.now()
 ): { text: string; tone: Tone } {
-  if (paused) return { text: 'Pausado', tone: 'warn' }
   switch (conn) {
     case 'open':
-      return { text: 'Conectado', tone: 'ok' }
+      return paused ? { text: 'Pausado', tone: 'warn' } : { text: 'Conectado', tone: 'ok' }
     case 'connecting':
-      return { text: 'Conectando…', tone: 'warn' }
+      return paused ? { text: 'Pausado', tone: 'warn' } : { text: 'Conectando…', tone: 'warn' }
     case 'waiting_retry':
+      if (paused) return { text: 'Pausado', tone: 'warn' }
       if (retryAt !== null && retryAt > now) {
         const sec = Math.ceil((retryAt - now) / 1000)
         return { text: sec >= 60 ? `Reconectando em ${Math.round(sec / 60)} min` : `Reconectando em ${sec} s`, tone: 'warn' }
@@ -88,6 +92,43 @@ export function connectionLabel(
   }
 }
 
+/** Explicação (alerta) das paradas definitivas; null para os outros estados. */
+export function connAlert(conn: AppState['conn']): string | null {
+  switch (conn) {
+    case 'stopped_restricted':
+      return 'O WhatsApp sinalizou uma restrição na sua conta. O Saga parou tudo e não vai tentar de novo sozinho. Use o WhatsApp só pelo celular por alguns dias; quando quiser voltar a usar o Saga, clique em Reconectar.'
+    case 'stopped_outdated':
+      return 'O WhatsApp mudou e esta versão do Saga ficou desatualizada. Atualize o Saga para a versão mais nova e depois clique em Reconectar.'
+    case 'stopped_replaced':
+      return 'O WhatsApp deste computador foi conectado em outro lugar. O Saga parou para não disputar a conexão. Feche o outro aparelho ou programa e clique em Reconectar.'
+    case 'stopped_logged_out':
+      return 'Este computador foi desvinculado do WhatsApp pelo celular. Clique em Reconectar para mostrar um QR Code novo e vincular de novo. As conversas já importadas continuam guardadas.'
+    default:
+      return null
+  }
+}
+
+/** "Baixando áudios: 12 de 340" (só os downloads do lote atual); null sem downloads pendentes. */
+export function downloadProgress(d: AppState['downloads'], paused: boolean): string | null {
+  if (d.remaining <= 0) return null
+  const total = d.done + d.remaining
+  return paused ? `Downloads pausados (${d.done} de ${total})` : `Baixando áudios: ${d.done} de ${total}`
+}
+
+/** Aviso de transcrição pausada, pelo motivo. */
+export function transcribeChip(reason: AppState['transcribePausedReason']): string | null {
+  switch (reason) {
+    case 'key':
+      return 'Transcrição pausada — confira a chave'
+    case 'budget':
+      return 'Transcrição pausada — teto de gasto de hoje atingido'
+    case 'network':
+      return 'Sem internet — transcrição volta em instantes'
+    default:
+      return null
+  }
+}
+
 export const needsManualReconnect = (conn: AppState['conn']): boolean =>
   conn === 'manual_retry_needed' || conn.startsWith('stopped_')
 
@@ -103,6 +144,9 @@ const EVENT_LABELS: Record<string, string> = {
   reconcile_error: 'Erro ao conferir mensagens enviadas',
   emit_error: 'Erro ao atualizar a tela',
   start_error: 'Erro ao iniciar o Saga',
+  transcribe_budget: 'Teto de gasto atingido: transcrições pausadas',
+  transcribe_offline: 'Sem internet: transcrição adiada',
+  update_error: 'Erro ao atualizar o Saga',
   wa_open: 'WhatsApp conectado',
   wa_error: 'Erro na conexão com o WhatsApp',
   wa_bad_session: 'Sessão do WhatsApp refeita',

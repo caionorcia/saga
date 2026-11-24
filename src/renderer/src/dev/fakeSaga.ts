@@ -21,6 +21,8 @@ export const DEFAULT_STATE: AppState = {
   paused: false,
   diskLow: false,
   transcribePaused: false,
+  transcribePausedReason: null,
+  downloads: { remaining: 0, done: 0 },
   costTodayUsd: 0,
   setupDone: true,
   provider: 'groq',
@@ -105,6 +107,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     if (!c) return { ok: false, code: 'no_messages', message: 'Ainda não há mensagens deste contato.', provider: state.provider }
     if (opts.aiDelayMs) await wait(opts.aiDelayMs)
     const lastMsgId = c.messages[c.messages.length - 1].id
+    const pendingAudios = c.messages.filter((m) => m.kind === 'audio' && m.transcriptStatus === null).length
     let a = analyses.get(jid)
     if (!a || fresh) {
       generation++
@@ -116,7 +119,10 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       }
       analyses.set(jid, a)
     }
-    return { ok: true, analysis: { jid, lastMsgId, provider: a.provider, summary: a.summary, suggestions: a.suggestions, createdAt: generation } }
+    return {
+      ok: true,
+      analysis: { jid, lastMsgId, provider: a.provider, summary: a.summary, suggestions: a.suggestions, createdAt: generation, transcriptFp: '', pendingAudios }
+    }
   }
 
   const api: SagaApi = {
@@ -175,13 +181,18 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       emitState()
     },
     manualReconnect: async () => {
+      record('manualReconnect', [], undefined)
       state.conn = 'connecting'
+      state.qr = null
       emitState()
     },
     downloadUpdate: async () => {
       if (state.update.status !== 'available') return
       state.update = { status: 'ready', version: state.update.version }
       emitState()
+    },
+    installUpdate: async () => {
+      record('installUpdate', [], undefined)
     },
     retryFailedJobs: async () => {
       const n = state.queue.failed
@@ -225,8 +236,8 @@ declare global {
 }
 
 /**
- * Instala o falso em `window.saga`. Na pré-visualização, `?state={"conn":"waiting_retry"}` mexe no estado inicial e
- * `?setup=1` mostra o assistente com um QR Code.
+ * Instala o falso em `window.saga`. Na pré-visualização, `?state={"conn":"waiting_retry"}` mexe no estado inicial,
+ * `?setup=1` mostra o assistente com um QR Code e `?qr=1` mostra o QR na tela principal (vincular de novo).
  */
 export async function installFakeSaga(): Promise<void> {
   const params = new URLSearchParams(location.search)
@@ -236,9 +247,10 @@ export async function installFakeSaga(): Promise<void> {
   } catch {
     // ignora estado inválido na URL
   }
-  if (params.get('setup')) {
+  if (params.get('setup') || params.get('qr')) {
     const QRCode = (await import('qrcode')).default
-    patch = { setupDone: false, conn: 'needs_qr', qr: await QRCode.toDataURL('saga-demo-qr-nao-e-um-codigo-real', { margin: 1, width: 240 }), ...patch }
+    const qr = await QRCode.toDataURL('saga-demo-qr-nao-e-um-codigo-real', { margin: 1, width: 240 })
+    patch = { setupDone: !params.get('setup'), conn: 'needs_qr', qr, ...patch }
   }
   if (patch.conn === 'waiting_retry' && patch.retryAt === undefined) patch.retryAt = Date.now() + 2 * 60_000
   const ctl = createFakeSaga({ state: patch, aiDelayMs: 600 })

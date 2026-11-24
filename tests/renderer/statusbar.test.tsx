@@ -6,7 +6,8 @@ import { DEFAULT_STATE } from '../../src/renderer/src/dev/fakeSaga'
 import type { AppState, SagaApi } from '../../src/shared/api'
 
 const downloadUpdate = vi.fn(async () => {})
-;(window as unknown as { saga: Partial<SagaApi> }).saga = { downloadUpdate }
+const installUpdate = vi.fn(async () => {})
+;(window as unknown as { saga: Partial<SagaApi> }).saga = { downloadUpdate, installUpdate }
 afterEach(cleanup)
 
 const show = (update: AppState['update']) =>
@@ -32,5 +33,35 @@ describe('StatusBar: atualização', () => {
     show({ status: 'ready', version: '0.2.0' })
     expect(screen.getByText(/será instalada quando você fechar/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Atualizar' })).toBeNull()
+  })
+})
+
+describe('StatusBar: reiniciar e atualizar', () => {
+  it('atualização pronta oferece "Reiniciar e atualizar" (installUpdate)', async () => {
+    show({ status: 'ready', version: '0.2.0' })
+    fireEvent.click(screen.getByRole('button', { name: 'Reiniciar e atualizar' }))
+    await waitFor(() => expect(installUpdate).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('StatusBar: estado', () => {
+  const render2 = (patch: Partial<AppState>) =>
+    render(<StatusBar state={{ ...DEFAULT_STATE, ...patch }} settingsOpen={false} onOpenSettings={() => {}} />)
+
+  it('restrição com a fila pausada mostra a restrição, não "Pausado"', () => {
+    render2({ conn: 'stopped_restricted', paused: true })
+    expect(screen.getByText('Conta restrita pelo WhatsApp')).toBeTruthy()
+    expect(screen.queryByText('Pausado')).toBeNull()
+  })
+
+  it('progresso só dos downloads do lote atual; transcrição pausada pelo teto de gasto', () => {
+    render2({
+      queue: { ...DEFAULT_STATE.queue, pending: 500, done: 9000 },
+      downloads: { remaining: 3, done: 2 },
+      transcribePaused: true,
+      transcribePausedReason: 'budget'
+    })
+    expect(screen.getByText('Baixando áudios: 2 de 5')).toBeTruthy()
+    expect(screen.getByText('Transcrição pausada — teto de gasto de hoje atingido')).toBeTruthy()
   })
 })

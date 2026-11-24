@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import type { Analysis, AppState, Contact } from '../../shared/api'
 import { ContactList } from './components/ContactList'
 import { Conversation } from './components/Conversation'
+import { QrCode } from './components/QrCode'
 import { Settings } from './components/Settings'
 import { SetupWizard } from './components/SetupWizard'
 import { StatusBar } from './components/StatusBar'
 import { Suggestions, type DraftStore } from './components/Suggestions'
+import { connAlert } from './format'
 
 export function App() {
   const [state, setState] = useState<AppState | null>(null)
@@ -34,12 +36,45 @@ export function App() {
   if (!state || wizard === null) return <div className="boot" role="status">Carregando…</div>
   if (wizard) return <SetupWizard state={state} onFinish={() => setWizard(false)} />
 
+  const alert = connAlert(state.conn)
   return (
     <div className="app">
       <StatusBar state={state} settingsOpen={settingsOpen} onOpenSettings={() => setSettingsOpen((o) => !o)} />
+      {alert && (
+        <div className="conn-alert" role="alert">
+          {alert}
+        </div>
+      )}
+      <RelinkPanel state={state} />
       {/* a tela de conversas continua montada (escondida) para não perder rascunhos nem a posição */}
       <Main hidden={settingsOpen} selected={selected} onSelect={setSelected} onOpenSettings={() => setSettingsOpen(true)} />
       {settingsOpen && <Settings />}
+    </div>
+  )
+}
+
+/**
+ * Vincular de novo depois do assistente (desvinculado no celular, sessão refeita): mostra o QR por cima
+ * das conversas sempre que o WhatsApp pedir um. "Agora não" esconde até o próximo pedido.
+ */
+function RelinkPanel({ state }: { state: AppState }) {
+  const wanted = !!state.qr || state.conn === 'needs_qr'
+  const [dismissed, setDismissed] = useState(false)
+  useEffect(() => {
+    if (!wanted) setDismissed(false)
+  }, [wanted])
+  if (!wanted || dismissed) return null
+  return (
+    <div className="overlay">
+      <section className="relink-card" role="dialog" aria-modal="true" aria-labelledby="relink-title">
+        <h2 id="relink-title">Vincule o WhatsApp de novo</h2>
+        <QrCode state={state} />
+        <div className="relink-actions">
+          <button type="button" className="link-btn" onClick={() => setDismissed(true)}>
+            Agora não
+          </button>
+        </div>
+      </section>
     </div>
   )
 }

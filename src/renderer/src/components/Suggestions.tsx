@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AiErrorCode, Analysis } from '../../../shared/api'
+import type { AiErrorCode, Analysis, MessageView } from '../../../shared/api'
 
 type View =
   | { kind: 'loading' }
@@ -23,6 +23,19 @@ function errorText(code: string, message: string): string {
   }
   return message || GENERIC_ERROR
 }
+
+/**
+ * As mensagens que chegaram depois da análise são todas do próprio mentor (ele respondeu)?
+ * Nesse caso não vale gastar uma geração nova nem trocar os cartões em silêncio.
+ */
+export function onlyOwnNewMessages(messages: MessageView[], lastMsgId: string): boolean {
+  const idx = messages.findIndex((m) => m.id === lastMsgId)
+  if (idx < 0) return false
+  const after = messages.slice(idx + 1)
+  return after.length > 0 && after.every((m) => m.fromMe)
+}
+
+const isVisible = () => typeof document === 'undefined' || document.visibilityState === 'visible'
 
 /** Rascunhos editados pelo mentor, por `jid:índice`; vivem acima do componente para sobreviver a trocas de tela. */
 export type DraftStore = Map<string, { original: string; text: string }>
@@ -114,20 +127,50 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
 
   const load = useCallback(() => apply(() => window.saga.getAnalysis(jid), false), [apply, jid])
 
+  /** chegou algo com a janela escondida (bandeja): atualizar uma vez quando ela voltar a aparecer */
+  const staleWhileHidden = useRef(false)
+
+  /**
+   * Atualização silenciosa (mensagem ou transcrição nova). Nunca gera em segundo plano com a janela
+   * escondida, e não gera quando a única novidade é a resposta do próprio mentor.
+   */
+  const silentRefresh = useCallback(async () => {
+    if (!isVisible()) {
+      staleWhileHidden.current = true
+      return
+    }
+    staleWhileHidden.current = false
+    const cur = current.current
+    if (cur) {
+      try {
+        if (onlyOwnNewMessages(await window.saga.listMessages(jid), cur.lastMsgId)) return
+      } catch {
+        // sem a lista, segue: o serviço decide pelo cache
+      }
+    }
+    apply(() => window.saga.getAnalysis(jid), true)
+  }, [apply, jid])
+
   useEffect(() => {
     load()
     let timer: ReturnType<typeof setTimeout> | undefined
     const off = window.saga.onMessages(jid, () => {
       clearTimeout(timer)
-      timer = setTimeout(() => apply(() => window.saga.getAnalysis(jid), true), REFRESH_DEBOUNCE_MS)
+      timer = setTimeout(() => void silentRefresh(), REFRESH_DEBOUNCE_MS)
     })
+    const onVisibility = () => {
+      if (isVisible() && staleWhileHidden.current) void silentRefresh()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
       clearTimeout(timer)
       off()
+      document.removeEventListener('visibilitychange', onVisibility)
+      staleWhileHidden.current = false
       seq.current++
       normalInFlight.current = false
     }
-  }, [jid, load, apply])
+  }, [jid, load, silentRefresh])
 
   if (view.kind === 'loading') {
     return (
@@ -174,6 +217,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
           jid={jid}
           index={i}
           original={text}
+          analysisLastMsgId={analysis.lastMsgId}
           drafts={drafts}
         />
       ))}
@@ -192,7 +236,20 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
   )
 }
 
-function SuggestionCard({ jid, index, original, drafts }: { jid: string; index: number; original: string; drafts: DraftStore }) {
+function SuggestionCard({
+  jid,
+  index,
+  original,
+  analysisLastMsgId,
+  drafts
+}: {
+  jid: string
+  index: number
+  original: string
+  /** a análise que gerou esta sugestão: o contexto salvo na memória é o dela */
+  analysisLastMsgId: string
+  drafts: DraftStore
+}) {
   const key = draftKey(jid, index)
   const [text, setText] = useState(() => {
     const d = drafts.get(key)
@@ -207,7 +264,7 @@ function SuggestionCard({ jid, index, original, drafts }: { jid: string; index: 
   const save = async () => {
     setFailed(null)
     try {
-      await window.saga.saveReply({ jid, originalSuggestion: original, finalText: text })
+      await window.saga.saveReply({ jid, originalSuggestion: original, finalText: text, analysisLastMsgId })
       setSaved(true)
     } catch {
       setFailed('Não foi possível salvar. Tente de novo.')

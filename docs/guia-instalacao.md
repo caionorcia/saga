@@ -52,7 +52,7 @@ Você pode **pular** este passo. É para quem prefere que o Claude (pago, por us
 
 1. No celular: **WhatsApp › Aparelhos conectados › Conectar um aparelho**.
 2. Aponte a câmera do celular para o QR Code na tela do computador.
-3. O código troca de tempos em tempos; se expirar, outro aparece sozinho.
+3. O código troca de tempos em tempos. Se ele não aparecer ou o celular não aceitar, clique em **Gerar novo QR Code**.
 
 Quando vincular, o assistente avança sozinho.
 
@@ -84,11 +84,15 @@ A faixa no topo mostra como o Saga está.
 | ![Pouco espaço](img/estado-pouco-espaco.png) | **Pouco espaço no disco**: menos de 1 GB livre; os downloads param. | Libere espaço e clique em **Retomar**. |
 | ![Vincule novamente](img/estado-vincule-novamente.png) | **Desconectado — vincule novamente**: o WhatsApp foi desvinculado do celular. | Veja a seção abaixo. |
 
-Outros avisos: **Desconectado — tente de novo** (clique em **Reconectar**); **Conta restrita pelo WhatsApp** (o WhatsApp limitou a conta: pause o uso e aguarde); **Conectado em outro lugar**; **Versão do app desatualizada** (instale a versão nova, veja "Atualizações").
+Outros avisos: **Desconectado — tente de novo** (clique em **Reconectar**); **Conta restrita pelo WhatsApp** (o WhatsApp limitou a conta: o Saga para tudo e mostra um aviso vermelho; use o WhatsApp só pelo celular por alguns dias e, quando quiser voltar, clique em **Reconectar**); **Conectado em outro lugar** (feche o outro aparelho ou programa e clique em **Reconectar**); **Versão do app desatualizada** (instale a versão nova, veja "Atualizações", e depois clique em **Reconectar**). Esses três avisos continuam valendo mesmo se você fechar e abrir o Saga: ele só volta a se conectar quando você clicar em **Reconectar**.
+
+Também podem aparecer avisos sobre a transcrição dos áudios: **Transcrição pausada — confira a chave** (a chave não está configurada ou foi recusada: veja em **Configurações**), **Transcrição pausada — teto de gasto de hoje atingido** (só com a transcrição paga da OpenAI; volta sozinha no dia seguinte, ou aumente o teto em **Configurações**) e **Sem internet — transcrição volta em instantes**.
 
 ### Apareceu "vincule novamente"
 
-Acontece quando o aparelho é removido em **WhatsApp › Aparelhos conectados** no celular. Clique em **Reconectar**; se o Saga mostrar o QR Code, repita o passo 4 (WhatsApp › Aparelhos conectados › Conectar um aparelho). Se não aparecer, feche o Saga pelo ícone da bandeja (**Sair**) e abra de novo. As conversas já importadas continuam guardadas.
+Acontece quando o aparelho é removido em **WhatsApp › Aparelhos conectados** no celular. Clique em **Reconectar**: o Saga mostra um QR Code novo por cima das conversas. No celular, abra **WhatsApp › Aparelhos conectados › Conectar um aparelho** e aponte a câmera para o código. Se o código não aparecer ou expirar, clique em **Gerar novo QR Code**. As conversas já importadas continuam guardadas.
+
+![QR Code para vincular de novo](img/estado-vincular-de-novo.png)
 
 ### Botão Pausar
 
@@ -100,7 +104,7 @@ Quando existe uma versão nova, aparece na faixa de cima:
 
 ![Aviso de atualização](img/estado-atualizacao.png)
 
-Clique em **Atualizar**. O Saga baixa a versão nova e a instala **quando você fechar o Saga** (pelo ícone da bandeja › **Sair**). Se preferir, baixe o novo `.exe` em <https://github.com/caionorcia/saga/releases/latest> e instale por cima da versão antiga: suas conversas e configurações são mantidas.
+Clique em **Atualizar**. O Saga baixa a versão nova e a instala **quando você fechar o Saga** (pelo ícone da bandeja › **Sair**). Se quiser instalar na hora, clique em **Reiniciar e atualizar**: o Saga fecha com cuidado, instala a versão nova e abre de novo. Se preferir, baixe o novo `.exe` em <https://github.com/caionorcia/saga/releases/latest> e instale por cima da versão antiga: suas conversas e configurações são mantidas.
 
 ## 7. Privacidade
 

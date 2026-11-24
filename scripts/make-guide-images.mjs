@@ -36,6 +36,12 @@ await page.getByRole('button', { name: /Salvar/ }).first().waitFor()
 await page.waitForTimeout(500)
 await shot('05-tela-principal')
 
+// vincular de novo: QR Code na tela principal
+await page.goto(`${BASE}?qr=1`)
+await page.getByRole('button', { name: 'Gerar novo QR Code' }).waitFor()
+await page.waitForTimeout(300)
+await shot('estado-vincular-de-novo')
+
 // faixa de estado
 const states = {
   'estado-conectado': {},

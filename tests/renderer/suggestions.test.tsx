@@ -12,7 +12,9 @@ const analysis: Analysis = {
   provider: 'groq',
   summary: 'Quer saber se pode adiar a reunião.',
   suggestions: ['Claro, podemos adiar para quinta.', 'Pode ser sexta, às 10h?'],
-  createdAt: 1
+  createdAt: 1,
+  transcriptFp: '',
+  pendingAudios: 0
 }
 
 let saga: Record<string, ReturnType<typeof vi.fn>>
@@ -23,7 +25,8 @@ function install(getAnalysis: () => Promise<AnalysisResult>): void {
     regenerate: vi.fn(async () => ({ ok: true, analysis }) as AnalysisResult),
     saveReply: vi.fn(async () => 1),
     copyToClipboard: vi.fn(async () => {}),
-    onMessages: vi.fn(() => () => {})
+    onMessages: vi.fn(() => () => {}),
+    listMessages: vi.fn(async () => [])
   }
   ;(window as unknown as { saga: Partial<SagaApi> }).saga = saga as unknown as Partial<SagaApi>
 }
@@ -44,7 +47,8 @@ describe('Suggestions', () => {
       expect(saga.saveReply).toHaveBeenCalledWith({
         jid: JID,
         originalSuggestion: 'Claro, podemos adiar para quinta.',
-        finalText: 'Claro! Quinta às 15h serve?'
+        finalText: 'Claro! Quinta às 15h serve?',
+        analysisLastMsgId: 'M1'
       })
     )
     expect(await screen.findByRole('button', { name: 'Salvo ✓' })).toBeTruthy()
@@ -176,5 +180,62 @@ describe('Suggestions: atualização silenciosa', () => {
     render(<Suggestions jid={JID} onOpenSettings={open} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Abrir Configurações' }))
     expect(open).toHaveBeenCalled()
+  })
+})
+
+describe('Suggestions: sem chamadas pagas à toa', () => {
+  const view = (id: string, fromMe: boolean) => ({ id, jid: JID, fromMe, ts: 1, kind: 'text', text: id, durationSec: null, hasAudio: false, transcript: null, transcriptStatus: null })
+  const setVisibility = (v: 'visible' | 'hidden') => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => v })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+  const fire = async (ms = 2100) => {
+    await act(async () => {
+      vi.advanceTimersByTime(ms)
+    })
+  }
+  let notify: () => void
+  beforeEach(() => {
+    notify = () => {}
+    saga.onMessages.mockImplementation(((_j: string, f: () => void) => {
+      notify = f
+      return () => {}
+    }) as never)
+  })
+  afterEach(() => setVisibility('visible'))
+
+  it('a única mensagem nova é do próprio mentor: não atualiza as sugestões', async () => {
+    render(<Suggestions jid={JID} />)
+    await screen.findAllByRole('textbox')
+    saga.listMessages.mockResolvedValue([view('M0', false), view('M1', false), view('EU1', true)])
+    vi.useFakeTimers()
+    notify()
+    await fire()
+    expect(saga.getAnalysis).toHaveBeenCalledTimes(1)
+    // o mentorado responde: aí sim atualiza
+    saga.listMessages.mockResolvedValue([view('M1', false), view('EU1', true), view('M2', false)])
+    notify()
+    await fire()
+    expect(saga.getAnalysis).toHaveBeenCalledTimes(2)
+  })
+
+  it('janela escondida (bandeja): não atualiza; ao voltar a aparecer, atualiza uma vez', async () => {
+    render(<Suggestions jid={JID} />)
+    await screen.findAllByRole('textbox')
+    saga.listMessages.mockResolvedValue([view('M1', false), view('M2', false)])
+    setVisibility('hidden')
+    vi.useFakeTimers()
+    notify()
+    await fire()
+    notify()
+    await fire()
+    expect(saga.getAnalysis).toHaveBeenCalledTimes(1)
+    await act(async () => setVisibility('visible'))
+    await fire(10)
+    expect(saga.getAnalysis).toHaveBeenCalledTimes(2)
+    await act(async () => setVisibility('hidden'))
+    await act(async () => setVisibility('visible'))
+    await fire(10)
+    expect(saga.getAnalysis).toHaveBeenCalledTimes(2)
   })
 })

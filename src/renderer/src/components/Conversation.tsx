@@ -59,6 +59,12 @@ export function Conversation({ contact, analysis }: Props) {
       <div className="summary-card" aria-live="polite">
         <h3>O que a pessoa quer</h3>
         <p>{analysis && analysis.jid === jid ? analysis.summary : <span className="muted">Resumo a caminho…</span>}</p>
+        {analysis && analysis.jid === jid && analysis.pendingAudios > 0 && (
+          <p className="small pending-note">
+            {analysis.pendingAudios === 1 ? '1 áudio ainda sendo transcrito' : `${analysis.pendingAudios} áudios ainda sendo transcritos`}
+            {' '}— o resumo e as sugestões são refeitos quando a transcrição terminar.
+          </p>
+        )}
       </div>
 
       <div

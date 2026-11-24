@@ -184,3 +184,16 @@ a { color: var(--accent-dark); }
 .events details { display: inline; }
 .events summary { display: inline; color: var(--muted); cursor: pointer; margin-left: 8px; }
 .events code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; margin-top: 3px; }
+
+/* parada definitiva do WhatsApp (restrição, versão, outro lugar, desvinculado) */
+.conn-alert { background: #fdecea; border-bottom: 1px solid #f3c2bc; color: #7d2318; padding: 10px 16px; font-size: 14px; font-weight: 600; }
+
+/* vincular de novo (QR fora do assistente) */
+.overlay { position: fixed; inset: 0; background: rgba(20, 40, 40, .45); display: grid; place-items: center; padding: 16px; z-index: 10; overflow-y: auto; }
+.relink-card { background: #fff; border-radius: 14px; padding: 22px 26px; width: min(520px, 100%); box-shadow: 0 6px 30px rgba(20, 60, 60, .2); }
+.relink-card h2 { font-size: 20px; color: var(--accent-dark); margin-bottom: 10px; }
+.relink-card p { margin-bottom: 8px; }
+.relink-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+
+/* resumo feito com áudios ainda sem transcrição */
+.pending-note { margin-top: 6px; color: #7a5410; }

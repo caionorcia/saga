@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AppState, KeyKind } from '../../../shared/api'
+import { QrCode } from './QrCode'
 
 interface Props {
   state: AppState
@@ -163,24 +164,23 @@ function KeyStep({ kind, onNext, onBack }: { kind: Extract<KeyKind, 'groq' | 'cl
   )
 }
 
-function QrStep({ state, onBack }: { state: AppState; onBack: () => void }) {
+/**
+ * Passo do QR. O QR pode ter expirado enquanto o mentor colava as chaves (a conexão desiste depois de algumas
+ * tentativas): ao entrar no passo sem QR na tela e sem conexão, pede um QR novo.
+ */
+export function QrStep({ state, onBack }: { state: AppState; onBack: () => void }) {
+  const asked = useRef(false)
+  const conn = state.conn
+  useEffect(() => {
+    if (asked.current) return
+    asked.current = true
+    if (conn !== 'needs_qr' && conn !== 'open') void window.saga.manualReconnect().catch(() => {})
+    // só ao entrar no passo (o estado da conexão desse momento)
+  }, [])
   return (
     <>
       <h1>Vincule o seu WhatsApp</h1>
-      <p>
-        No celular: <strong>WhatsApp › Aparelhos conectados › Conectar um aparelho</strong>. Depois aponte a câmera para o
-        código abaixo.
-      </p>
-      <div className="qr-box">
-        {state.qr ? (
-          <img src={state.qr} alt="QR Code para vincular o WhatsApp" width={240} height={240} />
-        ) : (
-          <p className="muted" role="status">
-            {state.conn === 'open' ? 'Conectado!' : 'Preparando o QR Code…'}
-          </p>
-        )}
-      </div>
-      <p className="muted small">O código muda de tempos em tempos; se expirar, um novo aparece sozinho.</p>
+      <QrCode state={state} />
       <div className="wizard-actions">
         <button type="button" className="btn" onClick={onBack}>
           Voltar

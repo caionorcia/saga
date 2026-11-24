@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AppState } from '../../../shared/api'
-import { connectionLabel, formatUsd, needsManualReconnect } from '../format'
+import { connectionLabel, downloadProgress, formatUsd, needsManualReconnect, transcribeChip } from '../format'
 
 interface Props {
   state: AppState
@@ -19,9 +19,9 @@ export function StatusBar({ state, onOpenSettings, settingsOpen }: Props) {
     return () => clearInterval(t)
   }, [conn])
   const label = connectionLabel(conn, paused, state.retryAt, now)
-  const remaining = queue.pending + queue.running
-  const total = queue.done + remaining
   const resumeMode = paused || diskLow
+  const downloads = downloadProgress(state.downloads, resumeMode)
+  const chip = state.transcribePaused ? (transcribeChip(state.transcribePausedReason) ?? transcribeChip('key')) : null
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true)
@@ -40,16 +40,11 @@ export function StatusBar({ state, onOpenSettings, settingsOpen }: Props) {
         <span className={`dot dot-${label.tone}`} aria-hidden="true" />
         <strong>{label.text}</strong>
         {diskLow && <span className="chip chip-warn">Pouco espaço no disco</span>}
-        {state.transcribePaused && <span className="chip chip-warn">Transcrição pausada — confira a chave</span>}
+        {chip && <span className="chip chip-warn">{chip}</span>}
       </div>
 
       <div className="status-info">
-        {remaining > 0 && (
-          <span>
-            {resumeMode ? 'Downloads pausados' : 'Baixando áudios'}
-            {resumeMode ? ` (${queue.done} de ${total})` : `: ${queue.done} de ${total}`}
-          </span>
-        )}
+        {downloads && <span>{downloads}</span>}
         {queue.failed > 0 && (
           <span className="status-failed">
             {queue.failed} {queue.failed === 1 ? 'áudio' : 'áudios'} com falha
@@ -64,7 +59,14 @@ export function StatusBar({ state, onOpenSettings, settingsOpen }: Props) {
           </span>
         )}
         {state.update.status === 'downloading' && <span className="status-update">Baixando a nova versão…</span>}
-        {state.update.status === 'ready' && <span className="status-update">Atualização pronta — será instalada quando você fechar o Saga.</span>}
+        {state.update.status === 'ready' && (
+          <span className="status-update">
+            Atualização pronta — será instalada quando você fechar o Saga.{' '}
+            <button type="button" className="btn btn-small btn-primary" disabled={busy} onClick={() => run(() => window.saga.installUpdate())}>
+              Reiniciar e atualizar
+            </button>
+          </span>
+        )}
         <span>Gasto hoje: {formatUsd(state.costTodayUsd)}</span>
       </div>
 

@@ -38,7 +38,7 @@ O CI (`.github/workflows/ci.yml`) faz isso em `windows-latest` a cada push e gua
 2. Faça commit e envie uma tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. O workflow `release.yml` testa, compila e publica o instalador (e `latest.yml`, usado pelas atualizações) num GitHub Release.
 
-As instalações existentes avisam "Nova versão disponível — Atualizar" (electron-updater, repositório público). O download é manual (clique) e a instalação acontece ao fechar o app. Para desligar: variável de ambiente `SAGA_UPDATES=off` (necessário se o repositório virar privado; nesse caso baixe o `.exe` à mão).
+As instalações existentes avisam "Nova versão disponível — Atualizar" (electron-updater, repositório público). O download é manual (clique) e a instalação acontece ao fechar o app, ou na hora com "Reiniciar e atualizar" (`autoUpdater.quitAndInstall`, depois de parar a fila e fechar o banco). Para desligar: variável de ambiente `SAGA_UPDATES=off` (necessário se o repositório virar privado; nesse caso baixe o `.exe` à mão).
 
 ## Modelo da Groq
 
