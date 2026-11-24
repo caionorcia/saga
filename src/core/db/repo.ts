@@ -320,6 +320,10 @@ export class Repo {
       .run(key, value)
   }
 
+  deleteSetting(key: string): void {
+    this.db.prepare('DELETE FROM settings_kv WHERE key = ?').run(key)
+  }
+
   // --- fila de jobs ---
 
   insertJobIgnore(type: string, key: string, payload: unknown, priority: number): void {

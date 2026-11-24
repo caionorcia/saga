@@ -28,6 +28,14 @@ export class LlmRateLimitError extends Error {
   }
 }
 
+/** O contato não tem mensagens para analisar. */
+export class NoMessagesError extends Error {
+  constructor() {
+    super('sem mensagens para analisar')
+    this.name = 'NoMessagesError'
+  }
+}
+
 /** O modelo recusou responder; a interface oferece "Tentar de novo". */
 export class LlmRefusalError extends Error {
   constructor(readonly usage?: { inputTokens: number; outputTokens: number; model?: string }) {
@@ -175,27 +183,24 @@ function textOf(m: MessageRow): string {
   return (m.kind === 'text' ? m.text : m.transcriptStatus === 'done' ? m.transcript : null) ?? ''
 }
 
+/** As mensagens usadas na análise de um contato. */
+export interface AnalysisContext {
+  /** histórico considerado, em ordem cronológica */
+  all: MessageRow[]
+  /** depois do último fromMe (sem nenhum fromMe: as últimas 40) */
+  newMessages: MessageRow[]
+  /** até 20 mensagens antes das novas */
+  priorMessages: MessageRow[]
+  /** texto das mensagens novas (contexto da memória e de `approved_replies.context_text`) */
+  contextText: string
+}
+
 /**
  * Novas = mensagens depois do último fromMe (sem nenhum fromMe: as últimas 40).
- * Se o mentor falou por último, novas = [] e a geração continua permitida
- * (botão "Gerar novas"): o prompt pede como retomar a conversa.
+ * Se o mentor falou por último, novas = [] (botão "Gerar novas" continua permitido).
  */
-export async function generateAnalysis(
-  deps: AnalysisDeps,
-  jid: string,
-  opts: { force?: boolean } = {}
-): Promise<AnalysisRow> {
-  const { repo, llm, limiter, cost, capUsd, clock } = deps
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+export function analysisContext(repo: Repo, jid: string): AnalysisContext {
   const all = repo.listMessages(jid, PRIOR_LIMIT + NO_MENTOR_REPLY_LIMIT + 200)
-  if (all.length === 0) throw new Error('sem mensagens para analisar')
-  const lastId = all[all.length - 1].id
-
-  if (!opts.force) {
-    const cached = repo.getAnalysis(jid)
-    if (cached && cached.lastMsgId === lastId) return cached
-  }
-
   let lastMe = -1
   for (let i = all.length - 1; i >= 0; i--) {
     if (all[i].fromMe) {
@@ -206,9 +211,27 @@ export async function generateAnalysis(
   const newMessages = lastMe === -1 ? all.slice(-NO_MENTOR_REPLY_LIMIT) : all.slice(lastMe + 1)
   const newStart = all.length - newMessages.length
   const priorMessages = all.slice(Math.max(0, newStart - PRIOR_LIMIT), newStart)
+  return { all, newMessages, priorMessages, contextText: newMessages.map(textOf).join('\n') }
+}
+
+/** Gera (ou devolve do cache, se a última mensagem não mudou) a análise do contato; o prompt pede como retomar quando não há novas. */
+export async function generateAnalysis(
+  deps: AnalysisDeps,
+  jid: string,
+  opts: { force?: boolean } = {}
+): Promise<AnalysisRow> {
+  const { repo, llm, limiter, cost, capUsd, clock } = deps
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const { all, newMessages, priorMessages, contextText } = analysisContext(repo, jid)
+  if (all.length === 0) throw new NoMessagesError()
+  const lastId = all[all.length - 1].id
+
+  if (!opts.force) {
+    const cached = repo.getAnalysis(jid)
+    if (cached && cached.lastMsgId === lastId) return cached
+  }
 
   const contact = repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)
-  const contextText = newMessages.map(textOf).join('\n')
   const prompt = buildPrompt({
     contactName: contact?.displayName ?? jid,
     notes: contact?.notes ?? null,
