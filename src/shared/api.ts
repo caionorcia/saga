@@ -51,6 +51,8 @@ export interface AppState {
   setupDone: boolean
   provider: Provider
   update: UpdateState
+  /** o início do app falhou (mensagem curta, sem dados sensíveis): mostrar com "Tentar de novo" (`manualReconnect`) */
+  startError?: string
 }
 
 export interface MessageView {
@@ -142,6 +144,13 @@ export interface SagaApi {
   testKey(kind: KeyKind, key: string): Promise<boolean>
   /** eventos recentes do app (mais novos primeiro), para a tela de configurações */
   recentEvents(limit: number): Promise<RecentEvent[]>
+  /**
+   * Copia para a área de transferência as versões do app e as últimas ~200 linhas do registro de diagnóstico
+   * (sem chaves, mensagens nem QR), para mandar ao suporte. Devolve quantas linhas do registro foram copiadas.
+   */
+  copyDiagnostics(): Promise<number>
+  /** abre a pasta dos registros de diagnóstico no Explorador */
+  openLogsFolder(): Promise<void>
 
   /** `saga-media://audio/<id>` do áudio original, ou null se ainda não foi baixado */
   audioUrl(id: string): Promise<string | null>
@@ -169,6 +178,8 @@ export const INVOKE_METHODS = [
   'saveSettings',
   'testKey',
   'recentEvents',
+  'copyDiagnostics',
+  'openLogsFolder',
   'audioUrl'
 ] as const satisfies ReadonlyArray<keyof SagaApi>
 

@@ -161,3 +161,11 @@ describe('saveReply: id da análise', () => {
     expect(() => validateIpcArgs('saveReply', [{ ...base, analysisLastMsgId: 5 }])).toThrow(InvalidIpcArgsError)
   })
 })
+
+describe('diagnóstico', () => {
+  it.each(['copyDiagnostics', 'openLogsFolder'] as const)('%s: sem argumentos (qualquer argumento é recusado)', (m) => {
+    expect(() => validateIpcArgs(m, [])).not.toThrow()
+    expect(() => validateIpcArgs(m, ['C:\\Windows'])).toThrow(InvalidIpcArgsError)
+    expect(() => validateIpcArgs(m, [200])).toThrow(InvalidIpcArgsError)
+  })
+})

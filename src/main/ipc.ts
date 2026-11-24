@@ -17,6 +17,10 @@ export interface IpcOptions {
   onDownloadUpdate?: () => Promise<void>
   /** o usuário clicou em "Reiniciar e atualizar" */
   onInstallUpdate?: () => Promise<void>
+  /** texto do "Copiar diagnóstico" e quantas linhas do registro ele tem */
+  getDiagnostics?: () => { text: string; lines: number }
+  /** "Abrir pasta de registros" */
+  openLogsFolder?: () => Promise<void>
 }
 
 /** Liga cada método de `window.saga` ao serviço e repassa os eventos do serviço para a janela. */
@@ -53,6 +57,15 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     },
     testKey: (kind, key) => service.testKey(kind, String(key)),
     recentEvents: (n) => service.recentEvents(Number(n)),
+    copyDiagnostics: async () => {
+      const d = opts.getDiagnostics?.()
+      if (!d) return 0
+      clipboard.writeText(d.text)
+      return d.lines
+    },
+    openLogsFolder: async () => {
+      await opts.openLogsFolder?.()
+    },
     audioUrl: (id) => service.audioUrl(String(id))
   }
 

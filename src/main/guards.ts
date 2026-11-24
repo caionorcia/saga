@@ -118,6 +118,8 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   saveSettings: ([p]) => isObj(p) && Object.entries(p).every(([k, v]) => v === undefined || (SETTINGS_FIELDS[k]?.(v) ?? false)),
   testKey: ([k, key]) => isStr(k) && KEY_KINDS.has(k) && isStr(key),
   recentEvents: ([n]) => typeof n === 'number' && Number.isInteger(n) && n > 0 && n <= 200,
+  copyDiagnostics: (a) => a.length === 0,
+  openLogsFolder: (a) => a.length === 0,
   audioUrl: ([id]) => nonEmpty(id)
 }
 

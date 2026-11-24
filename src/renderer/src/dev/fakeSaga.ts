@@ -216,6 +216,8 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
         { id: 2, ts: now - 50 * 60_000, kind: 'reconnect', detail: 'WhatsApp reconectado' },
         { id: 1, ts: now - 26 * 3_600_000, kind: 'import_done', detail: '5 conversas importadas' }
       ].slice(0, limit),
+    copyDiagnostics: async () => record('copyDiagnostics', [], 42),
+    openLogsFolder: async () => record('openLogsFolder', [], undefined),
     audioUrl: async (id) => `saga-media://audio/${id}`
   }
 
