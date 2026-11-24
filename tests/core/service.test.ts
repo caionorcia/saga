@@ -327,6 +327,19 @@ describe('SagaService', () => {
       expect(llm.calls).toBe(2)
     })
 
+    it('regenerate durante um getAnalysis que só leu o cache: ainda gera de novo (uma vez)', async () => {
+      settings.save({ groqKey: GROQ_KEY })
+      await service.getAnalysis(JID)
+      expect(llm.calls).toBe(1)
+      const [a, b, c] = await Promise.all([service.getAnalysis(JID), service.regenerate(JID), service.regenerate(JID)])
+      expect(a.ok && b.ok && c.ok).toBe(true)
+      expect(llm.calls).toBe(2)
+      // um getAnalysis que chega durante o regenerate pega o resultado novo, sem outra chamada
+      const [d, e] = await Promise.all([service.regenerate(JID), service.getAnalysis(JID)])
+      expect(d.ok && e.ok).toBe(true)
+      expect(llm.calls).toBe(3)
+    })
+
     it('erros da IA viram códigos para a interface', async () => {
       settings.save({ groqKey: GROQ_KEY })
       const { InvalidKeyError } = await import('../../src/core/ai/transcriber')

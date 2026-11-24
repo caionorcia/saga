@@ -1,8 +1,7 @@
 /**
  * Regras puras de segurança do processo principal (sem importar o Electron, para testar).
  */
-import { fileURLToPath } from 'node:url'
-import { resolve } from 'node:path'
+import { posix, win32 } from 'node:path'
 import type { InvokeMethod } from '../shared/api'
 
 export interface AppOrigin {
@@ -12,8 +11,32 @@ export interface AppOrigin {
   indexFile: string
 }
 
-/** A URL é a própria interface do app (servidor de dev ou o index.html empacotado)? */
-export function isAppUrl(url: string, origin: AppOrigin): boolean {
+/**
+ * Caminho local de uma URL `file:` (host vazio ou `localhost`), no formato da plataforma; `null` se não for.
+ * Feito à mão para poder testar o comportamento do Windows em qualquer sistema.
+ */
+function filePathOf(u: URL, platform: NodeJS.Platform): string | null {
+  if (u.protocol !== 'file:' || (u.host !== '' && u.host !== 'localhost')) return null
+  let p: string
+  try {
+    p = decodeURIComponent(u.pathname)
+  } catch {
+    return null
+  }
+  if (p.includes('\0')) return null
+  if (platform === 'win32') {
+    // /C:/Users/... → C:\Users\...
+    if (!/^\/[A-Za-z]:\//.test(p)) return null
+    return win32.resolve(p.slice(1).replace(/\//g, '\\'))
+  }
+  return posix.resolve(p)
+}
+
+/**
+ * A URL é a própria interface do app (servidor de dev ou o index.html empacotado)?
+ * No Windows os caminhos não diferenciam maiúsculas (o Chromium manda `C:`, o atalho pode dar `c:`).
+ */
+export function isAppUrl(url: string, origin: AppOrigin, platform: NodeJS.Platform = process.platform): boolean {
   let u: URL
   try {
     u = new URL(url)
@@ -28,13 +51,10 @@ export function isAppUrl(url: string, origin: AppOrigin): boolean {
       // devUrl inválida: só vale o arquivo
     }
   }
-  if (u.protocol !== 'file:' || (u.host !== '' && u.host !== 'localhost')) return false
-  try {
-    const p = fileURLToPath(`file://${u.pathname}`)
-    return resolve(p) === resolve(origin.indexFile)
-  } catch {
-    return false
-  }
+  const file = filePathOf(u, platform)
+  if (file === null) return false
+  if (platform === 'win32') return file.toLowerCase() === win32.resolve(origin.indexFile).toLowerCase()
+  return file === posix.resolve(origin.indexFile)
 }
 
 /** Links que podem abrir no navegador padrão. */

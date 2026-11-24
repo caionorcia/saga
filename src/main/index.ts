@@ -124,6 +124,12 @@ function main(): void {
     registerIpc(svc, {
       getWindow: () => win,
       isTrustedSender: (url) => isAppUrl(url, appOrigin),
+      onRefused: (method, url) => {
+        // só o método e a URL do remetente (sem argumentos: podem conter chaves ou mensagens)
+        const detail = `${method} de ${url === null ? '(sem frame)' : url.slice(0, 300)}`
+        console.warn(`[saga] IPC recusado: ${detail}`)
+        repo.logEvent('ipc_refused', detail)
+      },
       onSettingsSaved: () => applyLoginItem(settings.get().startWithWindows)
     })
     applyLoginItem(settings.get().startWithWindows)

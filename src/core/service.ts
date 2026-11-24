@@ -129,7 +129,8 @@ export class SagaService extends EventEmitter {
   private readonly fetchImpl?: typeof fetch
 
   private qr: string | null = null
-  private inflight = new Map<string, Promise<AnalysisResult>>()
+  /** geração em andamento por contato; `generates` = vai chamar a IA (forçada ou cache velho) */
+  private inflight = new Map<string, { p: Promise<AnalysisResult>; generates: boolean }>()
   private pendingJids = new Set<string>()
   private pendingContacts = false
   private pendingState = false
@@ -361,15 +362,35 @@ export class SagaService extends EventEmitter {
   }
 
   /**
-   * Uma geração por contato de cada vez: qualquer chamada (normal ou forçada) enquanto outra
-   * roda recebe o mesmo resultado, que acabou de ser gerado. Evita duas chamadas pagas à IA.
+   * Uma geração por contato de cada vez, sem chamadas pagas repetidas:
+   * - uma chamada normal se junta a qualquer uma em andamento;
+   * - uma forçada se junta só a uma que de fato está gerando (forçada ou cache velho);
+   *   se a em andamento só leu o cache, a forçada roda depois dela (e as próximas se juntam a esta).
    */
   private analyze(jid: string, force: boolean): Promise<AnalysisResult> {
-    const running = this.inflight.get(jid)
-    if (running) return running
-    const p = this.doAnalyze(jid, force).finally(() => this.inflight.delete(jid))
-    this.inflight.set(jid, p)
-    return p
+    const cur = this.inflight.get(jid)
+    if (cur && (cur.generates || !force)) return cur.p
+    const generates = force || !this.cacheFresh(jid)
+    const run = cur
+      ? cur.p.then(
+          () => this.doAnalyze(jid, force),
+          () => this.doAnalyze(jid, force)
+        )
+      : this.doAnalyze(jid, force)
+    const entry = {
+      generates,
+      p: run.finally(() => {
+        if (this.inflight.get(jid) === entry) this.inflight.delete(jid)
+      })
+    }
+    this.inflight.set(jid, entry)
+    return entry.p
+  }
+
+  /** A análise guardada ainda vale (foi feita sobre a última mensagem do contato)? */
+  private cacheFresh(jid: string): boolean {
+    const last = this.repo.listMessages(jid, 1)[0]
+    return !!last && this.repo.getAnalysis(jid)?.lastMsgId === last.id
   }
 
   private async doAnalyze(jid: string, force: boolean): Promise<AnalysisResult> {

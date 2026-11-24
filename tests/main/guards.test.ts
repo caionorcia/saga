@@ -90,3 +90,41 @@ describe('validateIpcArgs', () => {
     bad('saveSettings', null)
   })
 })
+
+describe('isAppUrl no Windows (win32)', () => {
+  const WIN_INDEX = 'c:\\Users\\João Silva\\AppData\\Local\\Programs\\Saga\\resources\\app.asar\\out\\renderer\\index.html'
+  const URL_UP = 'file:///C:/Users/Jo%C3%A3o%20Silva/AppData/Local/Programs/Saga/resources/app.asar/out/renderer/index.html'
+  const o = { indexFile: WIN_INDEX }
+
+  it.each([
+    URL_UP,
+    URL_UP.replace('file:///C:', 'file:///c:'),
+    `${URL_UP}#/contato/5547`,
+    `${URL_UP}?x=1`,
+    URL_UP.replace('file:///', 'file://localhost/'),
+    URL_UP.replace('/Users/', '/USERS/')
+  ])('aceita %s (sem diferenciar maiúsculas)', (url) => {
+    expect(isAppUrl(url, o, 'win32')).toBe(true)
+  })
+
+  it('índice com letra de unidade maiúscula também aceita a URL minúscula', () => {
+    expect(isAppUrl(URL_UP.replace('file:///C:', 'file:///c:'), { indexFile: WIN_INDEX.replace('c:', 'C:') }, 'win32')).toBe(true)
+  })
+
+  it.each([
+    'file:///C:/Windows/System32/drivers/etc/hosts',
+    URL_UP.replace('index.html', 'outro.html'),
+    URL_UP.replace('file:///C:', 'file:///D:'),
+    URL_UP.replace('file:///', 'file://servidor/'),
+    'file:///C:/Users/Jo%C3%A3o%20Silva/AppData/Local/Programs/Saga/resources/app.asar/out/renderer/../renderer/x/../../../../../../../../Windows/win.ini',
+    'javascript:alert(1)',
+    'https://evil.example/'
+  ])('recusa %s', (url) => {
+    expect(isAppUrl(url, o, 'win32')).toBe(false)
+  })
+
+  it('fora do Windows a comparação continua exata (maiúsculas importam)', () => {
+    expect(isAppUrl(fileIndex.replace('/app/', '/APP/'), { indexFile: INDEX }, 'linux')).toBe(false)
+    expect(isAppUrl(fileIndex, { indexFile: INDEX }, 'linux')).toBe(true)
+  })
+})

@@ -9,6 +9,8 @@ export interface IpcOptions {
   getWindow: () => BrowserWindow | null
   /** só a interface do próprio app pode chamar (URL do frame que enviou) */
   isTrustedSender: (frameUrl: string) => boolean
+  /** registra cada chamada recusada (só método e URL do remetente, nunca os argumentos) */
+  onRefused?: (method: string, frameUrl: string | null) => void
   /** depois de salvar as configurações (ex.: abrir com o Windows) */
   onSettingsSaved?: () => void
 }
@@ -47,7 +49,14 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     const fn = h[m] as (...args: unknown[]) => unknown
     ipcMain.handle(invokeChannel(m), (e, ...args: unknown[]) => {
       const url = e.senderFrame?.url
-      if (!url || !opts.isTrustedSender(url)) throw new Error(`chamada recusada: origem não confiável (${m})`)
+      if (!url || !opts.isTrustedSender(url)) {
+        try {
+          opts.onRefused?.(m, url ?? null)
+        } catch {
+          // registrar nunca pode quebrar a recusa
+        }
+        throw new Error(`chamada recusada: origem não confiável (${m})`)
+      }
       validateIpcArgs(m, args)
       return fn(...args)
     })
