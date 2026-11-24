@@ -56,6 +56,8 @@ Você pode **pular** este passo. É para quem prefere que o Claude (pago, por us
 
 Quando vincular, o assistente avança sozinho.
 
+Embaixo do código aparece a **Situação** da conexão. Se algo der errado, o Saga explica o motivo e mostra o botão **Tentar de novo**. Se o QR Code não aparecer, veja [QR Code não aparece](#qr-code-não-aparece).
+
 ### Passo 5: Importação
 
 ![Importando as conversas](img/04-importando.png)
@@ -84,7 +86,7 @@ A faixa no topo mostra como o Saga está.
 | ![Pouco espaço](img/estado-pouco-espaco.png) | **Pouco espaço no disco**: menos de 1 GB livre; os downloads param. | Libere espaço e clique em **Retomar**. |
 | ![Vincule novamente](img/estado-vincule-novamente.png) | **Desconectado — vincule novamente**: o WhatsApp foi desvinculado do celular. | Veja a seção abaixo. |
 
-Outros avisos: **Desconectado — tente de novo** (clique em **Reconectar**); **Conta restrita pelo WhatsApp** (o WhatsApp limitou a conta: o Saga para tudo e mostra um aviso vermelho; use o WhatsApp só pelo celular por alguns dias e, quando quiser voltar, clique em **Reconectar**); **Conectado em outro lugar** (feche o outro aparelho ou programa e clique em **Reconectar**); **Versão do app desatualizada** (instale a versão nova, veja "Atualizações", e depois clique em **Reconectar**). Esses três avisos continuam valendo mesmo se você fechar e abrir o Saga: ele só volta a se conectar quando você clicar em **Reconectar**.
+Outros avisos: **Desconectado — tente de novo** (clique em **Reconectar**); **Conta restrita pelo WhatsApp** (o WhatsApp limitou a conta: o Saga para tudo e mostra um aviso vermelho; use o WhatsApp só pelo celular por alguns dias e, quando quiser voltar, clique em **Reconectar**); **Conectado em outro lugar** (feche o outro aparelho ou programa e clique em **Reconectar**); **Versão do app desatualizada** (o WhatsApp recusou a conexão mesmo depois de o Saga buscar a versão mais nova do WhatsApp Web: clique em **Reconectar**; se continuar, instale a versão nova do Saga, veja "Atualizações"). Os avisos de conta restrita e de conectado em outro lugar continuam valendo mesmo se você fechar e abrir o Saga: ele só volta a se conectar quando você clicar em **Reconectar**. Já o de versão desatualizada some ao abrir o Saga de novo: ele busca a versão mais nova e tenta outra vez.
 
 Também podem aparecer avisos sobre a transcrição dos áudios: **Transcrição pausada — confira a chave** (a chave não está configurada ou foi recusada: veja em **Configurações**), **Transcrição pausada — teto de gasto de hoje atingido** (só com a transcrição paga da OpenAI; volta sozinha no dia seguinte, ou aumente o teto em **Configurações**) e **Sem internet — transcrição volta em instantes**.
 
@@ -93,6 +95,15 @@ Também podem aparecer avisos sobre a transcrição dos áudios: **Transcrição
 Acontece quando o aparelho é removido em **WhatsApp › Aparelhos conectados** no celular. Clique em **Reconectar**: o Saga mostra um QR Code novo por cima das conversas. No celular, abra **WhatsApp › Aparelhos conectados › Conectar um aparelho** e aponte a câmera para o código. Se o código não aparecer ou expirar, clique em **Gerar novo QR Code**. As conversas já importadas continuam guardadas.
 
 ![QR Code para vincular de novo](img/estado-vincular-de-novo.png)
+
+### QR Code não aparece
+
+Se o passo do QR Code fica em "Preparando o QR Code…":
+
+1. **Espere uns 30 segundos.** Na primeira vez o Saga confere a versão atual do WhatsApp Web antes de pedir o código.
+2. Clique em **Tentar de novo** (ou em **Gerar novo QR Code**).
+3. **Antivírus e firewall:** confira se eles permitem que o Saga acesse a internet. Alguns antivírus bloqueiam a conexão com o WhatsApp sem avisar; libere o `Saga.exe` (ou adicione o Saga às exceções) e clique em **Tentar de novo**. Em redes de empresa ou com proxy, teste em outra rede (por exemplo, o roteador do celular).
+4. Se depois de 45 segundos ainda não aparecer, o Saga mostra "O QR Code está demorando". Clique em **Ver detalhes** e depois em **Copiar diagnóstico**, e cole o texto numa mensagem para o suporte. O diagnóstico traz só as versões do app e o registro da conexão: **nunca** as suas mensagens nem as chaves. O mesmo botão fica em **Configurações › Diagnóstico**, junto com **Abrir pasta de registros** (o arquivo `saga.log`).
 
 ### Botão Pausar
 
