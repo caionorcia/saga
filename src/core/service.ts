@@ -17,10 +17,12 @@ import {
   type LlmProvider
 } from './ai/llm'
 import { InvalidOutputError } from './ai/prompt'
+import { ModelUnavailableError, resetGroqModelCache } from './ai/groqModels'
 import {
   InvalidKeyError,
   createTranscriber,
   registerTranscribeHandler,
+  type CreateTranscriberOpts,
   type TranscribePauseReason,
   type Transcriber
 } from './ai/transcriber'
@@ -71,7 +73,7 @@ export interface SagaServiceOpts {
   /** padrão: `createLlm` */
   llmFactory?: (kind: Provider, apiKey: string, opts: CreateLlmOpts) => LlmProvider
   /** padrão: `createTranscriber` */
-  transcriberFactory?: (kind: 'groq' | 'openai', apiKey: string) => Transcriber
+  transcriberFactory?: (kind: 'groq' | 'openai', apiKey: string, opts: CreateTranscriberOpts) => Transcriber
   /** usado por `testKey` (testes) */
   fetchImpl?: typeof fetch
   /** busca da versão do WhatsApp Web (testes); padrão: a do Baileys */
@@ -120,6 +122,7 @@ function aiErrorCode(e: unknown): AiErrorCode {
   if (e instanceof LlmRefusalError) return 'refusal'
   if (e instanceof InvalidOutputError) return 'invalid_output'
   if (e instanceof NoMessagesError) return 'no_messages'
+  if (e instanceof ModelUnavailableError) return 'model_unavailable'
   return 'unknown'
 }
 
@@ -131,6 +134,8 @@ const AI_MESSAGES: Record<AiErrorCode, string> = {
   refusal: 'A IA não quis responder a esta conversa. Tente de novo.',
   invalid_output: 'A IA respondeu fora do formato esperado. Tente de novo.',
   no_messages: 'Ainda não há mensagens deste contato.',
+  model_unavailable:
+    'Nenhum modelo de IA da Groq está disponível para a sua chave agora (os modelos que o app conhece foram aposentados). Tente de novo mais tarde ou escolha o Claude nas configurações.',
   unknown: 'Não foi possível gerar as sugestões agora. Tente de novo.'
 }
 
@@ -183,7 +188,7 @@ export class SagaService extends EventEmitter {
     this.fetchImpl = opts.fetchImpl
     this.diagFn = opts.diag
     this.llmFactory = opts.llmFactory ?? ((kind, key, o) => createLlm(kind, key, o))
-    this.transcriberFactory = opts.transcriberFactory ?? ((kind, key) => createTranscriber(kind, key))
+    this.transcriberFactory = opts.transcriberFactory ?? ((kind, key, o) => createTranscriber(kind, key, fetch, o))
     this.cost = new CostTracker(repo, clock)
 
     const lim = (name: LimiterName) => new RateLimiter(LIMITS[name], clock, rng, { repo, key: `limiter:${name}` })
@@ -533,7 +538,7 @@ export class SagaService extends EventEmitter {
       const analysis = await generateAnalysis(
         {
           repo: this.repo,
-          llm: this.llmFactory(provider, key, { repo: this.repo }),
+          llm: this.llmFactory(provider, key, { repo: this.repo, clock: this.clock, diag: (k, d) => this.diag(k, d) }),
           limiter: this.limiters.llm,
           cost: this.cost,
           capUsd: s.dailyCapUsd,
@@ -583,9 +588,9 @@ export class SagaService extends EventEmitter {
     const kind = this.settings.get().transcriber
     const key = this.settings.getKey(kind)
     if (!key) return null
-    const t = this.transcriberFactory(kind, key)
+    const t = this.transcriberFactory(kind, key, { repo: this.repo, clock: this.clock, diag: (k, d) => this.diag(k, d) })
     // o tipo vem da configuração (custo: OpenAI é paga), não do objeto criado
-    return { kind, transcribe: (file, sec) => t.transcribe(file, sec) }
+    return { kind, transcribe: (file, sec, signal) => t.transcribe(file, sec, signal) }
   }
 
   // --- fila ---
@@ -646,6 +651,8 @@ export class SagaService extends EventEmitter {
       if (e instanceof EncryptionUnavailableError) return { ok: false, code: 'encryption_unavailable', message: e.message }
       return { ok: false, code: 'invalid', message: e instanceof Error ? e.message : String(e) }
     }
+    // chave da Groq ou modelo configurado mudou: a lista de modelos e os "aposentados" valem de novo
+    if (patch.groqKey !== undefined || patch.groqModel !== undefined) resetGroqModelCache(this.repo)
     // uma chave nova pode destravar as transcrições pausadas por falta de chave (ou chave recusada)
     // e um teto novo pode destravar as pausadas pelo gasto
     if (patch.groqKey || patch.openaiKey || patch.transcriber || patch.dailyCapUsd !== undefined) this.queue.resumeType('transcribe')

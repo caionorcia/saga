@@ -6,7 +6,7 @@ import { selectExamples } from '../memory/memory'
 import type { RateLimiter } from '../queue/limiter'
 import { BudgetExceededError, type CostTracker } from './budget'
 import { InvalidOutputError, buildPrompt, parseSuggestions } from './prompt'
-import { InvalidKeyError } from './transcriber'
+import { GroqModels, InvalidKeyError, ModelNotFoundError, isModelGone } from './groqModels'
 
 export interface LlmResult {
   text: string
@@ -46,10 +46,10 @@ export class LlmRefusalError extends Error {
 }
 
 /**
- * Verificar contra o catálogo gratuito vivo da Groq antes de lançar.
- * Sobrescrevível pela setting `llm.groq.model`.
+ * Só para exibição nas configurações: o modelo de verdade é escolhido na hora pela lista da Groq
+ * (`GroqModels`). A setting `llm.groq.model`, se gravada, vale enquanto não der 404.
  */
-export const DEFAULT_GROQ_MODEL = 'llama-3.3-70b-versatile'
+export const DEFAULT_GROQ_MODEL = 'openai/gpt-oss-120b'
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5'
 export const SETTING_GROQ_MODEL = 'llm.groq.model'
 export const SETTING_CLAUDE_MODEL = 'llm.claude.model'
@@ -74,6 +74,8 @@ const CLAUDE_SCHEMA = {
 
 export interface CreateLlmOpts {
   repo?: Repo
+  clock?: Clock
+  diag?: (kind: string, detail: string) => void
   model?: string
   fetchImpl?: typeof fetch
   /** cliente do SDK já construído (testes) */
@@ -83,43 +85,46 @@ export interface CreateLlmOpts {
 export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateLlmOpts = {}): LlmProvider {
   if (kind === 'groq') {
     const fetchImpl = opts.fetchImpl ?? fetch
+    const models = new GroqModels({ apiKey, fetchImpl, repo: opts.repo, clock: opts.clock, diag: opts.diag })
+    const explicit = opts.model ?? opts.repo?.getSetting(SETTING_GROQ_MODEL) ?? null
+    const call = async (model: string, system: string, user: string): Promise<LlmResult> => {
+      const res = await fetchImpl(GROQ_URL, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user }
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0.7
+        })
+      })
+      if (res.status === 401) throw new InvalidKeyError()
+      if (res.status === 429) throw new LlmRateLimitError(retryAfterMs(res.headers.get('retry-after')))
+      if (await isModelGone(res)) throw new ModelNotFoundError(model)
+      if (res.status === 400) {
+        // modo json_object: saída inválida do modelo vem como 400 json_validate_failed
+        const body = (await res.json().catch(() => null)) as { error?: { code?: string } } | null
+        if (body?.error?.code === 'json_validate_failed') throw new InvalidOutputError('Groq: json_validate_failed')
+        throw new Error('pedido à IA falhou: HTTP 400 (groq)')
+      }
+      if (!res.ok) throw new Error(`pedido à IA falhou: HTTP ${res.status} (groq)`)
+      const j = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>
+        usage?: { prompt_tokens?: number; completion_tokens?: number }
+      }
+      return {
+        text: j.choices?.[0]?.message?.content ?? '',
+        inputTokens: j.usage?.prompt_tokens ?? 0,
+        outputTokens: j.usage?.completion_tokens ?? 0,
+        model
+      }
+    }
     return {
       name: 'groq',
-      async complete({ system, user }) {
-        const model = opts.model ?? opts.repo?.getSetting(SETTING_GROQ_MODEL) ?? DEFAULT_GROQ_MODEL
-        const res = await fetchImpl(GROQ_URL, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: 'system', content: system },
-              { role: 'user', content: user }
-            ],
-            response_format: { type: 'json_object' },
-            temperature: 0.7
-          })
-        })
-        if (res.status === 401) throw new InvalidKeyError()
-        if (res.status === 429) throw new LlmRateLimitError(retryAfterMs(res.headers.get('retry-after')))
-        if (res.status === 400) {
-          // modo json_object: saída inválida do modelo vem como 400 json_validate_failed
-          const body = (await res.json().catch(() => null)) as { error?: { code?: string } } | null
-          if (body?.error?.code === 'json_validate_failed') throw new InvalidOutputError('Groq: json_validate_failed')
-          throw new Error('pedido à IA falhou: HTTP 400 (groq)')
-        }
-        if (!res.ok) throw new Error(`pedido à IA falhou: HTTP ${res.status} (groq)`)
-        const j = (await res.json()) as {
-          choices?: Array<{ message?: { content?: string } }>
-          usage?: { prompt_tokens?: number; completion_tokens?: number }
-        }
-        return {
-          text: j.choices?.[0]?.message?.content ?? '',
-          inputTokens: j.usage?.prompt_tokens ?? 0,
-          outputTokens: j.usage?.completion_tokens ?? 0,
-          model
-        }
-      }
+      complete: ({ system, user }) => models.withModel('chat', explicit, (model) => call(model, system, user))
     }
   }
 

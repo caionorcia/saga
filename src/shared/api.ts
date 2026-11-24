@@ -78,6 +78,7 @@ export type AiErrorCode =
   | 'refusal'
   | 'invalid_output'
   | 'no_messages'
+  | 'model_unavailable'
   | 'unknown'
 
 export type AnalysisResult =

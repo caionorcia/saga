@@ -3,12 +3,17 @@ import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { Repo } from '../db/repo'
 import { DeferJobError, type JobQueue } from '../queue/queue'
+import type { Clock } from '../clock'
 import { OPENAI_TRANSCRIBE_USD_PER_MIN, type CostTracker } from './budget'
+import { GroqModels, InvalidKeyError, ModelNotFoundError, isModelGone } from './groqModels'
+
+export { InvalidKeyError }
 
 export interface Transcriber {
   /** provedor (para o custo); ausente = gratuito */
   kind?: 'groq' | 'openai'
-  transcribe(file: string, durationSec: number): Promise<string>
+  /** `signal`: cancela o pedido (o job da fila estourou o prazo) */
+  transcribe(file: string, durationSec: number, signal?: AbortSignal): Promise<string>
 }
 
 /** Sem internet: a transcrição espera este tempo (sem gastar tentativa). */
@@ -52,18 +57,10 @@ export class RateLimitedError extends DeferJobError {
   }
 }
 
-/** 401: chave recusada pelo provedor. */
-export class InvalidKeyError extends Error {
-  constructor() {
-    super('chave de API recusada pelo provedor de transcrição (401)')
-    this.name = 'InvalidKeyError'
-  }
-}
-
 const DEFAULT_RETRY_AFTER_MS = 60_000
 
 const PROVIDERS = {
-  groq: { url: 'https://api.groq.com/openai/v1/audio/transcriptions', model: 'whisper-large-v3' },
+  groq: { url: 'https://api.groq.com/openai/v1/audio/transcriptions' },
   openai: { url: 'https://api.openai.com/v1/audio/transcriptions', model: 'whisper-1' }
 } as const
 
@@ -72,31 +69,50 @@ function parseRetryAfterMs(h: string | null): number {
   return Number.isFinite(s) && s >= 0 ? Math.ceil(s * 1000) : DEFAULT_RETRY_AFTER_MS
 }
 
+export interface CreateTranscriberOpts {
+  /** cache da lista de modelos da Groq (24 h) */
+  repo?: Repo
+  clock?: Clock
+  diag?: (kind: string, detail: string) => void
+}
+
+/**
+ * Groq: o modelo é escolhido pela lista da própria Groq (`whisper-large-v3-turbo`, depois `whisper-large-v3`);
+ * um 404 (modelo aposentado) troca de modelo e tenta mais uma vez.
+ */
 export function createTranscriber(
   kind: 'groq' | 'openai',
   apiKey: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  opts: CreateTranscriberOpts = {}
 ): Transcriber {
-  const { url, model } = PROVIDERS[kind]
+  const { url } = PROVIDERS[kind]
+  const models = kind === 'groq' ? new GroqModels({ apiKey, fetchImpl, ...opts }) : null
+  const post = async (bytes: Awaited<ReturnType<typeof readFile>>, file: string, model: string, signal?: AbortSignal): Promise<string> => {
+    const form = new FormData()
+    form.append('file', new Blob([bytes], { type: 'audio/ogg' }), basename(file))
+    form.append('model', model)
+    form.append('language', 'pt')
+    form.append('response_format', 'text')
+    const t = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    const res = await fetchImpl(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: signal ? AbortSignal.any([t, signal]) : t
+    })
+    if (res.status === 401) throw new InvalidKeyError()
+    if (res.status === 429) throw new RateLimitedError(parseRetryAfterMs(res.headers.get('retry-after')))
+    if (models && (await isModelGone(res))) throw new ModelNotFoundError(model)
+    if (!res.ok) throw new Error(`transcrição falhou: HTTP ${res.status} (${kind})`)
+    return (await res.text()).trim()
+  }
   return {
     kind,
-    async transcribe(file: string): Promise<string> {
+    async transcribe(file: string, _durationSec: number, signal?: AbortSignal): Promise<string> {
       const bytes = await readFile(file)
-      const form = new FormData()
-      form.append('file', new Blob([bytes], { type: 'audio/ogg' }), basename(file))
-      form.append('model', model)
-      form.append('language', 'pt')
-      form.append('response_format', 'text')
-      const res = await fetchImpl(url, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}` },
-        body: form,
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-      })
-      if (res.status === 401) throw new InvalidKeyError()
-      if (res.status === 429) throw new RateLimitedError(parseRetryAfterMs(res.headers.get('retry-after')))
-      if (!res.ok) throw new Error(`transcrição falhou: HTTP ${res.status} (${kind})`)
-      return (await res.text()).trim()
+      if (!models) return post(bytes, file, PROVIDERS.openai.model, signal)
+      return models.withModel('transcribe', null, (model) => post(bytes, file, model, signal), signal)
     }
   }
 }
@@ -122,7 +138,7 @@ export function registerTranscribeHandler({ queue, repo, getTranscriber, cost, g
     else queue.pauseTypeFor('transcribe', ms)
     onPause?.(reason)
   }
-  queue.register('transcribe', async (payload: { id: string; durationSec: number }) => {
+  queue.register('transcribe', async (payload: { id: string; durationSec: number }, signal?: AbortSignal) => {
     const row = repo.getMessage(payload.id)
     if (!row || row.transcriptStatus === 'done') return
     // contato escondido: não transcreve (volta para a fila se ele for mostrado de novo)
@@ -144,9 +160,13 @@ export function registerTranscribeHandler({ queue, repo, getTranscriber, cost, g
       throw new DeferJobError('teto diário de gasto atingido')
     }
     try {
-      const text = await transcriber.transcribe(row.audioPath, payload.durationSec)
+      const text = await transcriber.transcribe(row.audioPath, payload.durationSec, signal)
+      // o job estourou o prazo: a resposta atrasada não vale (outra tentativa cuida disso)
+      signal?.throwIfAborted()
       repo.setTranscript(payload.id, text, 'done')
     } catch (e) {
+      // cancelado pela fila (prazo do job): ela já contou a tentativa; sem efeitos colaterais aqui
+      if (signal?.aborted) throw e
       if (e instanceof InvalidKeyError) {
         pause('key')
         repo.logEvent('ai_key_invalid', 'a chave de transcrição foi recusada (401); transcrições pausadas')

@@ -373,8 +373,23 @@ describe('SagaService', () => {
         throw new InvalidKeyError()
       }
       expect(await service.getAnalysis(JID)).toMatchObject({ ok: false, code: 'invalid_key' })
+      const { ModelUnavailableError } = await import('../../src/core/ai/groqModels')
+      llm.complete = async () => {
+        throw new ModelUnavailableError('chat')
+      }
+      const r = await service.getAnalysis(JID)
+      expect(r).toMatchObject({ ok: false, code: 'model_unavailable' })
+      expect(!r.ok && r.message).toMatch(/Nenhum modelo de IA da Groq/)
       settings.save({ dailyCapUsd: 0 })
       expect(await service.getAnalysis(JID)).toMatchObject({ ok: false, code: 'budget_exceeded' })
+    })
+
+    it('trocar a chave da Groq ou o modelo esquece a lista de modelos guardada', async () => {
+      repo.setSetting('groq.models.cache', JSON.stringify({ at: 1, ids: ['x'] }))
+      repo.setSetting('groq.models.bad', JSON.stringify({ y: 1 }))
+      await service.saveSettings({ groqModel: 'qwen/qwen3-32b' })
+      expect(repo.getSetting('groq.models.cache')).toBeNull()
+      expect(repo.getSetting('groq.models.bad')).toBeNull()
     })
 
     it('saveReply grava em approved_replies com context_text = mensagens novas do contato e o provedor', async () => {

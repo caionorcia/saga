@@ -186,7 +186,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
     return (
       <div className="sug-state sug-error" role="alert">
         <p>{errorText(view.code, view.message)}</p>
-        {(view.code === 'missing_key' || view.code === 'invalid_key') && onOpenSettings && (
+        {(view.code === 'missing_key' || view.code === 'invalid_key' || view.code === 'model_unavailable') && onOpenSettings && (
           <button type="button" className="btn btn-primary" onClick={onOpenSettings}>
             Abrir Configurações
           </button>

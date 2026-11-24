@@ -47,13 +47,14 @@ describe('createTranscriber', () => {
     const f = fakeFetch({ status: 200, body: ' olá mundo\n' })
     const text = await createTranscriber('groq', 'gsk_secret', f.impl).transcribe(file, 12)
     expect(text).toBe('olá mundo')
-    expect(f.calls).toHaveLength(1)
-    const { url, init } = f.calls[0]
+    // a lista de modelos (aqui sem resposta válida) e depois a transcrição
+    expect(f.calls.map((c) => c.url)).toEqual(['https://api.groq.com/openai/v1/models', 'https://api.groq.com/openai/v1/audio/transcriptions'])
+    const { url, init } = f.calls[1]
     expect(url).toBe('https://api.groq.com/openai/v1/audio/transcriptions')
     expect(init.method).toBe('POST')
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer gsk_secret')
     const form = init.body as FormData
-    expect(form.get('model')).toBe('whisper-large-v3')
+    expect(form.get('model')).toBe('whisper-large-v3-turbo')
     expect(form.get('language')).toBe('pt')
     expect(form.get('response_format')).toBe('text')
     const part = form.get('file') as File

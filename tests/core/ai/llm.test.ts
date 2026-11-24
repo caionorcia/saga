@@ -185,16 +185,20 @@ describe('createLlm groq', () => {
     const calls: Array<{ url: string; init: any }> = []
     const f = (async (url: any, init: any) => {
       calls.push({ url: String(url), init })
+      if (String(url).endsWith('/models')) return jsonRes(200, { data: [{ id: 'llama-3.1-8b-instant', active: true }] })
       return jsonRes(200, { choices: [{ message: { content: GOOD } }], usage: { prompt_tokens: 7, completion_tokens: 3 } })
     }) as unknown as typeof fetch
     const llm = createLlm('groq', 'KEY', { fetchImpl: f, repo })
     const r = await llm.complete({ system: 'S', user: 'U' })
+    expect(calls.map((c) => c.url)).toEqual(['https://api.groq.com/openai/v1/models', 'https://api.groq.com/openai/v1/chat/completions'])
+    expect(calls[0].init.headers.Authorization).toBe('Bearer KEY')
+    calls.shift()
     const body = JSON.parse(calls[0].init.body)
-    expect(calls[0].url).toBe('https://api.groq.com/openai/v1/chat/completions')
+    expect(body.model).toBe('llama-3.1-8b-instant')
     expect(body.response_format).toEqual({ type: 'json_object' })
     expect(body.messages).toEqual([{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }])
     expect(calls[0].init.headers.Authorization).toBe('Bearer KEY')
-    expect(r).toMatchObject({ text: GOOD, inputTokens: 7, outputTokens: 3 })
+    expect(r).toMatchObject({ text: GOOD, inputTokens: 7, outputTokens: 3, model: 'llama-3.1-8b-instant' })
   })
   it('modelo vem das settings', async () => {
     repo.setSetting('llm.groq.model', 'meu-modelo')
