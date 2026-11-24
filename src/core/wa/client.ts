@@ -16,7 +16,7 @@ import type { Clock } from '../clock'
 import type { Repo } from '../db/repo'
 import { ONE_GB, hasFreeSpace } from '../disk'
 import type { RateLimiter } from '../queue/limiter'
-import type { JobQueue } from '../queue/queue'
+import { DeferJobError, type JobQueue } from '../queue/queue'
 import type { NormalizedMessage } from '../types'
 import { useAtomicAuthState, type AtomicAuthState } from './authState'
 import { normalize, stripDevice, toPhoneJid } from './normalize'
@@ -67,6 +67,9 @@ const HISTORY_WINDOW_MS = 30 * DAY
 const URGENT_WINDOW_MS = 3 * DAY
 const URGENT_PRIORITY = 10
 const SLEEP_WARMUP_THRESHOLD_MS = 3_600_000
+/** conexão aberta por este tempo sem cair = estável (escada de reconexão volta ao começo) */
+const STABLE_AFTER_MS = 5 * 60_000
+const RESTART_REQUIRED = 515
 
 const noop = () => {}
 const silentLogger: any = {
@@ -109,7 +112,13 @@ export class WhatsAppClient extends EventEmitter {
   private running = false
   private status: ConnState | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private stableTimer: ReturnType<typeof setTimeout> | null = null
+  /** já tentou restaurar o backup desde a última conexão estável */
   private restoredOnce = false
+  /** já apagou a sessão e reconectou na hora desde a última conexão estável */
+  private wipedOnce = false
+  /** a última queda foi um 515 que reconectou sem contar */
+  private last515 = false
   private pausedByConnection = false
   /** LID (sem dispositivo) → JID de telefone */
   private lidToPn = new Map<string, string>()
@@ -124,6 +133,8 @@ export class WhatsAppClient extends EventEmitter {
     this.hasFreeSpace = deps.hasFreeSpace ?? hasFreeSpace
     deps.queue.register('download_audio', (p) => this.downloadAudio(p))
     deps.queue.register('fetch_profile', (p) => this.fetchProfile(p))
+    // downloads só com a conexão aberta
+    deps.queue.pauseType('download_audio')
   }
 
   getStatus(): ConnState | null {
@@ -140,15 +151,20 @@ export class WhatsAppClient extends EventEmitter {
   async stop(): Promise<void> {
     this.running = false
     this.clearRetry()
+    this.clearStable()
     this.dropSocket()
+    this.deps.queue.pauseType('download_audio')
     await this.whenIdle()
+    await this.auth?.close()
   }
 
   /** Botão "Tentar de novo": zera a política e conecta já. */
   async manualReconnect(): Promise<void> {
     this.running = true
     this.clearRetry()
+    this.clearStable()
     this.policy.manualRetry()
+    this.last515 = false
     this.dropSocket()
     this.schedule(() => this.connect())
     await this.whenIdle()
@@ -181,6 +197,8 @@ export class WhatsAppClient extends EventEmitter {
   }
 
   private setStatus(s: ConnState): void {
+    // downloads de mídia só com a conexão aberta (a volta é em onOpen, depois de checar o disco)
+    if (s !== 'open') this.deps.queue.pauseType('download_audio')
     if (this.status === s) return
     this.status = s
     this.emit('status', s)
@@ -189,6 +207,11 @@ export class WhatsAppClient extends EventEmitter {
   private clearRetry(): void {
     if (this.retryTimer) clearTimeout(this.retryTimer)
     this.retryTimer = null
+  }
+
+  private clearStable(): void {
+    if (this.stableTimer) clearTimeout(this.stableTimer)
+    this.stableTimer = null
   }
 
   private retryIn(ms: number): void {
@@ -218,6 +241,7 @@ export class WhatsAppClient extends EventEmitter {
     this.dropSocket()
     const gen = this.gen
     this.setStatus('connecting')
+    await this.auth?.close()
     const auth = await this.authStateFactory(this.deps.authDir, this.deps.backupDir)
     if (gen !== this.gen || !this.running) return
     this.auth = auth
@@ -259,18 +283,27 @@ export class WhatsAppClient extends EventEmitter {
       this.setStatus('needs_qr')
     }
     if (u.connection === 'open') await this.onOpen()
-    else if (u.connection === 'close') this.onClose(u.lastDisconnect?.error)
+    else if (u.connection === 'close') await this.onClose(u.lastDisconnect?.error)
   }
 
   private async onOpen(): Promise<void> {
-    this.policy.reset()
-    this.restoredOnce = false
+    // não zera a política aqui: um link que abre e cai em seguida continua contando
+    this.clearStable()
+    this.stableTimer = setTimeout(() => {
+      this.stableTimer = null
+      this.policy.markStable()
+      this.restoredOnce = false
+      this.wipedOnce = false
+      this.last515 = false
+    }, STABLE_AFTER_MS)
     if (this.pausedByConnection) {
       this.pausedByConnection = false
       this.deps.queue.resume()
     }
     this.setStatus('open')
     this.deps.repo.logEvent('wa_open', 'conectado')
+    if (await this.hasFreeSpace(this.deps.mediaDir, ONE_GB)) this.deps.queue.resumeType('download_audio')
+    else this.deps.repo.logEvent('disk_low', `menos de 1 GB livre em ${this.deps.mediaDir}`)
     // grava as credenciais atuais antes de copiar: o backup sempre reflete uma sessão que abriu
     await this.auth?.saveCreds()
     await this.auth?.backup()
@@ -286,38 +319,68 @@ export class WhatsAppClient extends EventEmitter {
     this.deps.repo.logEvent(`wa_${state}`, detail)
   }
 
-  private onClose(error: unknown): void {
+  /** Espera da política, ou `manual_retry_needed` quando ela esgota. */
+  private retryWithPolicy(detail: string): void {
+    const delay = this.policy.nextDelayMs()
+    if (delay === null) {
+      this.setStatus('manual_retry_needed')
+      this.deps.repo.logEvent('wa_manual_retry_needed', detail)
+    } else {
+      this.setStatus('waiting_retry')
+      this.retryIn(delay)
+    }
+  }
+
+  private async onClose(error: unknown): Promise<void> {
+    if (!this.running) return
+    // um socket fecha uma vez só: eventos seguintes dele são ignorados
+    this.gen++
     this.sock = null
+    this.clearStable()
+    const auth = this.auth
     const code = statusOf(error)
     const detail = `código ${code ?? '?'}: ${error ? errMsg(error) : 'sem detalhe'}`
+    const isRestart = code === RESTART_REQUIRED
+    if (isRestart && !this.last515) {
+      // "reinicie": normal depois de parear; reconecta já, sem contar (uma vez seguida)
+      this.last515 = true
+      this.setStatus('waiting_retry')
+      this.retryIn(0)
+      return
+    }
+    if (!isRestart) this.last515 = false
+
     switch (classifyDisconnect(code, error instanceof Error ? error.message : undefined)) {
-      case 'retry': {
-        const delay = this.policy.nextDelayMs()
-        if (delay === null) {
-          this.setStatus('manual_retry_needed')
-          this.deps.repo.logEvent('wa_manual_retry_needed', detail)
-        } else {
+      case 'retry':
+        this.retryWithPolicy(detail)
+        return
+      case 'bad_session': {
+        // a sessão descartada não pode gravar mais nada na pasta restaurada/apagada
+        await auth?.close()
+        const tryRestore = !this.restoredOnce
+        this.restoredOnce = true
+        if (tryRestore && auth?.restoreBackup()) {
+          this.deps.repo.logEvent('wa_bad_session_restored', detail)
           this.setStatus('waiting_retry')
-          this.retryIn(delay)
+          this.retryIn(0)
+          return
+        }
+        // sessão sem conserto: apaga e começa uma sessão nova (o socket novo mostra um QR)
+        auth?.wipe()
+        this.deps.repo.logEvent('wa_bad_session', detail)
+        if (!this.wipedOnce) {
+          this.wipedOnce = true
+          this.setStatus('waiting_retry')
+          this.retryIn(0)
+        } else {
+          this.retryWithPolicy(detail)
         }
         return
       }
-      case 'bad_session':
-        if (!this.restoredOnce && this.auth?.restoreBackup()) {
-          this.restoredOnce = true
-          this.deps.repo.logEvent('wa_bad_session_restored', detail)
-          this.retryIn(0)
-        } else {
-          // sessão sem conserto: apaga e espera o usuário pedir um QR novo (manualReconnect)
-          this.auth?.wipe()
-          this.running = false
-          this.setStatus('needs_qr')
-          this.deps.repo.logEvent('wa_bad_session', detail)
-        }
-        return
       case 'logged_out':
         // o aparelho foi desconectado no celular: as credenciais não servem mais (nem o backup)
-        this.auth?.wipe()
+        await auth?.close()
+        auth?.wipe()
         this.stopWith('stopped_logged_out', detail)
         return
       case 'restricted':
@@ -375,7 +438,7 @@ export class WhatsAppClient extends EventEmitter {
     const cutoff = clock.now() - HISTORY_WINDOW_MS
     const audios: NormalizedMessage[] = []
     for (const raw of messages) {
-      const n = normalize(raw)
+      const n = normalize(raw, { ownJid: this.auth?.state.creds.me?.id })
       if (!n || n.ts < cutoff) continue
       const lid = n.jid
       n.jid = await this.resolveJid(n.jid)
@@ -401,9 +464,10 @@ export class WhatsAppClient extends EventEmitter {
   private async downloadAudio(payload: { id: string }): Promise<void> {
     const { repo, queue, mediaDir } = this.deps
     if (!(await this.hasFreeSpace(mediaDir, ONE_GB))) {
-      queue.pause()
+      // pausa só os downloads e devolve o job sem gastar tentativa; volta na próxima conexão aberta
+      queue.pauseType('download_audio')
       repo.logEvent('disk_low', `menos de 1 GB livre em ${mediaDir}`)
-      throw new Error('espaço em disco abaixo de 1 GB')
+      throw new DeferJobError('espaço em disco abaixo de 1 GB')
     }
     const row = repo.getMessage(payload.id)
     if (!row || row.transcriptStatus === 'unavailable') return

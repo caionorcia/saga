@@ -15,6 +15,8 @@ const DAY = 86_400_000
 const NOW = 1_764_000_000_000
 const JID = '5547999998888@s.whatsapp.net'
 const JID2 = '5511988887777@s.whatsapp.net'
+const OWN = '5547900000000:3@s.whatsapp.net'
+const STABLE_MS = 5 * 60_000
 
 const FORBIDDEN = ['sendMessage', 'readMessages', 'sendReceipt', 'sendReceipts', 'sendPresenceUpdate', 'chatModify', 'updateMediaMessage', 'logout'] as const
 
@@ -119,6 +121,7 @@ describe('WhatsAppClient', () => {
       },
       authStateFactory: async (dir, backupDir) => {
         const a = await useAtomicAuthState(dir, backupDir)
+        a.state.creds.me = { id: OWN, name: 'Mentor' }
         const real = a.restoreBackup
         a.restoreBackup = () => {
           const r = real()
@@ -233,6 +236,17 @@ describe('WhatsAppClient', () => {
       )
     })
 
+    it('fromMe em chat @lid com remoteJidAlt = meu número vai para o contato, não para mim', async () => {
+      await emit('messaging-history.set', {
+        chats: [],
+        contacts: [],
+        lidPnMappings: [{ lid: '777@lid', pn: JID2 }],
+        messages: [wamsg({ id: 'mine', jid: '777@lid', alt: '5547900000000@s.whatsapp.net', fromMe: true, ts: NOW - DAY })]
+      })
+      expect(repo.listMessages(JID2).map((m) => m.id)).toEqual(['mine'])
+      expect(repo.listContacts({ includeHidden: true }).map((c) => c.jid)).toEqual([JID2])
+    })
+
     it('áudio: prioridade 10 se o contato aguarda resposta e o áudio tem menos de 3 dias, senão 0', async () => {
       await emit('messaging-history.set', {
         chats: [],
@@ -255,6 +269,28 @@ describe('WhatsAppClient', () => {
   describe('download_audio', () => {
     beforeEach(async () => {
       await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'AUD1', audio: 37, ts: NOW - 1000 })] })
+      await emit('connection.update', { connection: 'open' })
+    })
+
+    it('fica pausado (por tipo) enquanto a conexão não está aberta', async () => {
+      await close(428)
+      expect(queue.isTypePaused('download_audio')).toBe(true)
+      expect(await queue.tick()).toBe('idle')
+      expect(download).not.toHaveBeenCalled()
+      await advance(10_000)
+      await emit('connection.update', { connection: 'open' })
+      expect(queue.isTypePaused('download_audio')).toBe(false)
+      expect(await queue.tick()).toBe('ran')
+      expect(download).toHaveBeenCalledTimes(1)
+    })
+
+    it('ao abrir, re-checa o disco antes de despausar', async () => {
+      await close(428)
+      await advance(10_000)
+      diskFree = false
+      await emit('connection.update', { connection: 'open' })
+      expect(queue.isTypePaused('download_audio')).toBe(true)
+      expect(repo.recentEvents(5).map((e) => e.kind)).toContain('disk_low')
     })
 
     it('baixa sem pedir reenvio, salva media/<id>.ogg e enfileira transcribe', async () => {
@@ -290,12 +326,15 @@ describe('WhatsAppClient', () => {
       expect(repo.getMessage('AUD1')!.transcriptStatus).toBeNull()
     })
 
-    it('disco com menos de 1 GB → pausa a fila e registra disk_low, sem baixar', async () => {
+    it('disco com menos de 1 GB → pausa o download, registra disk_low, sem baixar e sem gastar tentativa', async () => {
       diskFree = false
       await queue.tick()
       expect(download).not.toHaveBeenCalled()
-      expect(queue.isPaused()).toBe(true)
+      expect(queue.isTypePaused('download_audio')).toBe(true)
+      expect(queue.isPaused()).toBe(false)
       expect(repo.recentEvents(5).map((e) => e.kind)).toContain('disk_low')
+      const j = repo.listJobs('pending').find((x) => x.key === 'AUD1')!
+      expect(j.attempts).toBe(0)
     })
   })
 
@@ -363,13 +402,72 @@ describe('WhatsAppClient', () => {
       expect(statuses.at(-1)).toBe('connecting')
     })
 
-    it('conexão aberta zera a política', async () => {
-      await close(428)
-      await advance(10_000)
+    const expectReconnectAfter = async (ms: number) => {
+      const n = sockets.length
+      await advance(ms - 1)
+      expect(sockets).toHaveLength(n)
+      await advance(1)
+      expect(sockets).toHaveLength(n + 1)
+    }
+
+    it('abrir e cair em seguida (oscilação) não zera a política: 7ª queda em 1 h → manual_retry_needed', async () => {
+      const seq = [10_000, 30_000, 120_000, 300_000, 900_000, 1_800_000]
+      for (const d of seq) {
+        await emit('connection.update', { connection: 'open' })
+        await close(428)
+        await expectReconnectAfter(d)
+      }
       await emit('connection.update', { connection: 'open' })
       await close(428)
-      await advance(10_000)
-      expect(sockets).toHaveLength(3)
+      expect(statuses.at(-1)).toBe('manual_retry_needed')
+      await advance(3_600_000)
+      expect(sockets).toHaveLength(7)
+    })
+
+    it('aberta e estável por 5 min: a escada volta a 10 s, mas a janela de 1 h continua contando', async () => {
+      await close(428)
+      await expectReconnectAfter(10_000)
+      await emit('connection.update', { connection: 'open' })
+      await advance(STABLE_MS)
+      await close(428)
+      await expectReconnectAfter(10_000)
+      for (const d of [30_000, 120_000, 300_000, 900_000]) {
+        await close(428)
+        await expectReconnectAfter(d)
+      }
+      // 6 tentativas em menos de 1 h (2 antes e 4 depois do markStable)
+      await close(428)
+      expect(statuses.at(-1)).toBe('manual_retry_needed')
+    })
+
+    it('aberta menos de 5 min não conta como estável', async () => {
+      await close(428)
+      await expectReconnectAfter(10_000)
+      await emit('connection.update', { connection: 'open' })
+      await advance(STABLE_MS - 1)
+      await close(428)
+      await expectReconnectAfter(30_000)
+    })
+
+    it('duas quedas do mesmo socket contam uma tentativa só', async () => {
+      last().close(428)
+      last().close(428)
+      await client.whenIdle()
+      await expectReconnectAfter(10_000)
+      await close(428)
+      await expectReconnectAfter(30_000)
+    })
+
+    it('515 (reiniciar): reconecta já sem contar, só uma vez seguida', async () => {
+      await close(515)
+      await advance(0)
+      expect(sockets).toHaveLength(2)
+      await close(515)
+      await advance(0)
+      expect(sockets).toHaveLength(2)
+      await expectReconnectAfter(10_000)
+      await close(428)
+      await expectReconnectAfter(30_000)
     })
 
     it('bad_session: restaura o backup uma vez, depois needs_qr', async () => {
@@ -382,17 +480,24 @@ describe('WhatsAppClient', () => {
 
       await close(500)
       expect(restoreSpy).toHaveBeenCalledTimes(1)
+      expect(existsSync(join(tmp, 'auth-backup', 'creds.json'))).toBe(false)
+      expect(repo.recentEvents(5).map((e) => e.kind)).toContain('wa_bad_session')
+      // sessão nova na hora: o socket novo mostra um QR
+      await advance(0)
+      expect(sockets).toHaveLength(3)
+      expect(last().config.auth.creds.registrationId).not.toBe(sockets[0].config.auth.creds.registrationId)
+      await emit('connection.update', { qr: '2@novo' })
       expect(statuses.at(-1)).toBe('needs_qr')
-      expect(existsSync(join(tmp, 'auth', 'creds.json'))).toBe(false)
-      await advance(3_600_000)
-      expect(sockets).toHaveLength(2)
     })
 
-    it('bad_session sem backup → needs_qr direto', async () => {
+    it('bad_session sem backup → sessão nova na hora; a seguinte já passa pela política', async () => {
       await close(500)
       expect(restoreSpy).toHaveBeenCalledWith(false)
-      expect(statuses.at(-1)).toBe('needs_qr')
-      expect(sockets).toHaveLength(1)
+      await advance(0)
+      expect(sockets).toHaveLength(2)
+      await close(500)
+      expect(restoreSpy).toHaveBeenCalledTimes(1)
+      await expectReconnectAfter(10_000)
     })
 
     it('abrir de novo despausa a fila que a desconexão pausou', async () => {

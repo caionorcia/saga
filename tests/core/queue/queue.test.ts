@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FakeClock } from '../../../src/core/clock'
 import { openDb } from '../../../src/core/db/db'
 import { Repo } from '../../../src/core/db/repo'
-import { JobQueue, type JobType } from '../../../src/core/queue/queue'
+import { DeferJobError, JobQueue, type JobType } from '../../../src/core/queue/queue'
 import { LIMITS, RateLimiter } from '../../../src/core/queue/limiter'
 import type { NormalizedMessage } from '../../../src/core/types'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -219,6 +219,56 @@ describe('JobQueue', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('pauseType: o tipo pausado não roda, os outros sim; resumeType volta', async () => {
+    const other: string[] = []
+    q.register('fetch_profile', async (p) => {
+      other.push(String((p as any).jid))
+    })
+    q.enqueue('download_audio', 'a', { id: 'a' }, 10)
+    q.enqueue('fetch_profile', 'p', { jid: 'x' })
+    q.pauseType('download_audio')
+    expect(q.isTypePaused('download_audio')).toBe(true)
+    expect(q.isPaused()).toBe(false)
+    expect(await q.tick()).toBe('ran')
+    expect(other).toEqual(['x'])
+    expect(ran).toEqual([])
+    clock.advance(60_000)
+    expect(await q.tick()).toBe('idle')
+    expect(q.stats().nextRunAt).toBeNull()
+    q.resumeType('download_audio')
+    expect(q.isTypePaused('download_audio')).toBe(false)
+    expect(await q.tick()).toBe('ran')
+    expect(ran).toEqual(['a'])
+  })
+
+  it('pauseType não gira em falso', async () => {
+    vi.useFakeTimers()
+    try {
+      const spy = vi.spyOn(q, 'tick')
+      q.enqueue('download_audio', 'a', { id: 'a' })
+      q.pauseType('download_audio')
+      q.start()
+      await vi.advanceTimersByTimeAsync(30_000)
+      await q.stop()
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(2)
+      expect(ran).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('DeferJobError devolve o job a pending sem gastar tentativa', async () => {
+    q.register('download_audio', async () => {
+      throw new DeferJobError('sem espaço', 5_000)
+    })
+    q.enqueue('download_audio', 'a', { id: 'a' })
+    expect(await q.tick()).toBe('ran')
+    const [j] = repo.listJobs('pending')
+    expect(j.attempts).toBe(0)
+    expect(j.nextRunAt).toBe(clock.now() + 5_000)
+    expect(j.lastError).toBe('sem espaço')
   })
 
   it('start/stop: o laço roda jobs sem girar em falso', async () => {

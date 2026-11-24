@@ -78,6 +78,15 @@ export class ReconnectPolicy {
     this.clear()
   }
 
+  /**
+   * Conexão ficou aberta e estável: a escada volta ao começo (e a trava sai), mas a janela
+   * de 60 min continua contando — um link oscilando não ganha tentativas extras.
+   */
+  markStable(): void {
+    this.sinceReset = 0
+    this.latched = false
+  }
+
   /** Clique manual do usuário: zera escada, janela e trava (mesmo efeito de `reset`, intenção diferente). */
   manualRetry(): void {
     this.clear()

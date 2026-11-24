@@ -70,6 +70,30 @@ describe('useAtomicAuthState', () => {
     expect(b.state.creds.registrationId).toBe(a.state.creds.registrationId)
   })
 
+  it('close() espera as gravações e recusa as novas; restore não recebe chaves atrasadas', async () => {
+    const a = await useAtomicAuthState(dir, backupDir)
+    await a.saveCreds()
+    await a.backup()
+    const late = a.state.keys.set({ session: { 'bad:1': Buffer.from([1]) } } as any)
+    await a.close()
+    await late
+    expect(a.restoreBackup()).toBe(true)
+    await a.state.keys.set({ session: { 'bad:2': Buffer.from([2]) } } as any)
+    await a.saveCreds()
+    const files = readdirSync(dir)
+    expect(files).not.toContain('session-bad-2.json')
+    expect(files.filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('restoreBackup() sozinho também fecha a instância para gravações', async () => {
+    const a = await useAtomicAuthState(dir, backupDir)
+    await a.saveCreds()
+    await a.backup()
+    expect(a.restoreBackup()).toBe(true)
+    await a.state.keys.set({ session: { 'late:1': Buffer.from([1]) } } as any)
+    expect(readdirSync(dir)).not.toContain('session-late-1.json')
+  })
+
   it('wipe() apaga a sessão e o backup', async () => {
     const a = await useAtomicAuthState(dir, backupDir)
     await a.saveCreds()

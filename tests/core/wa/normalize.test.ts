@@ -107,6 +107,16 @@ describe('normalize', () => {
     expect(n.ts).toBe(1763900800_000)
   })
 
+  it('fromMe em chat @lid: remoteJidAlt igual ao meu número é ignorado (fica no contato)', () => {
+    const raw = load('lid-fromme-own-alt')
+    expect(normalize(raw, { ownJid: '5547900000000:12@s.whatsapp.net' })!.jid).toBe('123456789012345@lid')
+    // sem saber o próprio número, a alternativa de uma mensagem minha não é confiável
+    expect(normalize(raw)!.jid).toBe('123456789012345@lid')
+    // alternativa diferente do meu número continua valendo
+    const other = { ...raw, key: { ...raw.key, remoteJidAlt: JID } }
+    expect(normalize(other, { ownJid: '5547900000000@s.whatsapp.net' })!.jid).toBe(JID)
+  })
+
   it('remove o sufixo de dispositivo do JID', () => {
     expect(normalize(make({ conversation: 'x' }, { remoteJid: '5547999998888:12@s.whatsapp.net' }))!.jid).toBe(JID)
   })

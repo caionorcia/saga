@@ -17,8 +17,14 @@ export interface AtomicAuthState {
   backup(): Promise<void>
   /** Substitui `dir` pelo backup. `false` se não há backup utilizável. */
   restoreBackup(): boolean
-  /** Apaga a sessão e o backup (a próxima conexão pede QR). */
+  /** Apaga a sessão e o backup (a próxima conexão pede QR). Também fecha a instância. */
   wipe(): void
+  /**
+   * Fecha a instância: espera as gravações em andamento e ignora as próximas.
+   * Chamar antes de `restoreBackup()`/`wipe()` para que chaves atrasadas de uma sessão
+   * descartada não caiam na pasta restaurada.
+   */
+  close(): Promise<void>
 }
 
 const CREDS = 'creds.json'
@@ -56,9 +62,11 @@ export async function useAtomicAuthState(dir: string, backupDir: string): Promis
   const fileChains = new Map<string, Promise<unknown>>()
   const inflight = new Set<Promise<unknown>>()
   let gate: Promise<void> = Promise.resolve()
+  let closed = false
 
-  const withFile = async <T>(file: string, fn: (path: string) => Promise<T>): Promise<T> => {
+  const withFile = async (file: string, fn: (path: string) => Promise<void>): Promise<void> => {
     await gate
+    if (closed) return
     const path = join(dir, fixFileName(file))
     const prev = fileChains.get(path) ?? Promise.resolve()
     const run = prev.catch(() => {}).then(() => fn(path))
@@ -76,7 +84,8 @@ export async function useAtomicAuthState(dir: string, backupDir: string): Promis
     withFile(file, async (path) => {
       const tmp = `${path}.tmp`
       await writeFile(tmp, JSON.stringify(data, BufferJSON.replacer))
-      await rename(tmp, path)
+      if (closed) await unlink(tmp).catch(() => {})
+      else await rename(tmp, path)
     })
 
   const readData = async (file: string): Promise<any> => {
@@ -90,14 +99,21 @@ export async function useAtomicAuthState(dir: string, backupDir: string): Promis
 
   const removeData = (file: string) => withFile(file, (path) => unlink(path).catch(() => {}))
 
-  const restoreBackup = (): boolean => {
+  const swapInBackup = (): boolean => {
     if (!hasCreds(backupDir)) return false
     replaceDirSync(backupDir, dir)
     return true
   }
 
+  /** Restaura e fecha esta instância: o estado em memória é da sessão descartada. */
+  const restoreBackup = (): boolean => {
+    if (!hasCreds(backupDir)) return false
+    closed = true
+    return swapInBackup()
+  }
+
   // creds.json existe mas está ilegível: tenta o backup antes de cair num QR novo
-  if (existsSync(join(dir, CREDS)) && !hasCreds(dir)) restoreBackup()
+  if (existsSync(join(dir, CREDS)) && !hasCreds(dir)) swapInBackup()
 
   const creds: AuthenticationCreds = (await readData(CREDS)) || initAuthCreds()
 
@@ -134,6 +150,7 @@ export async function useAtomicAuthState(dir: string, backupDir: string): Promis
     },
     saveCreds: () => writeData(creds, CREDS),
     backup: async () => {
+      if (closed) return
       let release!: () => void
       const prev = gate
       gate = new Promise<void>((r) => (release = r))
@@ -154,7 +171,12 @@ export async function useAtomicAuthState(dir: string, backupDir: string): Promis
       }
     },
     restoreBackup,
+    close: async () => {
+      closed = true
+      await Promise.allSettled([...inflight])
+    },
     wipe: () => {
+      closed = true
       rmSync(dir, { recursive: true, force: true })
       rmSync(backupDir, { recursive: true, force: true })
       mkdirSync(dir, { recursive: true })

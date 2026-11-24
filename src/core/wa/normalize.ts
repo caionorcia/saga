@@ -24,15 +24,29 @@ export function toPhoneJid(jid: string | null | undefined): string | null {
   return stripDevice(jid)
 }
 
+export interface NormalizeOptions {
+  /** meu próprio JID (`creds.me.id`), para não confundir minhas respostas com o contato */
+  ownJid?: string | null
+}
+
 /**
  * JID do contato: o telefone quando o Baileys o conhece (`remoteJidAlt` em mensagens `@lid`),
  * senão o próprio `remoteJid` sem o sufixo de dispositivo.
+ *
+ * No rc14 o `remoteJidAlt` é o endereço alternativo do REMETENTE: numa mensagem minha
+ * (`fromMe`) ele tende a ser o meu próprio número. Por isso, em mensagens minhas, só vale
+ * quando sei o meu número e ele é diferente; senão fica o `@lid` (o cliente resolve depois).
  */
-function contactJid(key: WAMessage['key']): string | null {
+function contactJid(key: WAMessage['key'], opts: NormalizeOptions): string | null {
   const jid = key.remoteJid
   if (!isIndividualJid(jid)) return null
-  if (jid.endsWith(`@${LID_SERVER}`)) return toPhoneJid(key.remoteJidAlt) ?? stripDevice(jid)
-  return stripDevice(jid)
+  if (!jid.endsWith(`@${LID_SERVER}`)) return stripDevice(jid)
+  const alt = toPhoneJid(key.remoteJidAlt)
+  if (alt && key.fromMe) {
+    const own = toPhoneJid(opts.ownJid)
+    if (!own || own === alt) return stripDevice(jid)
+  }
+  return alt ?? stripDevice(jid)
 }
 
 /** messageTimestamp (segundos; number, string ou Long) → epoch em ms. */
@@ -102,10 +116,10 @@ function body(c: WAMessageContent): Body | null {
  * Converte uma mensagem do Baileys no formato do Saga.
  * Devolve `null` para tudo que não é conversa individual com conteúdo.
  */
-export function normalize(msg: WAMessage): NormalizedMessage | null {
+export function normalize(msg: WAMessage, opts: NormalizeOptions = {}): NormalizedMessage | null {
   const key = msg.key
   if (!key?.id) return null
-  const jid = contactJid(key)
+  const jid = contactJid(key, opts)
   if (!jid) return null
   const ts = toMs(msg.messageTimestamp)
   if (ts === null) return null

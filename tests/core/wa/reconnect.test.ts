@@ -101,6 +101,29 @@ describe('ReconnectPolicy', () => {
   })
 })
 
+describe('ReconnectPolicy.markStable', () => {
+  it('volta a escada para 10 s mas mantém a janela de 60 min', () => {
+    const clock = new FakeClock(T0)
+    const p = new ReconnectPolicy(clock, mid)
+    expect(drain(p, 3)).toEqual(SEQ.slice(0, 3))
+    p.markStable()
+    expect(p.nextDelayMs()).toBe(10_000)
+    expect(drain(p, 2)).toEqual([30_000, 120_000])
+    // 6 tentativas na janela: a 7ª é null mesmo depois de markStable
+    p.markStable()
+    expect(p.nextDelayMs()).toBeNull()
+  })
+
+  it('a janela continua deslizando normalmente', () => {
+    const clock = new FakeClock(T0)
+    const p = new ReconnectPolicy(clock, mid)
+    drain(p, 5)
+    p.markStable()
+    clock.advance(61 * MIN)
+    expect(drain(p, 6)).toEqual(SEQ)
+  })
+})
+
 describe('classifyDisconnect', () => {
   it('401 → logged_out', () => expect(classifyDisconnect(401)).toBe('logged_out'))
   it('411 (multideviceMismatch) → logged_out', () => expect(classifyDisconnect(411)).toBe('logged_out'))

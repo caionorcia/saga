@@ -15,6 +15,20 @@ export interface QueueStats {
   nextRunAt: number | null
 }
 
+/**
+ * Lançada por um handler para devolver o job à fila sem gastar tentativa
+ * (ex.: disco cheio). `delayMs` adia a próxima execução.
+ */
+export class DeferJobError extends Error {
+  constructor(
+    message: string,
+    readonly delayMs = 0
+  ) {
+    super(message)
+    this.name = 'DeferJobError'
+  }
+}
+
 const BACKOFF_MS = [30_000, 2 * 60_000, 10 * 60_000]
 const MAX_SLEEP_MS = 60_000
 const MIN_SLEEP_MS = 50
@@ -27,6 +41,7 @@ const MIN_SLEEP_MS = 50
 export class JobQueue {
   private handlers = new Map<JobType, Handler>()
   private paused = false
+  private pausedTypes = new Set<JobType>()
   private started = false
   private timer: ReturnType<typeof setTimeout> | null = null
   private loop: Promise<void> | null = null
@@ -74,6 +89,24 @@ export class JobQueue {
     return this.paused
   }
 
+  /** Pausa só um tipo de job; os outros continuam rodando. */
+  pauseType(type: JobType): void {
+    this.pausedTypes.add(type)
+  }
+
+  resumeType(type: JobType): void {
+    if (this.pausedTypes.delete(type)) this.wake()
+  }
+
+  isTypePaused(type: JobType): boolean {
+    return this.pausedTypes.has(type)
+  }
+
+  /** Tipos que o laço pode rodar agora: com handler e não pausados. */
+  private activeTypes(): JobType[] {
+    return [...this.handlers.keys()].filter((t) => !this.pausedTypes.has(t))
+  }
+
   register(type: JobType, handler: Handler): void {
     this.handlers.set(type, handler)
   }
@@ -92,7 +125,7 @@ export class JobQueue {
     if (this.paused) return 'paused'
     const now = this.clock.now()
     const candidates: JobRow[] = []
-    for (const type of this.handlers.keys()) {
+    for (const type of this.activeTypes()) {
       const job = this.repo.nextPendingJob(type, now)
       if (job) candidates.push(job)
     }
@@ -109,7 +142,11 @@ export class JobQueue {
       await this.handlers.get(job.type as JobType)!(job.payload)
       this.repo.markJobDone(job.id)
     } catch (e) {
-      this.failJob(job, e instanceof Error ? e.message : String(e))
+      if (e instanceof DeferJobError) {
+        this.repo.markJobFailed(job.id, job.attempts, e.message, this.clock.now() + e.delayMs)
+      } else {
+        this.failJob(job, e instanceof Error ? e.message : String(e))
+      }
     } finally {
       limiter.markFinished()
     }
@@ -120,7 +157,8 @@ export class JobQueue {
     const c = this.repo.jobCounts()
     let nextRunAt: number | null = null
     for (const { type, nextRunAt: n } of this.repo.pendingNextRunByType()) {
-            if (!this.handlers.has(type as JobType)) continue // sem handler, o laço nunca rodaria: não acordar à toa
+      // sem handler ou pausado, o laço nunca rodaria: não acordar à toa
+      if (!this.handlers.has(type as JobType) || this.pausedTypes.has(type as JobType)) continue
       const lim = this.limiters[type as JobType]
       const t = Math.max(n, lim.nextAllowedAt())
       if (nextRunAt === null || t < nextRunAt) nextRunAt = t
