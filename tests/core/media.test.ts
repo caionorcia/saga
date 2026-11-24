@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { audioFileId, audioUrlFor, resolveMediaPath } from '../../src/core/media'
 
 const MEDIA = resolve('/dados/saga/media')
@@ -18,7 +18,7 @@ describe('saga-media://', () => {
   it('segmentos ".." nunca saem de media/', () => {
     for (const u of ['saga-media://audio/../saga', 'saga-media://audio/../../../etc/passwd', 'saga-media://audio/x/../../y']) {
       const p = resolveMediaPath(MEDIA, u)
-      if (p !== null) expect(p.startsWith(MEDIA + (MEDIA.endsWith('/') ? '' : '/'))).toBe(true)
+      if (p !== null) expect(p.startsWith(MEDIA.endsWith(sep) ? MEDIA : MEDIA + sep)).toBe(true)
     }
   })
 

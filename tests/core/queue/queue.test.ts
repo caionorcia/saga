@@ -158,7 +158,8 @@ describe('JobQueue', () => {
     expect(setTranscriptCalls).toBe(1)
     db1.close() // abandona a fila 1
 
-    const repo2 = new Repo(openDb(file), clock)
+    const db2 = openDb(file)
+    const repo2 = new Repo(db2, clock)
     const q2 = new JobQueue(repo2, clock, makeLimiters(clock, repo2))
     q2.register('transcribe', handlerFor(repo2))
     expect(q2.recoverAfterCrash()).toBe(1)
@@ -168,6 +169,7 @@ describe('JobQueue', () => {
     expect(q2.stats()).toMatchObject({ done: 1, pending: 0, running: 0 })
     expect(setTranscriptCalls).toBe(1)
     expect(repo2.listMessages(m.jid).find((x) => x.id === 'm1')?.transcript).toBe('olá')
+    db2.close() // no Windows o arquivo aberto não pode ser apagado no afterEach
   })
 
   it('job que derruba o app em laço vira failed na 3ª queda', () => {

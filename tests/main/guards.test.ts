@@ -133,7 +133,8 @@ describe('isAppUrl no Windows (win32)', () => {
     expect(isAppUrl(url, o, 'win32')).toBe(false)
   })
 
-  it('fora do Windows a comparação continua exata (maiúsculas importam)', () => {
+  // os caminhos de teste são POSIX; num host Windows o modo 'linux' não se aplica
+  it.skipIf(process.platform === 'win32')('fora do Windows a comparação continua exata (maiúsculas importam)', () => {
     expect(isAppUrl(fileIndex.replace('/app/', '/APP/'), { indexFile: INDEX }, 'linux')).toBe(false)
     expect(isAppUrl(fileIndex, { indexFile: INDEX }, 'linux')).toBe(true)
   })
