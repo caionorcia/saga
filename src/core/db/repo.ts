@@ -75,6 +75,22 @@ function toJob(r: Row): JobRow {
   }
 }
 
+function toMessage(r: Row): MessageRow {
+  return {
+    id: r.id,
+    jid: r.jid,
+    fromMe: r.from_me === 1,
+    ts: r.ts,
+    kind: r.kind,
+    text: r.text,
+    mediaKeyJson: r.media_key_json,
+    durationSec: r.duration_sec,
+    audioPath: r.audio_path,
+    transcript: r.transcript,
+    transcriptStatus: r.transcript_status
+  }
+}
+
 /** `5547999998888@s.whatsapp.net` -> `+55 47 99999-8888` */
 export function formatPhone(jid: string): string {
   const digits = jid.split('@')[0].split(':')[0].replace(/\D/g, '')
@@ -156,19 +172,16 @@ export class Repo {
          ORDER BY ts ASC, rid ASC`
       )
       .all(jid, limit ?? -1) as Row[]
-    return rows.map((r) => ({
-      id: r.id,
-      jid: r.jid,
-      fromMe: r.from_me === 1,
-      ts: r.ts,
-      kind: r.kind,
-      text: r.text,
-      mediaKeyJson: r.media_key_json,
-      durationSec: r.duration_sec,
-      audioPath: r.audio_path,
-      transcript: r.transcript,
-      transcriptStatus: r.transcript_status
-    }))
+    return rows.map(toMessage)
+  }
+
+  getMessage(id: string): MessageRow | null {
+    const r = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as Row | undefined
+    return r ? toMessage(r) : null
+  }
+
+  setAudioPath(id: string, path: string): void {
+    this.db.prepare('UPDATE messages SET audio_path = ? WHERE id = ?').run(path, id)
   }
 
   setTranscript(id: string, text: string | null, status: TranscriptStatus): void {

@@ -136,6 +136,15 @@ describe('Repo', () => {
     expect(() => ins.run()).toThrow()
   })
 
+  it('getMessage e setAudioPath', () => {
+    repo.upsertContact({ jid: JID_A })
+    repo.insertMessage(msg({ id: 'a1', kind: 'audio', text: null, durationSec: 5 }))
+    expect(repo.getMessage('nada')).toBeNull()
+    expect(repo.getMessage('a1')).toMatchObject({ id: 'a1', kind: 'audio', audioPath: null })
+    repo.setAudioPath('a1', '/m/a1.ogg')
+    expect(repo.getMessage('a1')!.audioPath).toBe('/m/a1.ogg')
+  })
+
   it('openDb ativa foreign_keys e é idempotente em arquivo', () => {
     const fk = db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }
     expect(fk.foreign_keys).toBe(1)
