@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { KeyKind, RecentEvent, SaveSettingsInput, SettingsView } from '../../../shared/api'
 import { eventLabel, formatDay, formatTime } from '../format'
+import { DiagnosticsActions } from './Diagnostics'
 
 const KEY_LABEL: Record<KeyKind, string> = { groq: 'Groq', claude: 'Claude', openai: 'OpenAI' }
 const KEY_FIELD = { groq: 'groqKey', claude: 'claudeKey', openai: 'openaiKey' } as const
@@ -135,6 +136,15 @@ export function Settings() {
             Um áudio a cada 4 a 12 segundos, no máximo 300 por hora e 2.000 por dia. Nos primeiros 15 minutos depois de abrir o
             Saga ele anda na metade da velocidade. Isso protege a sua conta e não pode ser alterado.
           </p>
+        </section>
+
+        <section>
+          <h2>Diagnóstico</h2>
+          <p className="muted small">
+            Se algo não funcionar (por exemplo, o QR Code não aparece), copie o diagnóstico e mande para o suporte. Ele traz
+            só as versões e o registro de conexão: nunca as suas mensagens nem as chaves.
+          </p>
+          <DiagnosticsActions />
         </section>
 
         <section>

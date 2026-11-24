@@ -71,7 +71,7 @@ export function StatusBar({ state, onOpenSettings, settingsOpen }: Props) {
       </div>
 
       <div className="status-actions">
-        {needsManualReconnect(conn) && (
+        {(needsManualReconnect(conn) || !!state.startError) && (
           <button type="button" className="btn btn-primary" disabled={busy} onClick={() => run(() => window.saga.manualReconnect())}>
             Reconectar
           </button>

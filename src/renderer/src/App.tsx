@@ -36,7 +36,9 @@ export function App() {
   if (!state || wizard === null) return <div className="boot" role="status">Carregando…</div>
   if (wizard) return <SetupWizard state={state} onFinish={() => setWizard(false)} />
 
-  const alert = connAlert(state.conn)
+  const alert = state.startError
+    ? `O Saga não conseguiu iniciar a conexão com o WhatsApp (${state.startError}). Clique em Reconectar para tentar de novo; se continuar, copie o diagnóstico em Configurações e mande para o suporte.`
+    : connAlert(state.conn)
   return (
     <div className="app">
       <StatusBar state={state} settingsOpen={settingsOpen} onOpenSettings={() => setSettingsOpen((o) => !o)} />

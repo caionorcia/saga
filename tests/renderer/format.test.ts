@@ -29,7 +29,7 @@ describe('connAlert', () => {
   it('restrição tem texto de alerta; conectado não tem', () => {
     expect(connAlert('stopped_restricted')).toMatch(/restrição/)
     expect(connAlert('stopped_restricted')).toMatch(/Reconectar/)
-    expect(connAlert('stopped_outdated')).toMatch(/Atualize/)
+    expect(connAlert('stopped_outdated')).toMatch(/atualize o Saga/)
     expect(connAlert('stopped_replaced')).toMatch(/outro/)
     expect(connAlert('stopped_logged_out')).toMatch(/QR Code/)
     expect(connAlert('open')).toBeNull()

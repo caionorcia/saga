@@ -98,7 +98,7 @@ export function connAlert(conn: AppState['conn']): string | null {
     case 'stopped_restricted':
       return 'O WhatsApp sinalizou uma restrição na sua conta. O Saga parou tudo e não vai tentar de novo sozinho. Use o WhatsApp só pelo celular por alguns dias; quando quiser voltar a usar o Saga, clique em Reconectar.'
     case 'stopped_outdated':
-      return 'O WhatsApp mudou e esta versão do Saga ficou desatualizada. Atualize o Saga para a versão mais nova e depois clique em Reconectar.'
+      return 'O WhatsApp recusou a conexão mesmo depois de o Saga buscar a versão mais nova do WhatsApp Web. Clique em Reconectar para tentar de novo; se continuar, atualize o Saga para a versão mais nova.'
     case 'stopped_replaced':
       return 'O WhatsApp deste computador foi conectado em outro lugar. O Saga parou para não disputar a conexão. Feche o outro aparelho ou programa e clique em Reconectar.'
     case 'stopped_logged_out':
@@ -107,6 +107,27 @@ export function connAlert(conn: AppState['conn']): string | null {
       return null
   }
 }
+
+/**
+ * Por que o QR Code não está na tela (passo do QR e painel de vincular de novo); null quando não há problema
+ * a explicar. Paradas definitivas usam o mesmo texto do alerta da tela principal.
+ */
+export function qrProblem(conn: AppState['conn']): string | null {
+  const alert = connAlert(conn)
+  // aqui o botão se chama "Tentar de novo"
+  if (alert) return alert.replace(/Reconectar/g, 'Tentar de novo')
+  switch (conn) {
+    case 'manual_retry_needed':
+      return 'O Saga tentou falar com o WhatsApp várias vezes, sem sucesso, e parou para não insistir. Confira a internet e clique em Tentar de novo.'
+    case 'waiting_retry':
+      return 'A conexão com o WhatsApp falhou. O Saga vai tentar de novo sozinho; se preferir, clique em Tentar de novo.'
+    default:
+      return null
+  }
+}
+
+/** Depois deste tempo sem QR (e sem conexão), o passo do QR avisa que está demorando. */
+export const QR_SLOW_MS = 45_000
 
 /** "Baixando áudios: 12 de 340" (só os downloads do lote atual); null sem downloads pendentes. */
 export function downloadProgress(d: AppState['downloads'], paused: boolean): string | null {
@@ -148,6 +169,10 @@ const EVENT_LABELS: Record<string, string> = {
   transcribe_offline: 'Sem internet: transcrição adiada',
   update_error: 'Erro ao atualizar o Saga',
   wa_open: 'WhatsApp conectado',
+  wa_qr: 'QR Code gerado',
+  wa_closed: 'Conexão com o WhatsApp caiu',
+  wa_connect_error: 'Falha ao conectar ao WhatsApp',
+  wa_outdated_retry: 'WhatsApp pediu versão nova: tentando de novo',
   wa_error: 'Erro na conexão com o WhatsApp',
   wa_bad_session: 'Sessão do WhatsApp refeita',
   wa_bad_session_restored: 'Sessão do WhatsApp restaurada do backup',

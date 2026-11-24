@@ -197,3 +197,16 @@ a { color: var(--accent-dark); }
 
 /* resumo feito com áudios ainda sem transcrição */
 .pending-note { margin-top: 6px; color: #7a5410; }
+
+/* passo do QR: situação da conexão, motivo e detalhes */
+.qr-conn { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; color: var(--muted); }
+.qr-conn .dot { width: 10px; height: 10px; }
+.qr-problem { border: 1px solid #f3c2bc; border-radius: var(--radius); margin: 8px 0; font-weight: 500; }
+.qr-problem p { margin: 0 0 8px; }
+.qr-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 6px; }
+.qr-details { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: #fafcfc; }
+.qr-details h3 { margin: 0 0 6px; font-size: 14px; }
+.qr-details .events time { min-width: 48px; }
+.qr-details .events code { display: inline; }
+.diag-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.diag-actions p { flex-basis: 100%; margin: 0; }
