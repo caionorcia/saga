@@ -98,3 +98,83 @@ describe('Suggestions', () => {
     await waitFor(() => expect(saga.regenerate).toHaveBeenCalledWith(JID))
   })
 })
+
+describe('Suggestions: atualização silenciosa', () => {
+  const fire = async (ms = 2100) => {
+    await act(async () => {
+      vi.advanceTimersByTime(ms)
+    })
+  }
+  const withMessageCallback = () => {
+    let cb: () => void = () => {}
+    saga.onMessages.mockImplementation(((_j: string, f: () => void) => {
+      cb = f
+      return () => {}
+    }) as never)
+    return () => cb()
+  }
+
+  it('mensagem nova não apaga o texto editado: mostra o aviso', async () => {
+    let notify: () => void = () => {}
+    install(async () => ({ ok: true, analysis }))
+    saga.onMessages.mockImplementation(((_j: string, f: () => void) => {
+      notify = f
+      return () => {}
+    }) as never)
+    render(<Suggestions jid={JID} />)
+    const box = (await screen.findAllByRole('textbox'))[0] as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'Meu texto editado' } })
+    saga.getAnalysis.mockResolvedValue({
+      ok: true,
+      analysis: { ...analysis, lastMsgId: 'M2', suggestions: ['Nova A', 'Nova B'] }
+    })
+    vi.useFakeTimers()
+    notify()
+    await fire()
+    expect((screen.getAllByRole('textbox')[0] as HTMLTextAreaElement).value).toBe('Meu texto editado')
+    expect(screen.getByText(/Chegou mensagem nova/)).toBeTruthy()
+  })
+
+  it('sem edições, a mensagem nova troca as sugestões em silêncio', async () => {
+    let notify: () => void = () => {}
+    saga.onMessages.mockImplementation(((_j: string, f: () => void) => {
+      notify = f
+      return () => {}
+    }) as never)
+    render(<Suggestions jid={JID} />)
+    await screen.findAllByRole('textbox')
+    saga.getAnalysis.mockResolvedValue({
+      ok: true,
+      analysis: { ...analysis, lastMsgId: 'M2', suggestions: ['Nova A', 'Nova B'] }
+    })
+    vi.useFakeTimers()
+    notify()
+    await fire()
+    expect((screen.getAllByRole('textbox')[0] as HTMLTextAreaElement).value).toBe('Nova A')
+    expect(screen.queryByText(/Chegou mensagem nova/)).toBeNull()
+  })
+
+  it('atualização silenciosa não atropela o pedido em andamento (não fica preso em "Gerando…")', async () => {
+    let rejectFirst: (e: Error) => void = () => {}
+    install(() => new Promise<AnalysisResult>((_, rej) => (rejectFirst = rej)))
+    const notify = withMessageCallback()
+    render(<Suggestions jid={JID} />)
+    expect(screen.getByText('Gerando sugestões…')).toBeTruthy()
+    vi.useFakeTimers()
+    notify()
+    await fire()
+    expect(saga.getAnalysis).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      rejectFirst(new Error('falhou'))
+    })
+    expect(screen.getByRole('button', { name: 'Tentar de novo' })).toBeTruthy()
+  })
+
+  it('erro de chave oferece "Abrir Configurações"', async () => {
+    install(async () => ({ ok: false, code: 'missing_key', message: 'Configure a chave.', provider: 'groq' }))
+    const open = vi.fn()
+    render(<Suggestions jid={JID} onOpenSettings={open} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Abrir Configurações' }))
+    expect(open).toHaveBeenCalled()
+  })
+})

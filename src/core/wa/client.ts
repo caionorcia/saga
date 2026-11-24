@@ -116,6 +116,7 @@ export class WhatsAppClient extends EventEmitter {
   private running = false
   private status: ConnState | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private retryAtMs: number | null = null
   private stableTimer: ReturnType<typeof setTimeout> | null = null
   /** já tentou restaurar o backup desde a última conexão estável */
   private restoredOnce = false
@@ -146,6 +147,11 @@ export class WhatsAppClient extends EventEmitter {
 
   getStatus(): ConnState | null {
     return this.status
+  }
+
+  /** quando a próxima tentativa de reconexão está agendada (epoch ms), ou null */
+  getRetryAt(): number | null {
+    return this.status === 'waiting_retry' ? this.retryAtMs : null
   }
 
   isDiskLow(): boolean {
@@ -230,6 +236,7 @@ export class WhatsAppClient extends EventEmitter {
   private clearRetry(): void {
     if (this.retryTimer) clearTimeout(this.retryTimer)
     this.retryTimer = null
+    this.retryAtMs = null
   }
 
   private clearDiskTimer(): void {
@@ -276,8 +283,10 @@ export class WhatsAppClient extends EventEmitter {
 
   private retryIn(ms: number): void {
     this.clearRetry()
+    this.retryAtMs = this.deps.clock.now() + ms
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null
+      this.retryAtMs = null
       this.schedule(() => this.connect())
     }, ms)
   }

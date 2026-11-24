@@ -21,6 +21,8 @@ export interface AppState {
   conn: ConnState
   /** data URL (PNG) do QR enquanto `conn === 'needs_qr'` */
   qr: string | null
+  /** `conn === 'waiting_retry'`: quando a próxima tentativa acontece (epoch ms); senão null */
+  retryAt: number | null
   /** `queue.failed > 0` → "Tentar de novo" (`retryFailedJobs`) */
   queue: QueueStats
   /** pausado pelo usuário (ou por desconexão definitiva) → "Retomar" (`resumeAll`) */

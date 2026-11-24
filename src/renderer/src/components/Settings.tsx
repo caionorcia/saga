@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { KeyKind, RecentEvent, SaveSettingsInput, SettingsView } from '../../../shared/api'
-import { formatDay, formatTime } from '../format'
+import { eventLabel, formatDay, formatTime } from '../format'
 
 const KEY_LABEL: Record<KeyKind, string> = { groq: 'Groq', claude: 'Claude', openai: 'OpenAI' }
 const KEY_FIELD = { groq: 'groqKey', claude: 'claudeKey', openai: 'openaiKey' } as const
@@ -149,8 +149,13 @@ export function Settings() {
                     {formatDay(e.ts)}, {formatTime(e.ts)}
                   </time>
                   <span>
-                    {e.kind}
-                    {e.detail ? ` — ${e.detail}` : ''}
+                    {eventLabel(e.kind)}
+                    {e.detail && (
+                      <details>
+                        <summary>detalhes</summary>
+                        <code>{e.detail}</code>
+                      </details>
+                    )}
                   </span>
                 </li>
               ))}
@@ -188,6 +193,7 @@ function Radio<T extends string>({
 function KeyRow({ kind, configured, onSave }: { kind: KeyKind; configured: boolean; onSave: (key: string) => Promise<boolean> }) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState('')
+  const [confirming, setConfirming] = useState(false)
   const [test, setTest] = useState<'idle' | 'testing' | 'ok' | 'bad'>('idle')
   const id = `cfg-key-${kind}`
 
@@ -207,10 +213,28 @@ function KeyRow({ kind, configured, onSave }: { kind: KeyKind; configured: boole
             {configured ? 'Trocar' : 'Adicionar'}
           </button>
         )}
-        {configured && !editing && (
-          <button type="button" className="btn btn-small" onClick={() => void onSave('')}>
+        {configured && !editing && !confirming && (
+          <button type="button" className="btn btn-small" onClick={() => setConfirming(true)}>
             Remover
           </button>
+        )}
+        {confirming && (
+          <span className="confirm">
+            Remover a chave do {KEY_LABEL[kind]}?
+            <button
+              type="button"
+              className="btn btn-small btn-danger"
+              onClick={() => {
+                setConfirming(false)
+                void onSave('')
+              }}
+            >
+              Sim, remover
+            </button>
+            <button type="button" className="btn btn-small" onClick={() => setConfirming(false)}>
+              Cancelar
+            </button>
+          </span>
         )}
       </div>
       {editing && (

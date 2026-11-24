@@ -43,6 +43,8 @@ export interface WaClientLike {
   manualReconnect(): Promise<void>
   onResumeFromSleep(sleptMs: number): void
   getStatus(): ConnState | null
+  /** próxima tentativa de reconexão (epoch ms), ou null */
+  getRetryAt?(): number | null
   isDiskLow(): boolean
   recheckDisk(): Promise<void>
 }
@@ -255,6 +257,7 @@ export class SagaService extends EventEmitter {
     return {
       conn: this.wa.getStatus() ?? 'connecting',
       qr: this.qr,
+      retryAt: this.wa.getRetryAt?.() ?? null,
       queue: this.queue.stats(),
       paused: this.queue.isPaused(),
       diskLow: this.wa.isDiskLow(),

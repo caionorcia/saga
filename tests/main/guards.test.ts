@@ -51,6 +51,16 @@ describe('validateIpcArgs', () => {
   const ok = (m: any, ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).not.toThrow()
   const bad = (m: any, ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).toThrow(InvalidIpcArgsError)
 
+  it('recentEvents: inteiro entre 1 e 200', () => {
+    ok('recentEvents', 20)
+    bad('recentEvents', 0)
+    bad('recentEvents', -1)
+    bad('recentEvents', 1.5)
+    bad('recentEvents', 201)
+    bad('recentEvents', '20')
+    bad('recentEvents')
+  })
+
   it('testKey: tipo de chave conhecido e chave em texto', () => {
     ok('testKey', 'groq', 'k')
     ok('testKey', 'claude', 'k')

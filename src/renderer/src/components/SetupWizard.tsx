@@ -63,6 +63,7 @@ function KeyStep({ kind, onNext, onBack }: { kind: Extract<KeyKind, 'groq' | 'cl
   const [test, setTest] = useState<'idle' | 'testing' | 'ok' | 'bad'>('idle')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [keepGroq, setKeepGroq] = useState(false)
 
   const runTest = async () => {
     setTest('testing')
@@ -78,7 +79,7 @@ function KeyStep({ kind, onNext, onBack }: { kind: Extract<KeyKind, 'groq' | 'cl
     setSaving(true)
     setError(null)
     try {
-      const r = await window.saga.saveSettings(isGroq ? { groqKey: key.trim() } : { claudeKey: key.trim(), provider: 'claude' })
+      const r = await window.saga.saveSettings(isGroq ? { groqKey: key.trim() } : { claudeKey: key.trim(), provider: keepGroq ? 'groq' : 'claude' })
       if (r.ok) onNext()
       else setError(r.message)
     } catch {
@@ -132,6 +133,18 @@ function KeyStep({ kind, onNext, onBack }: { kind: Extract<KeyKind, 'groq' | 'cl
         {test === 'ok' && <span className="ok-text" role="status">Chave funcionando ✓</span>}
         {test === 'bad' && <span className="field-error" role="status">Essa chave não funcionou. Confira se copiou inteira.</span>}
       </div>
+      {!isGroq && (
+        <>
+          <p className="muted small">
+            Ao salvar a chave do Claude, ele passa a escrever as sugestões (pago, por uso). Se preferir continuar com o Groq
+            (grátis), marque a opção abaixo; a chave fica guardada para você trocar depois.
+          </p>
+          <label className="check">
+            <input type="checkbox" checked={keepGroq} onChange={(e) => setKeepGroq(e.target.checked)} />
+            Continuar usando o Groq (grátis) para as sugestões
+          </label>
+        </>
+      )}
       {error && <p className="field-error" role="alert">{error}</p>}
       <div className="wizard-actions">
         <button type="button" className="btn" onClick={onBack}>

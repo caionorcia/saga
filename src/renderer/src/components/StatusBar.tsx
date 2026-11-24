@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { AppState } from '../../../shared/api'
 import { connectionLabel, formatUsd, needsManualReconnect } from '../format'
 
@@ -11,7 +11,14 @@ interface Props {
 export function StatusBar({ state, onOpenSettings, settingsOpen }: Props) {
   const [busy, setBusy] = useState(false)
   const { conn, paused, diskLow, queue } = state
-  const label = connectionLabel(conn, paused)
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (conn !== 'waiting_retry') return
+    setNow(Date.now())
+    const t = setInterval(() => setNow(Date.now()), 3_000)
+    return () => clearInterval(t)
+  }, [conn])
+  const label = connectionLabel(conn, paused, state.retryAt, now)
   const remaining = queue.pending + queue.running
   const total = queue.done + remaining
   const resumeMode = paused || diskLow
@@ -39,12 +46,13 @@ export function StatusBar({ state, onOpenSettings, settingsOpen }: Props) {
       <div className="status-info">
         {remaining > 0 && (
           <span>
-            Baixando áudios: {queue.done} de {total}
+            {resumeMode ? 'Downloads pausados' : 'Baixando áudios'}
+            {resumeMode ? ` (${queue.done} de ${total})` : `: ${queue.done} de ${total}`}
           </span>
         )}
         {queue.failed > 0 && (
           <span className="status-failed">
-            {queue.failed} com falha
+            {queue.failed} {queue.failed === 1 ? 'áudio' : 'áudios'} com falha
             <button type="button" className="btn btn-small" disabled={busy} onClick={() => run(() => window.saga.retryFailedJobs())}>
               Tentar de novo
             </button>

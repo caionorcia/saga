@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Analysis, AppState, Contact } from '../../shared/api'
 import { ContactList } from './components/ContactList'
 import { Conversation } from './components/Conversation'
 import { Settings } from './components/Settings'
 import { SetupWizard } from './components/SetupWizard'
 import { StatusBar } from './components/StatusBar'
-import { Suggestions } from './components/Suggestions'
+import { Suggestions, type DraftStore } from './components/Suggestions'
 
 export function App() {
   const [state, setState] = useState<AppState | null>(null)
@@ -37,12 +37,25 @@ export function App() {
   return (
     <div className="app">
       <StatusBar state={state} settingsOpen={settingsOpen} onOpenSettings={() => setSettingsOpen((o) => !o)} />
-      {settingsOpen ? <Settings /> : <Main selected={selected} onSelect={setSelected} />}
+      {/* a tela de conversas continua montada (escondida) para não perder rascunhos nem a posição */}
+      <Main hidden={settingsOpen} selected={selected} onSelect={setSelected} onOpenSettings={() => setSettingsOpen(true)} />
+      {settingsOpen && <Settings />}
     </div>
   )
 }
 
-function Main({ selected, onSelect }: { selected: string | null; onSelect: (jid: string | null) => void }) {
+function Main({
+  hidden,
+  selected,
+  onSelect,
+  onOpenSettings
+}: {
+  hidden: boolean
+  selected: string | null
+  onSelect: (jid: string | null) => void
+  onOpenSettings: () => void
+}) {
+  const drafts = useRef<DraftStore>(new Map())
   const [contact, setContact] = useState<Contact | null>(null)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
 
@@ -69,7 +82,7 @@ function Main({ selected, onSelect }: { selected: string | null; onSelect: (jid:
   useEffect(() => setAnalysis(null), [selected])
 
   return (
-    <div className="columns">
+    <div className="columns" hidden={hidden}>
       <ContactList selected={selected} onSelect={onSelect} />
       {contact ? (
         <Conversation key={contact.jid} contact={contact} analysis={analysis} />
@@ -81,7 +94,7 @@ function Main({ selected, onSelect }: { selected: string | null; onSelect: (jid:
       <aside className="suggestions" aria-label="Sugestões de resposta">
         <h2>Sugestões de resposta</h2>
         <p className="muted small">Edite como quiser, depois copie e cole no WhatsApp. O Saga não envia nada.</p>
-        {contact ? <Suggestions key={contact.jid} jid={contact.jid} onAnalysis={setAnalysis} /> : <p className="empty">As sugestões aparecem aqui.</p>}
+        {contact ? <Suggestions key={contact.jid} jid={contact.jid} drafts={drafts.current} onAnalysis={setAnalysis} onOpenSettings={onOpenSettings} /> : <p className="empty">As sugestões aparecem aqui.</p>}
       </aside>
     </div>
   )

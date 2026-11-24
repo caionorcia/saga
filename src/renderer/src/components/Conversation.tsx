@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Analysis, Contact, MessageView } from '../../../shared/api'
 import { formatDayHeading, formatDuration, formatTime, initials, sameDay } from '../format'
 
@@ -9,7 +9,9 @@ interface Props {
 
 export function Conversation({ contact, analysis }: Props) {
   const [messages, setMessages] = useState<MessageView[] | null>(null)
-  const endRef = useRef<HTMLDivElement>(null)
+  const threadRef = useRef<HTMLDivElement>(null)
+  /** o mentor está lendo o fim da conversa: acompanhar mensagens novas e mudanças de altura */
+  const pinned = useRef(true)
   const jid = contact.jid
 
   useEffect(() => {
@@ -28,9 +30,19 @@ export function Conversation({ contact, analysis }: Props) {
     }
   }, [jid])
 
+  const toBottom = () => {
+    const el = threadRef.current
+    if (el && pinned.current) el.scrollTop = el.scrollHeight
+  }
+  useLayoutEffect(toBottom, [messages, analysis])
   useEffect(() => {
-    endRef.current?.scrollIntoView?.({ block: 'end' })
-  }, [messages])
+    const el = threadRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    // o cartão de resumo cresce depois e encolhe a área das mensagens
+    const ro = new ResizeObserver(toBottom)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   return (
     <section className="conversation" aria-label={`Conversa com ${contact.displayName}`}>
@@ -46,10 +58,19 @@ export function Conversation({ contact, analysis }: Props) {
 
       <div className="summary-card" aria-live="polite">
         <h3>O que a pessoa quer</h3>
-        <p>{analysis ? analysis.summary : <span className="muted">Resumo a caminho…</span>}</p>
+        <p>{analysis && analysis.jid === jid ? analysis.summary : <span className="muted">Resumo a caminho…</span>}</p>
       </div>
 
-      <div className="thread" tabIndex={0} aria-label="Mensagens">
+      <div
+        className="thread"
+        ref={threadRef}
+        tabIndex={0}
+        aria-label="Mensagens"
+        onScroll={(e) => {
+          const el = e.currentTarget
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+        }}
+      >
         {messages === null && <p className="empty">Carregando mensagens…</p>}
         {messages?.length === 0 && <p className="empty">Nenhuma mensagem dos últimos 30 dias.</p>}
         {messages?.map((m, i) => (
@@ -62,7 +83,6 @@ export function Conversation({ contact, analysis }: Props) {
             <Bubble m={m} />
           </Fragment>
         ))}
-        <div ref={endRef} />
       </div>
     </section>
   )

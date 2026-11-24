@@ -16,6 +16,7 @@ import type {
 export const DEFAULT_STATE: AppState = {
   conn: 'open',
   qr: null,
+  retryAt: null,
   queue: { pending: 0, running: 0, failed: 1, done: 340, paused: false, nextRunAt: null },
   paused: false,
   diskLow: false,
@@ -233,6 +234,7 @@ export async function installFakeSaga(): Promise<void> {
     const QRCode = (await import('qrcode')).default
     patch = { setupDone: false, conn: 'needs_qr', qr: await QRCode.toDataURL('saga-demo-qr-nao-e-um-codigo-real', { margin: 1, width: 240 }), ...patch }
   }
+  if (patch.conn === 'waiting_retry' && patch.retryAt === undefined) patch.retryAt = Date.now() + 2 * 60_000
   const ctl = createFakeSaga({ state: patch, aiDelayMs: 600 })
   window.saga = ctl.api
   window.__sagaFake = ctl

@@ -126,6 +126,22 @@ describe('SagaService', () => {
     rmSync(tmp, { recursive: true, force: true })
   })
 
+  describe('retryAt', () => {
+    it('expõe quando a reconexão está agendada (e null sem espera)', async () => {
+      await service.start()
+      expect(service.state().retryAt).toBeNull()
+      last().emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: Object.assign(new Error('x'), { output: { statusCode: 428 } }) }
+      })
+      await client().whenIdle()
+      const st = service.state()
+      expect(st.conn).toBe('waiting_retry')
+      expect(st.retryAt).toBeGreaterThan(NOW)
+      expect(st.retryAt).toBeLessThanOrEqual(NOW + 12_000)
+    })
+  })
+
   describe('start()', () => {
     it('recoverAfterCrash, aquecimento em todos os 4 limitadores, cliente e fila; nenhuma chamada de IA', async () => {
       const order: string[] = []

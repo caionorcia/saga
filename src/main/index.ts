@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, nativeImage, net, powerMonitor, protocol, shell, Tray } from 'electron'
-import { existsSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -105,7 +105,7 @@ function main(): void {
 
   app.whenReady().then(async () => {
     // `SAGA_FAKE_WA=1`: sem rede, com dados de demonstração num banco temporário (nunca no banco real)
-    const fake = process.env['SAGA_FAKE_WA'] === '1'
+    const fake = process.env['SAGA_FAKE_WA'] === '1' && !app.isPackaged
     const FakeWa = fake ? (await import('./fakeWa')).FakeWaClient : null
     const data = fake ? mkdtempSync(join(tmpdir(), 'saga-fake-')) : app.getPath('userData')
     const mediaDir = join(data, 'media')
@@ -180,6 +180,7 @@ function main(): void {
           } catch {
             // já fechado
           }
+          if (fake) rmSync(data, { recursive: true, force: true })
           app.quit()
         })
     })
