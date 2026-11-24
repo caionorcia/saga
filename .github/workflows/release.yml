@@ -33,4 +33,4 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           gh release create "v$VERSION" dist/Saga-Setup-$VERSION.exe dist/Saga-Setup-$VERSION.exe.blockmap dist/latest.yml \
-            --target "$GITHUB_SHA" --title "Saga $VERSION" --notes "Saga $VERSION — instale com o arquivo Saga-Setup-$VERSION.exe
+            --target "$GITHUB_SHA" --title "Saga $VERSION" --notes "Saga $VERSION — instale com o arquivo Saga-Setup-$VERSION.exe"
