@@ -72,6 +72,8 @@ describe('WhatsAppClient', () => {
   let statuses: ConnState[]
   let download: ReturnType<typeof vi.fn>
   let diskFree: boolean
+  let diskGate: Promise<boolean> | null
+  let diskChecks: number
   let restoreSpy: ReturnType<typeof vi.fn<(r: boolean) => void>>
 
   const last = () => sockets[sockets.length - 1]
@@ -103,6 +105,8 @@ describe('WhatsAppClient', () => {
     sockets = []
     statuses = []
     diskFree = true
+    diskGate = null
+    diskChecks = 0
     download = vi.fn(async () => Buffer.from('OggS-fake-audio'))
     restoreSpy = vi.fn<(r: boolean) => void>()
     client = new WhatsAppClient({
@@ -131,7 +135,10 @@ describe('WhatsAppClient', () => {
         return a
       },
       download: download as any,
-      hasFreeSpace: async () => diskFree
+      hasFreeSpace: async () => {
+        diskChecks++
+        return diskGate ?? diskFree
+      }
     })
     client.on('status', (s: ConnState) => statuses.push(s))
     await client.start()
@@ -516,6 +523,83 @@ describe('WhatsAppClient', () => {
       await client.whenIdle()
       await advance(3_600_000)
       expect(sockets).toHaveLength(1)
+    })
+  })
+
+  describe('disco', () => {
+    const kinds = () => repo.recentEvents(50).map((e) => e.kind)
+
+    it('stop() enquanto onOpen mede o disco: não despausa os downloads', async () => {
+      let release!: (v: boolean) => void
+      diskGate = new Promise<boolean>((r) => (release = r))
+      last().emit('connection.update', { connection: 'open' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(diskChecks).toBe(1)
+      const stopping = client.stop()
+      release(true)
+      await stopping
+      expect(queue.isTypePaused('download_audio')).toBe(true)
+    })
+
+    it('disk_low só na transição: reconectar com o disco ainda cheio não repete o evento', async () => {
+      diskFree = false
+      await emit('connection.update', { connection: 'open' })
+      expect(client.isDiskLow()).toBe(true)
+      await close(428)
+      await advance(10_000)
+      await emit('connection.update', { connection: 'open' })
+      expect(kinds().filter((k) => k === 'disk_low')).toHaveLength(1)
+      expect(queue.isTypePaused('download_audio')).toBe(true)
+    })
+
+    it('a cada 10 min conectado re-checa o disco: espaço de volta → retoma downloads e avisa', async () => {
+      const disk: boolean[] = []
+      client.on('disk', (low: boolean) => disk.push(low))
+      diskFree = false
+      await emit('connection.update', { connection: 'open' })
+      diskFree = true
+      await advance(9 * 60_000)
+      expect(queue.isTypePaused('download_audio')).toBe(true)
+      await advance(60_000)
+      expect(queue.isTypePaused('download_audio')).toBe(false)
+      expect(client.isDiskLow()).toBe(false)
+      expect(kinds()).toContain('disk_ok')
+      expect(disk).toEqual([true, false])
+    })
+
+    it('a checagem periódica também pausa se o disco encher com a conexão aberta', async () => {
+      await emit('connection.update', { connection: 'open' })
+      expect(queue.isTypePaused('download_audio')).toBe(false)
+      diskFree = false
+      await advance(10 * 60_000)
+      expect(queue.isTypePaused('download_audio')).toBe(true)
+      expect(kinds()).toContain('disk_low')
+    })
+
+    it('sem conexão aberta não há checagem periódica', async () => {
+      await emit('connection.update', { connection: 'open' })
+      await close(428)
+      const before = diskChecks
+      await advance(20 * 60_000)
+      // só a reconexão (connecting, sem open) aconteceu: nenhuma medição nova
+      expect(diskChecks).toBe(before)
+    })
+
+    it('ao acordar da suspensão re-checa o disco', async () => {
+      diskFree = false
+      await emit('connection.update', { connection: 'open' })
+      diskFree = true
+      client.onResumeFromSleep(1_000)
+      await client.whenIdle()
+      expect(queue.isTypePaused('download_audio')).toBe(false)
+    })
+
+    it('recheckDisk(): re-checa na hora (botão Retomar)', async () => {
+      diskFree = false
+      await emit('connection.update', { connection: 'open' })
+      diskFree = true
+      await client.recheckDisk()
+      expect(queue.isTypePaused('download_audio')).toBe(false)
     })
   })
 

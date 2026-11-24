@@ -271,6 +271,53 @@ describe('JobQueue', () => {
     expect(j.lastError).toBe('sem espaço')
   })
 
+  it('onJobFailed: avisa só na falha definitiva (3ª tentativa), com o job e o payload', async () => {
+    const failed: Array<{ type: string; payload: unknown; attempts: number }> = []
+    const off = q.onJobFailed((j) => failed.push({ type: j.type, payload: j.payload, attempts: j.attempts }))
+    q.register('fetch_profile', async () => {
+      throw new Error('boom')
+    })
+    q.enqueue('fetch_profile', 'p', { jid: 'x' })
+    await q.tick()
+    clock.advance(30_000)
+    await q.tick()
+    expect(failed).toEqual([])
+    clock.advance(120_000)
+    await q.tick()
+    expect(failed).toEqual([{ type: 'fetch_profile', payload: { jid: 'x' }, attempts: 3 }])
+    off()
+    q.retryFailed(repo.listJobs('failed')[0].id)
+    await q.tick()
+    clock.advance(30_000)
+    await q.tick()
+    clock.advance(120_000)
+    await q.tick()
+    expect(failed).toHaveLength(1)
+  })
+
+  it('onJobFailed: também na falha definitiva por queda (recoverAfterCrash); erro no ouvinte não quebra a fila', () => {
+    const seen: number[] = []
+    q.onJobFailed(() => {
+      throw new Error('ouvinte com defeito')
+    })
+    q.onJobFailed((j) => seen.push(j.attempts))
+    q.enqueue('download_audio', 'c', { id: 'c' })
+    for (let i = 0; i < 3; i++) {
+      const [j] = repo.listJobs('pending')
+      repo.markJobRunning(j.id)
+      expect(() => q.recoverAfterCrash()).not.toThrow()
+    }
+    expect(seen).toEqual([3])
+  })
+
+  it('onJobDone: avisa quando um job termina com sucesso', async () => {
+    const done: unknown[] = []
+    q.onJobDone((j) => done.push(j.payload))
+    q.enqueue('download_audio', 'd', { id: 'd' })
+    await q.tick()
+    expect(done).toEqual([{ id: 'd' }])
+  })
+
   it('start/stop: o laço roda jobs sem girar em falso', async () => {
     const { systemClock } = await import('../../../src/core/clock')
     const rq = new JobQueue(repo, systemClock, {

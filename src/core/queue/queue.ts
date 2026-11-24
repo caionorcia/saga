@@ -5,6 +5,7 @@ import type { RateLimiter } from './limiter'
 export type JobType = 'download_audio' | 'transcribe' | 'fetch_profile'
 export type Handler = (payload: any) => Promise<void>
 export type TickResult = 'ran' | 'idle' | 'paused' | 'waiting'
+export type JobListener = (job: JobRow) => void
 
 export interface QueueStats {
   pending: number
@@ -46,6 +47,8 @@ export class JobQueue {
   private timer: ReturnType<typeof setTimeout> | null = null
   private loop: Promise<void> | null = null
   private ticking: Promise<TickResult> | null = null
+  private failedListeners = new Set<JobListener>()
+  private doneListeners = new Set<JobListener>()
 
   constructor(
     private readonly repo: Repo,
@@ -69,6 +72,29 @@ export class JobQueue {
     const attempts = job.attempts + 1
     const next = attempts >= BACKOFF_MS.length ? null : this.clock.now() + BACKOFF_MS[attempts - 1]
     this.repo.markJobFailed(job.id, attempts, msg, next)
+    if (next === null) this.notify(this.failedListeners, { ...job, status: 'failed', attempts, lastError: msg })
+  }
+
+  /** Avisa quando um job falha de vez (última tentativa). Devolve a função que cancela o aviso. */
+  onJobFailed(cb: JobListener): () => void {
+    this.failedListeners.add(cb)
+    return () => this.failedListeners.delete(cb)
+  }
+
+  /** Avisa quando um job termina com sucesso. Devolve a função que cancela o aviso. */
+  onJobDone(cb: JobListener): () => void {
+    this.doneListeners.add(cb)
+    return () => this.doneListeners.delete(cb)
+  }
+
+  private notify(listeners: Set<JobListener>, job: JobRow): void {
+    for (const cb of listeners) {
+      try {
+        cb(job)
+      } catch {
+        // um ouvinte com defeito não pode travar a fila
+      }
+    }
   }
 
   retryFailed(id: number): void {
@@ -141,6 +167,7 @@ export class JobQueue {
     try {
       await this.handlers.get(job.type as JobType)!(job.payload)
       this.repo.markJobDone(job.id)
+      this.notify(this.doneListeners, { ...job, status: 'done', lastError: null })
     } catch (e) {
       if (e instanceof DeferJobError) {
         this.repo.markJobFailed(job.id, job.attempts, e.message, this.clock.now() + e.delayMs)

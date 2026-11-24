@@ -15,6 +15,7 @@ import makeWASocket, {
 import type { Clock } from '../clock'
 import type { Repo } from '../db/repo'
 import { ONE_GB, hasFreeSpace } from '../disk'
+import { audioFileId } from '../media'
 import type { RateLimiter } from '../queue/limiter'
 import { DeferJobError, type JobQueue } from '../queue/queue'
 import type { NormalizedMessage } from '../types'
@@ -70,6 +71,8 @@ const SLEEP_WARMUP_THRESHOLD_MS = 3_600_000
 /** conexão aberta por este tempo sem cair = estável (escada de reconexão volta ao começo) */
 const STABLE_AFTER_MS = 5 * 60_000
 const RESTART_REQUIRED = 515
+/** com a conexão aberta, mede o disco de novo a cada 10 min */
+const DISK_CHECK_MS = 10 * 60_000
 
 const noop = () => {}
 const silentLogger: any = {
@@ -96,7 +99,8 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
  * Cliente do WhatsApp do mentor como aparelho conectado, SOMENTE LEITURA.
  * Nunca envia mensagens, recibos de leitura nem presença; nunca pede reenvio de mídia.
  *
- * Eventos: `'qr'(dataUrl)`, `'status'(ConnState)`, `'message'(NormalizedMessage)`.
+ * Eventos: `'qr'(dataUrl)`, `'status'(ConnState)`, `'message'(NormalizedMessage)`,
+ * `'disk'(low: boolean)` (só quando muda).
  */
 export class WhatsAppClient extends EventEmitter {
   private readonly policy: ReconnectPolicy
@@ -120,6 +124,9 @@ export class WhatsAppClient extends EventEmitter {
   /** a última queda foi um 515 que reconectou sem contar */
   private last515 = false
   private pausedByConnection = false
+  /** menos de 1 GB livre: downloads pausados até a próxima medição com espaço */
+  private diskLow = false
+  private diskTimer: ReturnType<typeof setTimeout> | null = null
   /** LID (sem dispositivo) → JID de telefone */
   private lidToPn = new Map<string, string>()
   private work: Promise<void> = Promise.resolve()
@@ -141,6 +148,16 @@ export class WhatsAppClient extends EventEmitter {
     return this.status
   }
 
+  isDiskLow(): boolean {
+    return this.diskLow
+  }
+
+  /** Mede o disco agora (botão "Retomar"): com espaço e conexão aberta, retoma os downloads. */
+  async recheckDisk(): Promise<void> {
+    this.schedule(() => this.checkDisk())
+    await this.whenIdle()
+  }
+
   async start(): Promise<void> {
     if (this.running) return
     this.running = true
@@ -152,6 +169,7 @@ export class WhatsAppClient extends EventEmitter {
     this.running = false
     this.clearRetry()
     this.clearStable()
+    this.clearDiskTimer()
     this.dropSocket()
     this.deps.queue.pauseType('download_audio')
     await this.whenIdle()
@@ -173,6 +191,8 @@ export class WhatsAppClient extends EventEmitter {
   /** Chamado ao acordar de suspensão: mais de 1 h dormindo → aquecimento em todos os limitadores. */
   onResumeFromSleep(sleptMs: number): void {
     if (sleptMs > SLEEP_WARMUP_THRESHOLD_MS) for (const l of this.deps.limiters) l.startWarmup()
+    // o disco pode ter mudado enquanto o computador dormia
+    if (this.running) this.schedule(() => this.checkDisk())
   }
 
   /** Resolve quando todo o trabalho enfileirado (eventos do socket, conexão) terminou. */
@@ -198,7 +218,10 @@ export class WhatsAppClient extends EventEmitter {
 
   private setStatus(s: ConnState): void {
     // downloads de mídia só com a conexão aberta (a volta é em onOpen, depois de checar o disco)
-    if (s !== 'open') this.deps.queue.pauseType('download_audio')
+    if (s !== 'open') {
+      this.deps.queue.pauseType('download_audio')
+      this.clearDiskTimer()
+    }
     if (this.status === s) return
     this.status = s
     this.emit('status', s)
@@ -207,6 +230,43 @@ export class WhatsAppClient extends EventEmitter {
   private clearRetry(): void {
     if (this.retryTimer) clearTimeout(this.retryTimer)
     this.retryTimer = null
+  }
+
+  private clearDiskTimer(): void {
+    if (this.diskTimer) clearTimeout(this.diskTimer)
+    this.diskTimer = null
+  }
+
+  /** Próxima medição periódica do disco (só com a conexão aberta). */
+  private armDiskTimer(): void {
+    this.clearDiskTimer()
+    if (!this.running || this.status !== 'open') return
+    this.diskTimer = setTimeout(() => {
+      this.diskTimer = null
+      this.schedule(() => this.checkDisk())
+    }, DISK_CHECK_MS)
+  }
+
+  /** Marca o disco como cheio/com espaço; pausa os downloads se cheio; registra e avisa só na mudança. */
+  private setDiskLow(low: boolean): void {
+    if (low) this.deps.queue.pauseType('download_audio')
+    if (low === this.diskLow) return
+    this.diskLow = low
+    if (low) this.deps.repo.logEvent('disk_low', `menos de 1 GB livre em ${this.deps.mediaDir}`)
+    else this.deps.repo.logEvent('disk_ok', `espaço em disco de volta em ${this.deps.mediaDir}`)
+    this.emit('disk', low)
+  }
+
+  /** Mede o disco; com espaço e conexão aberta, retoma os downloads. Reagenda a medição periódica. */
+  private async checkDisk(): Promise<void> {
+    if (!this.running) return
+    const gen = this.gen
+    const free = await this.hasFreeSpace(this.deps.mediaDir, ONE_GB)
+    // parou ou trocou de socket enquanto media: a medição é velha
+    if (gen !== this.gen || !this.running) return
+    this.setDiskLow(!free)
+    if (free && this.status === 'open') this.deps.queue.resumeType('download_audio')
+    this.armDiskTimer()
   }
 
   private clearStable(): void {
@@ -302,8 +362,10 @@ export class WhatsAppClient extends EventEmitter {
     }
     this.setStatus('open')
     this.deps.repo.logEvent('wa_open', 'conectado')
-    if (await this.hasFreeSpace(this.deps.mediaDir, ONE_GB)) this.deps.queue.resumeType('download_audio')
-    else this.deps.repo.logEvent('disk_low', `menos de 1 GB livre em ${this.deps.mediaDir}`)
+    const gen = this.gen
+    await this.checkDisk()
+    // stop()/manualReconnect() durante a medição: este socket não vale mais
+    if (gen !== this.gen || !this.running) return
     // grava as credenciais atuais antes de copiar: o backup sempre reflete uma sessão que abriu
     await this.auth?.saveCreds()
     await this.auth?.backup()
@@ -464,9 +526,8 @@ export class WhatsAppClient extends EventEmitter {
   private async downloadAudio(payload: { id: string }): Promise<void> {
     const { repo, queue, mediaDir } = this.deps
     if (!(await this.hasFreeSpace(mediaDir, ONE_GB))) {
-      // pausa só os downloads e devolve o job sem gastar tentativa; volta na próxima conexão aberta
-      queue.pauseType('download_audio')
-      repo.logEvent('disk_low', `menos de 1 GB livre em ${mediaDir}`)
+      // pausa só os downloads e devolve o job sem gastar tentativa; voltam na próxima medição com espaço
+      this.setDiskLow(true)
       throw new DeferJobError('espaço em disco abaixo de 1 GB')
     }
     const row = repo.getMessage(payload.id)
@@ -493,7 +554,7 @@ export class WhatsAppClient extends EventEmitter {
         throw e
       }
       await mkdir(mediaDir, { recursive: true })
-      const file = join(mediaDir, `${row.id.replace(/[^A-Za-z0-9_-]/g, '_')}.ogg`)
+      const file = join(mediaDir, `${audioFileId(row.id)}.ogg`)
       await writeFile(`${file}.tmp`, buf)
       await rename(`${file}.tmp`, file)
       repo.setAudioPath(row.id, file)
