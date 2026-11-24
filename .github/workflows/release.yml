@@ -4,6 +4,8 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # disparo manual (Actions › Release › Run workflow): o electron-builder cria a tag v<versão> e o Release
+  workflow_dispatch:
 
 permissions:
   contents: write
