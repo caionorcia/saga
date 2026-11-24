@@ -2,19 +2,21 @@
   "name": "saga",
   "version": "0.1.0",
   "private": true,
+  "author": "Saga",
   "type": "module",
   "description": "Saga - leitor somente leitura do WhatsApp do mentor",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "test": "NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run --environment node",
+    "test": "cross-env NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run --environment node",
     "preview:ui": "vite --config vite.preview.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.13.0",
     "@whiskeysockets/baileys": "7.0.0-rc14",
+    "electron-updater": "6.8.11",
     "qrcode": "1.5.4",
     "react": "18.3.1",
     "react-dom": "18.3.1"
@@ -28,9 +30,12 @@
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",
     "@vitejs/plugin-react": "6.3.0",
+    "cross-env": "10.1.0",
     "electron": "45.4.1",
+    "electron-builder": "26.18.0",
     "electron-vite": "6.0.0",
     "jsdom": "31.0.1",
+    "png-to-ico": "3.0.2",
     "typescript": "7.0.2",
     "vite": "8.3.8",
     "vitest": "5.1.1"

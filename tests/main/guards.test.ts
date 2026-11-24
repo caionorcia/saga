@@ -138,3 +138,9 @@ describe('isAppUrl no Windows (win32)', () => {
     expect(isAppUrl(fileIndex, { indexFile: INDEX }, 'linux')).toBe(true)
   })
 })
+
+describe('downloadUpdate', () => {
+  it('downloadUpdate: sem argumentos', () => {
+    expect(() => validateIpcArgs('downloadUpdate', [])).not.toThrow()
+  })
+})

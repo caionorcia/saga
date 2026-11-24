@@ -190,6 +190,15 @@ describe('SagaService', () => {
   })
 
   describe('estado', () => {
+    it('setUpdate entra no estado e emite', async () => {
+      const states: any[] = []
+      service.onState((s) => states.push(s))
+      expect((await service.getState()).update).toEqual({ status: 'none' })
+      service.setUpdate({ status: 'available', version: '0.2.0' })
+      expect((await service.getState()).update).toEqual({ status: 'available', version: '0.2.0' })
+      await vi.waitFor(() => expect(states.at(-1)?.update.status).toBe('available'))
+    })
+
     it('conn, qr, pausa, custo, provedor; setupDone = chave Groq + WhatsApp já conectou (persistido)', async () => {
       const states: any[] = []
       service.onState((s) => states.push(s))

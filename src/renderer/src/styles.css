@@ -66,6 +66,7 @@ label { font-weight: 600; font-size: 14px; display: block; margin: 12px 0 4px; }
 .status-conn { display: flex; align-items: center; gap: 8px; }
 .status-info { display: flex; align-items: center; gap: 18px; color: var(--muted); font-size: 14px; flex: 1; flex-wrap: wrap; }
 .status-failed { display: inline-flex; align-items: center; gap: 8px; color: var(--bad); font-weight: 600; }
+.status-update { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
 .status-actions { display: flex; gap: 8px; margin-left: auto; }
 .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 .dot-ok { background: #22a755; box-shadow: 0 0 0 3px #d3f1df; }

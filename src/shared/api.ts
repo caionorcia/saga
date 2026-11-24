@@ -13,6 +13,11 @@ export type Analysis = AnalysisRow
 export type SettingsView = Settings
 export type SaveSettingsInput = SettingsPatch
 
+/** Atualização do app: `available` → botão "Atualizar" (`downloadUpdate`); `ready` → instala ao sair. */
+export type UpdateState =
+  | { status: 'none' }
+  | { status: 'available' | 'downloading' | 'ready'; version: string }
+
 export interface AppState {
   /**
    * Botões da interface:
@@ -35,6 +40,7 @@ export interface AppState {
   /** chave Groq configurada e o WhatsApp já conectou alguma vez */
   setupDone: boolean
   provider: Provider
+  update: UpdateState
 }
 
 export interface MessageView {
@@ -114,6 +120,8 @@ export interface SagaApi {
   manualReconnect(): Promise<void>
   /** devolve quantos jobs voltaram para a fila */
   retryFailedJobs(): Promise<number>
+  /** baixa a nova versão (instala ao fechar o app); sem efeito se não houver atualização */
+  downloadUpdate(): Promise<void>
 
   getSettings(): Promise<SettingsView>
   saveSettings(patch: SaveSettingsInput): Promise<SaveSettingsResult>
@@ -141,6 +149,7 @@ export const INVOKE_METHODS = [
   'resumeAll',
   'manualReconnect',
   'retryFailedJobs',
+  'downloadUpdate',
   'getSettings',
   'saveSettings',
   'testKey',

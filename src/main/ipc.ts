@@ -13,6 +13,8 @@ export interface IpcOptions {
   onRefused?: (method: string, frameUrl: string | null) => void
   /** depois de salvar as configurações (ex.: abrir com o Windows) */
   onSettingsSaved?: () => void
+  /** o usuário clicou em "Atualizar" */
+  onDownloadUpdate?: () => Promise<void>
 }
 
 /** Liga cada método de `window.saga` ao serviço e repassa os eventos do serviço para a janela. */
@@ -32,6 +34,9 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     resumeAll: () => service.resumeAll(),
     manualReconnect: () => service.manualReconnect(),
     retryFailedJobs: () => service.retryFailedJobs(),
+    downloadUpdate: async () => {
+      await opts.onDownloadUpdate?.()
+    },
     getSettings: () => service.getSettings(),
     saveSettings: async (patch) => {
       const r = await service.saveSettings(patch ?? {})

@@ -23,7 +23,8 @@ export const DEFAULT_STATE: AppState = {
   transcribePaused: false,
   costTodayUsd: 0,
   setupDone: true,
-  provider: 'groq'
+  provider: 'groq',
+  update: { status: 'none' }
 }
 
 export interface FakeControl {
@@ -175,6 +176,11 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     },
     manualReconnect: async () => {
       state.conn = 'connecting'
+      emitState()
+    },
+    downloadUpdate: async () => {
+      if (state.update.status !== 'available') return
+      state.update = { status: 'ready', version: state.update.version }
       emitState()
     },
     retryFailedJobs: async () => {

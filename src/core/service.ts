@@ -27,6 +27,7 @@ import type {
   AiErrorCode,
   AnalysisResult,
   AppState,
+  UpdateState,
   MessageView,
   RecentEvent,
   SaveReplyInput,
@@ -137,6 +138,7 @@ export class SagaService extends EventEmitter {
   private pendingJids = new Set<string>()
   private pendingContacts = false
   private pendingState = false
+  private update: UpdateState = { status: 'none' }
   private emitTimer: ReturnType<typeof setTimeout> | null = null
   private stopping: Promise<void> | null = null
 
@@ -264,8 +266,15 @@ export class SagaService extends EventEmitter {
       transcribePaused: this.queue.isTypePaused('transcribe'),
       costTodayUsd: this.cost.todayUsd(),
       setupDone: s.keys.groq && this.repo.getSetting(EVER_CONNECTED) === '1',
-      provider: s.provider
+      provider: s.provider,
+      update: this.update
     }
+  }
+
+  /** Chamado pelo atualizador (processo principal) quando o estado da atualização muda. */
+  setUpdate(u: UpdateState): void {
+    this.update = u
+    this.markState()
   }
 
   onState(cb: (s: AppState) => void): Unsubscribe {

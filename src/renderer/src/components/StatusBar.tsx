@@ -58,6 +58,13 @@ export function StatusBar({ state, onOpenSettings, settingsOpen }: Props) {
             </button>
           </span>
         )}
+        {state.update.status === 'available' && (
+          <span className="status-update">
+            Nova versão disponível — <button type="button" className="btn btn-small btn-primary" disabled={busy} onClick={() => run(() => window.saga.downloadUpdate())}>Atualizar</button>
+          </span>
+        )}
+        {state.update.status === 'downloading' && <span className="status-update">Baixando a nova versão…</span>}
+        {state.update.status === 'ready' && <span className="status-update">Atualização pronta — será instalada quando você fechar o Saga.</span>}
         <span>Gasto hoje: {formatUsd(state.costTodayUsd)}</span>
       </div>
 

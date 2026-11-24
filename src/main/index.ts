@@ -10,6 +10,7 @@ import { SagaService } from '../core/service'
 import { isAppUrl, isExternalHttpUrl, type AppOrigin } from './guards'
 import { registerIpc } from './ipc'
 import { createSettingsStore } from './settings'
+import { startUpdater, updatesEnabled, type Updater } from './updater'
 
 // círculo verde 16x16 (sem arquivo de recurso para empacotar)
 const TRAY_ICON =
@@ -126,7 +127,9 @@ function main(): void {
       return net.fetch(pathToFileURL(file).toString())
     })
 
+    let updater: Updater | null = null
     registerIpc(svc, {
+      onDownloadUpdate: async () => updater?.download(),
       getWindow: () => win,
       isTrustedSender: (url) => isAppUrl(url, appOrigin),
       onRefused: (method, url) => {
@@ -138,6 +141,9 @@ function main(): void {
       onSettingsSaved: () => applyLoginItem(settings.get().startWithWindows)
     })
     applyLoginItem(settings.get().startWithWindows)
+    if (updatesEnabled(process.env, app.isPackaged)) {
+      updater = startUpdater({ setUpdate: (u) => svc.setUpdate(u), log: (k, d) => repo.logEvent(k, d) })
+    }
 
     win = createWindow()
     tray = new Tray(nativeImage.createFromDataURL(TRAY_ICON))
