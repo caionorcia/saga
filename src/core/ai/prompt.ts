@@ -30,6 +30,13 @@ Regras:
 - Escreva como se fosse o próprio mentor, em primeira pessoa. Não invente fatos, preços, datas ou compromissos que não aparecem na conversa.
 - Se o mentorado mandou áudio, use a transcrição; "[áudio indisponível]" significa que não foi possível transcrever.`
 
+const MAX_EXAMPLE_CONTEXT = 500
+const MAX_EXAMPLE_REPLY = 800
+
+function clip(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max).trimEnd()}…` : s
+}
+
 function render(m: MessageRow): string {
   const who = m.fromMe ? 'Mentor' : 'Mentorado'
   let body: string
@@ -47,7 +54,7 @@ export function buildPrompt(p: PromptInput): { system: string; user: string } {
   if (p.examples.length) {
     parts.push(
       'Exemplos de como o mentor costuma responder (imite este estilo):\n\n' +
-        p.examples.map((e) => `Mensagem do mentorado: ${e.context}\nResposta do mentor: ${e.reply}`).join('\n\n')
+        p.examples.map((e) => `Mensagem do mentorado: ${clip(e.context, MAX_EXAMPLE_CONTEXT)}\nResposta do mentor: ${clip(e.reply, MAX_EXAMPLE_REPLY)}`).join('\n\n')
     )
   }
   if (p.priorMessages.length) parts.push(`Conversa anterior (contexto):\n${p.priorMessages.map(render).join('\n')}`)

@@ -91,7 +91,7 @@ export function selectExamples(repo: Repo, jid: string, contextText: string): Ex
 function findPrevContactText(msgs: MessageRow[], idx: number): string | null {
   for (let i = idx - 1; i >= 0; i--) {
     if (msgs[i].fromMe) return null
-    const t = msgs[i].kind === 'text' ? msgs[i].text : msgs[i].transcript
+    const t = msgs[i].kind === 'text' ? msgs[i].text : msgs[i].transcriptStatus === 'done' ? msgs[i].transcript : null
     if (t?.trim()) return t
   }
   return null

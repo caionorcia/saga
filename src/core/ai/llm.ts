@@ -30,7 +30,7 @@ export class LlmRateLimitError extends Error {
 
 /** O modelo recusou responder; a interface oferece "Tentar de novo". */
 export class LlmRefusalError extends Error {
-  constructor() {
+  constructor(readonly usage?: { inputTokens: number; outputTokens: number; model?: string }) {
     super('a IA recusou responder a este pedido')
     this.name = 'LlmRefusalError'
   }
@@ -93,6 +93,12 @@ export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateL
         })
         if (res.status === 401) throw new InvalidKeyError()
         if (res.status === 429) throw new LlmRateLimitError(retryAfterMs(res.headers.get('retry-after')))
+        if (res.status === 400) {
+          // modo json_object: saída inválida do modelo vem como 400 json_validate_failed
+          const body = (await res.json().catch(() => null)) as { error?: { code?: string } } | null
+          if (body?.error?.code === 'json_validate_failed') throw new InvalidOutputError('Groq: json_validate_failed')
+          throw new Error('pedido à IA falhou: HTTP 400 (groq)')
+        }
         if (!res.ok) throw new Error(`pedido à IA falhou: HTTP ${res.status} (groq)`)
         const j = (await res.json()) as {
           choices?: Array<{ message?: { content?: string } }>
@@ -108,7 +114,7 @@ export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateL
     }
   }
 
-  const client = opts.client ?? new Anthropic({ apiKey })
+  const client = opts.client ?? new Anthropic({ apiKey, maxRetries: 0, fetch: opts.fetchImpl })
   return {
     name: 'claude',
     async complete({ system, user }) {
@@ -129,7 +135,13 @@ export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateL
         if (e instanceof Anthropic.RateLimitError) throw new LlmRateLimitError(retryAfterMs(e.headers?.get('retry-after')))
         throw e
       }
-      if (msg.stop_reason === 'refusal') throw new LlmRefusalError()
+      if (msg.stop_reason === 'refusal') {
+        throw new LlmRefusalError({
+          inputTokens: msg.usage?.input_tokens ?? 0,
+          outputTokens: msg.usage?.output_tokens ?? 0,
+          model: msg.model ?? model
+        })
+      }
       const text = msg.content
         .filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')
         .map((b) => b.text)
@@ -211,18 +223,22 @@ export async function generateAnalysis(
     const wait = limiter.nextAllowedAt() - clock.now()
     if (wait > 0) await sleep(wait)
     limiter.record()
-    let res: LlmResult
     try {
-      res = await llm.complete(prompt)
-    } finally {
-      limiter.markFinished()
-    }
-    cost.add(llm.name, res.inputTokens, res.outputTokens, res.model)
-    try {
+      let res: LlmResult
+      try {
+        res = await llm.complete(prompt)
+      } catch (e) {
+        if (e instanceof LlmRefusalError && e.usage) cost.add(llm.name, e.usage.inputTokens, e.usage.outputTokens, e.usage.model)
+        throw e
+      } finally {
+        limiter.markFinished()
+      }
+      cost.add(llm.name, res.inputTokens, res.outputTokens, res.model)
       const parsed = parseSuggestions(res.text)
       repo.saveAnalysis(jid, lastId, llm.name, parsed.summary, parsed.suggestions)
       return repo.getAnalysis(jid)!
     } catch (e) {
+      // saída inválida (do parser ou 400 json_validate_failed da Groq): tenta de novo
       if (!(e instanceof InvalidOutputError)) throw e
       lastErr = e
       repo.logEvent('ai_invalid_output', `${llm.name}: ${e.message} (tentativa ${attempt + 1})`)

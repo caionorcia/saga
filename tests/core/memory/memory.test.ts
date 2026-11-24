@@ -71,6 +71,17 @@ describe('selectExamples', () => {
   })
 })
 
+describe('sent_history com áudio', () => {
+  it('só usa transcrição quando status done', () => {
+    repo.insertMessage({ id: 'a1', jid: A, fromMe: false, ts: T0 - 9000, kind: 'audio', text: null, mediaKeyJson: null, durationSec: 5 })
+    repo.setTranscript('a1', 'texto parcial', 'failed')
+    repo.insertMessage(msg('r1', A, true, T0 - 8000, 'Resposta ao áudio'))
+    expect(selectExamples(repo, A, 'x').filter((e) => e.source === 'sent_history')).toEqual([])
+    repo.setTranscript('a1', 'texto do áudio', 'done')
+    expect(selectExamples(repo, A, 'x').find((e) => e.source === 'sent_history')?.context).toBe('texto do áudio')
+  })
+})
+
 describe('reconcileSent', () => {
   const saved = 'Oi Michael, pode sim! Vamos marcar amanhã?'
   it('grava sent_text quando enviado 10 min depois com texto parecido', () => {

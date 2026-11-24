@@ -34,11 +34,15 @@ function fakeLlm(outputs: string[]): LlmProvider & { calls: Array<{ system: stri
   }
 }
 
-function deps(llm: LlmProvider, capUsd = 1) {
-  const limiter = new RateLimiter(LIMITS.llm, clock, () => 0)
+function deps(llm: LlmProvider, capUsd = 1, rng: () => number = () => 0) {
+  const limiter = new RateLimiter(LIMITS.llm, clock, rng)
   const cost = new CostTracker(repo, clock)
-  const sleep = async (ms: number) => clock.advance(ms)
-  return { repo, llm, limiter, cost, capUsd, clock, sleep }
+  const sleeps: number[] = []
+  const sleep = async (ms: number) => {
+    sleeps.push(ms)
+    clock.advance(ms)
+  }
+  return { repo, llm, limiter, cost, capUsd, clock, sleep, sleeps }
 }
 
 function addMsg(id: string, fromMe: boolean, text: string, ts = T0 + Number(id.slice(1)) * 1000) {
@@ -79,7 +83,14 @@ describe('generateAnalysis', () => {
   it('separa novas (após o último fromMe) e anteriores no prompt', async () => {
     const llm = fakeLlm([GOOD])
     await generateAnalysis(deps(llm), JID)
-    expect(llm.calls[0].user).toContain('Preciso de ajuda com preços')
+    const u = llm.calls[0].user
+    const newIdx = u.indexOf('Mensagens novas')
+    const priorIdx = u.indexOf('Conversa anterior')
+    expect(priorIdx).toBeGreaterThanOrEqual(0)
+    expect(newIdx).toBeGreaterThan(priorIdx)
+    expect(u.indexOf('Preciso de ajuda com preços')).toBeGreaterThan(newIdx)
+    expect(u.indexOf('Olá!')).toBeGreaterThan(priorIdx)
+    expect(u.indexOf('Olá!')).toBeLessThan(newIdx)
   })
   it('último fromMe: ainda gera', async () => {
     addMsg('m3', true, 'Claro, me conta mais')
@@ -93,17 +104,32 @@ describe('generateAnalysis', () => {
     await expect(generateAnalysis(deps(fakeLlm([GOOD])), 'x@s.whatsapp.net')).rejects.toThrow(/sem mensagens/)
   })
   it('teto de gasto: BudgetExceededError sem chamar a IA', async () => {
-    const d = deps(fakeLlm([GOOD]))
+    const llm = Object.assign(fakeLlm([GOOD]), { name: 'claude' as const })
+    const d = deps(llm)
     d.cost.add('claude', 10_000_000, 0, 'claude-opus-5-5') // US$ 40
-    d.llm = Object.assign(fakeLlm([GOOD]), { name: 'claude' as const })
     await expect(generateAnalysis({ ...d, capUsd: 1 }, JID)).rejects.toBeInstanceOf(BudgetExceededError)
+    expect(llm.calls).toHaveLength(0)
   })
-  it('espera o limitador antes de chamar', async () => {
-    const d = deps(fakeLlm([GOOD, GOOD]))
+  it('espera o limitador (intervalo mínimo) antes da segunda chamada', async () => {
+    const d = deps(fakeLlm([GOOD, GOOD]), 1, () => 1) // intervalo = 1000 ms
     await generateAnalysis(d, JID)
+    expect(d.sleeps).toEqual([])
     const before = clock.now()
     await generateAnalysis(d, JID, { force: true })
-    expect(clock.now()).toBeGreaterThanOrEqual(before)
+    expect(d.sleeps).toHaveLength(1)
+    expect(d.sleeps[0]).toBeGreaterThanOrEqual(1000)
+    expect(clock.now() - before).toBeGreaterThanOrEqual(1000)
+  })
+  it('recusa do Claude ainda é cobrada', async () => {
+    const llm: LlmProvider = {
+      name: 'claude',
+      async complete() {
+        throw new LlmRefusalError({ inputTokens: 1_000_000, outputTokens: 0, model: 'claude-opus-5-5' })
+      }
+    }
+    const d = deps(llm, 100)
+    await expect(generateAnalysis(d, JID)).rejects.toBeInstanceOf(LlmRefusalError)
+    expect(d.cost.todayUsd()).toBeCloseTo(4)
   })
 })
 
@@ -153,6 +179,21 @@ describe('createLlm groq', () => {
     await createLlm('groq', 'K', { fetchImpl: f, repo }).complete({ system: 's', user: 'u' })
     expect(body.model).toBe('meu-modelo')
   })
+  it('400 json_validate_failed -> InvalidOutputError (retry do generateAnalysis); outro 400 -> erro genérico', async () => {
+    const mk = (res: () => Response) => createLlm('groq', 'K', { fetchImpl: (async () => res()) as unknown as typeof fetch })
+    const bad = mk(() => jsonRes(400, { error: { code: 'json_validate_failed', message: 'x' } }))
+    await expect(bad.complete({ system: 's', user: 'u' })).rejects.toBeInstanceOf(InvalidOutputError)
+    await expect(mk(() => jsonRes(400, { error: { code: 'other' } })).complete({ system: 's', user: 'u' })).rejects.not.toBeInstanceOf(InvalidOutputError)
+    // integração: 400 na primeira, JSON válido na segunda
+    let n = 0
+    const f = (async () =>
+      ++n === 1
+        ? jsonRes(400, { error: { code: 'json_validate_failed' } })
+        : jsonRes(200, { choices: [{ message: { content: GOOD } }] })) as unknown as typeof fetch
+    const a = await generateAnalysis(deps(createLlm('groq', 'K', { fetchImpl: f })), JID)
+    expect(n).toBe(2)
+    expect(a.suggestions).toHaveLength(2)
+  })
   it('401 -> InvalidKeyError; 429 -> LlmRateLimitError com retryAfterMs', async () => {
     const mk = (res: () => Response) => createLlm('groq', 'K', { fetchImpl: (async () => res()) as unknown as typeof fetch })
     await expect(mk(() => jsonRes(401, {})).complete({ system: 's', user: 'u' })).rejects.toBeInstanceOf(InvalidKeyError)
@@ -183,7 +224,16 @@ describe('createLlm claude', () => {
     for (const k of ['thinking', 'temperature', 'top_p', 'top_k']) expect(a).not.toHaveProperty(k)
     expect(r).toMatchObject({ text: GOOD, inputTokens: 11, outputTokens: 22, model: 'claude-opus-5-5' })
   })
-  it('refusal -> LlmRefusalError', async () => {
+  it('sem retentativas ocultas do SDK: 429 sai após exatamente 1 chamada HTTP', async () => {
+    let n = 0
+    const f = (async () => {
+      n++
+      return jsonRes(429, { type: 'error', error: { type: 'rate_limit_error', message: 'x' } }, { 'retry-after': '1' })
+    }) as unknown as typeof fetch
+    await expect(createLlm('claude', 'K', { fetchImpl: f }).complete({ system: 's', user: 'u' })).rejects.toBeInstanceOf(LlmRateLimitError)
+    expect(n).toBe(1)
+  })
+  it('refusal -> LlmRefusalError com uso', async () => {
     const { client } = fakeClient(async () => ({ stop_reason: 'refusal', content: [], usage: { input_tokens: 1, output_tokens: 0 } }))
     await expect(createLlm('claude', 'K', { client }).complete({ system: 's', user: 'u' })).rejects.toBeInstanceOf(LlmRefusalError)
   })

@@ -40,6 +40,19 @@ describe('buildPrompt', () => {
   })
 })
 
+describe('buildPrompt truncamento', () => {
+  it('corta contexto (500) e resposta (800) dos exemplos com reticências', () => {
+    const p = buildPrompt({
+      contactName: 'x', notes: null, newMessages: [m('n', false)], priorMessages: [],
+      examples: [{ context: 'c'.repeat(2000), reply: 'r'.repeat(2000), source: 'recent' }]
+    })
+    expect(p.user).toContain('c'.repeat(500) + '…')
+    expect(p.user).not.toContain('c'.repeat(501))
+    expect(p.user).toContain('r'.repeat(800) + '…')
+    expect(p.user).not.toContain('r'.repeat(801))
+  })
+})
+
 describe('parseSuggestions', () => {
   it('aceita JSON em bloco ```json', () => {
     const r = parseSuggestions('```json\n{"resumo":"Quer ajuda","sugestoes":["a","b"]}\n```')
