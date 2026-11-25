@@ -81,24 +81,25 @@ export class RateLimiter {
   }
 
   /** Epoch (ms) a partir do qual a próxima ação é permitida; <= now quando já é permitida. */
-  nextAllowedAt(): number {
-    this.normalize()
-    const now = this.clock.now()
+  nextAllowedAt(at?: number): number {
+    // um único "agora" para o cálculo inteiro: duas leituras do relógio (1 ms de diferença no Windows)
+    // davam um resultado sempre 1 ms no futuro e a fila nunca rodava
+    const now = at ?? this.clock.now()
+    this.normalize(now)
     let t = now
     if (this.lastMono !== null) {
       t = Math.max(t, now + (this.lastMono + this.gapMs - this.clock.monotonic()))
     }
-    t = Math.max(t, this.windowFree(HOUR, 1, this.cfg.perHour, 1))
-    t = Math.max(t, this.windowFree(DAY, 1, this.cfg.perDay, 1))
+    t = Math.max(t, this.windowFree(now, HOUR, 1, this.cfg.perHour, 1))
+    t = Math.max(t, this.windowFree(now, DAY, 1, this.cfg.perDay, 1))
     if (this.cfg.audioSecondsPerDay !== undefined) {
-      t = Math.max(t, this.windowFree(DAY, 2, this.cfg.audioSecondsPerDay, this.cfg.minBilledSec ?? 1))
+      t = Math.max(t, this.windowFree(now, DAY, 2, this.cfg.audioSecondsPerDay, this.cfg.minBilledSec ?? 1))
     }
     return t
   }
 
   /** Quando uma janela deslizante volta a ter espaço para `need` unidades do campo `field`. */
-  private windowFree(windowMs: number, field: 1 | 2, cap: number, need: number): number {
-    const now = this.clock.now()
+  private windowFree(now: number, windowMs: number, field: 1 | 2, cap: number, need: number): number {
     const inWin = this.entries.filter((e) => e[0] > now - windowMs)
     let sum = inWin.reduce((a, e) => a + e[field], 0)
     if (sum + need <= cap) return now
@@ -110,8 +111,7 @@ export class RateLimiter {
   }
 
   /** Descarta registros com mais de 24 h; registros "do futuro" (relógio voltou) viram "agora". */
-  private normalize(): void {
-    const now = this.clock.now()
+  private normalize(now: number = this.clock.now()): void {
     let changed = false
     for (const e of this.entries) {
       if (e[0] > now) {

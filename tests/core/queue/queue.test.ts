@@ -489,3 +489,37 @@ describe('JobQueue', () => {
     })
   })
 })
+
+describe('relógio que anda a cada leitura (Windows: Date.now muda em 1 ms entre chamadas)', () => {
+  it('o job roda: o limitador usa o mesmo "agora" da fila', async () => {
+    // cada leitura do relógio avança 1 ms, como acontece no app de verdade
+    let wall = 1_764_000_000_000
+    const ticking = { now: () => ++wall, monotonic: () => wall - 1_764_000_000_000 }
+    const repo = new Repo(openDb(':memory:'), ticking)
+    const lim = (cfg: (typeof LIMITS)[keyof typeof LIMITS]) => new RateLimiter(cfg, ticking, () => 0)
+    const q = new JobQueue(repo, ticking, {
+      download_audio: lim(LIMITS.wa_media),
+      transcribe: lim(LIMITS.groq_audio),
+      fetch_profile: lim(LIMITS.wa_profile)
+    })
+    const ran: string[] = []
+    q.register('download_audio', async (p) => {
+      ran.push(String((p as { id: string }).id))
+    })
+    q.enqueue('download_audio', 'a', { id: 'a' })
+    q.enqueue('download_audio', 'b', { id: 'b' })
+    expect(await q.tick()).toBe('ran')
+    // depois do intervalo mínimo (4 s) o próximo tem que rodar, não ficar "esperando" para sempre
+    wall += 4_001
+    expect(await q.tick()).toBe('ran')
+    expect(ran).toEqual(['a', 'b'])
+  })
+
+  it('nextAllowedAt(now) sem ações anteriores é exatamente now', () => {
+    let wall = 1_000_000
+    const ticking = { now: () => ++wall, monotonic: () => wall }
+    const l = new RateLimiter(LIMITS.wa_media, ticking, () => 0)
+    const now = ticking.now()
+    expect(l.nextAllowedAt(now)).toBe(now)
+  })
+})

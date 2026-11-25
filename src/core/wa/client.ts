@@ -611,29 +611,14 @@ export class WhatsAppClient extends EventEmitter {
       case 'retry':
         this.retryWithPolicy(detail)
         return
-      case 'bad_session': {
-        // a sessão descartada não pode gravar mais nada na pasta restaurada/apagada
-        await auth?.close()
-        const tryRestore = !this.restoredOnce
-        this.restoredOnce = true
-        if (tryRestore && auth?.restoreBackup()) {
-          this.deps.repo.logEvent('wa_bad_session_restored', detail)
-          this.setStatus('waiting_retry')
-          this.retryIn(0)
-          return
-        }
-        // sessão sem conserto: apaga e começa uma sessão nova (o socket novo mostra um QR)
-        auth?.wipe()
-        this.deps.repo.logEvent('wa_bad_session', detail)
-        if (!this.wipedOnce) {
-          this.wipedOnce = true
-          this.setStatus('waiting_retry')
-          this.retryIn(0)
-        } else {
-          this.retryWithPolicy(detail)
-        }
+      case 'bad_session':
+        // 500 ("Stream Errored", ex.: "ack") é um erro passageiro do servidor, não sessão estragada.
+        // Nunca restaurar o backup nem apagar aqui: voltar as chaves de criptografia para uma cópia
+        // antiga desencontra as sessões ("No session found to decrypt") e trava a sincronização.
+        // Credenciais ilegíveis já são restauradas do backup ao carregar.
+        this.deps.repo.logEvent('wa_stream_error', detail)
+        this.retryWithPolicy(detail)
         return
-      }
       case 'logged_out':
         // o aparelho foi desconectado no celular: as credenciais não servem mais (nem o backup)
         await auth?.close()

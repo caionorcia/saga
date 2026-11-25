@@ -124,7 +124,7 @@ export class JobQueue {
       const parts: string[] = []
       for (const type of Object.keys(DEFAULT_JOB_TIMEOUTS_MS) as JobType[]) {
         const c = this.repo.jobCounts(type)
-        const next = this.limiters[type].nextAllowedAt() - now
+        const next = this.limiters[type].nextAllowedAt(now) - now
         parts.push(
           `${type}: pending=${c.pending} running=${c.running} done=${c.done} failed=${c.failed} next_allowed=${next <= 0 ? 'now' : `+${Math.ceil(next / 1000)}s`}`
         )
@@ -270,7 +270,7 @@ export class JobQueue {
     if (candidates.length === 0) return 'idle'
     // mesma prioridade: primeiro a mensagem mais nova (payload.ts), depois a mais antiga na fila
     candidates.sort((a, b) => b.priority - a.priority || payloadTs(b) - payloadTs(a) || a.id - b.id)
-    const job = candidates.find((j) => this.limiters[j.type as JobType].nextAllowedAt() <= now)
+    const job = candidates.find((j) => this.limiters[j.type as JobType].nextAllowedAt(now) <= now)
     if (!job) return 'waiting'
 
     const limiter = this.limiters[job.type as JobType]

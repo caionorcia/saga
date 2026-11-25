@@ -792,34 +792,17 @@ describe('WhatsAppClient', () => {
       await expectReconnectAfter(30_000)
     })
 
-    it('bad_session: restaura o backup uma vez, depois needs_qr', async () => {
+    it('500 (Stream Errored): reconecta pela política mantendo as chaves atuais (sem restaurar backup nem apagar)', async () => {
       await emit('connection.update', { connection: 'open' })
-      await close(500)
-      expect(restoreSpy).toHaveBeenCalledTimes(1)
-      expect(restoreSpy).toHaveBeenLastCalledWith(true)
-      await advance(0)
-      expect(sockets).toHaveLength(2)
-
-      await close(500)
-      expect(restoreSpy).toHaveBeenCalledTimes(1)
-      expect(existsSync(join(tmp, 'auth-backup', 'creds.json'))).toBe(false)
-      expect(repo.recentEvents(5).map((e) => e.kind)).toContain('wa_bad_session')
-      // sessão nova na hora: o socket novo mostra um QR
-      await advance(0)
-      expect(sockets).toHaveLength(3)
-      expect(last().config.auth.creds.registrationId).not.toBe(sockets[0].config.auth.creds.registrationId)
-      await emit('connection.update', { qr: '2@novo' })
-      expect(statuses.at(-1)).toBe('needs_qr')
-    })
-
-    it('bad_session sem backup → sessão nova na hora; a seguinte já passa pela política', async () => {
-      await close(500)
-      expect(restoreSpy).toHaveBeenCalledWith(false)
-      await advance(0)
-      expect(sockets).toHaveLength(2)
-      await close(500)
-      expect(restoreSpy).toHaveBeenCalledTimes(1)
+      const regId = last().config.auth.creds.registrationId
+      await close(500, 'Stream Errored (ack)')
+      expect(restoreSpy).not.toHaveBeenCalled()
+      expect(repo.recentEvents(5).map((e) => e.kind)).toContain('wa_stream_error')
       await expectReconnectAfter(10_000)
+      expect(last().config.auth.creds.registrationId).toBe(regId)
+      await close(500, 'Stream Errored (ack)')
+      expect(restoreSpy).not.toHaveBeenCalled()
+      await expectReconnectAfter(30_000)
     })
 
     it('abrir de novo despausa a fila que a desconexão pausou', async () => {
