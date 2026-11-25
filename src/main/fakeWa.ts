@@ -28,6 +28,7 @@ export class FakeWaClient extends EventEmitter implements WaClientLike {
       }
       const last = c.messages[c.messages.length - 1]
       if (c.analysis && last) this.repo.saveAnalysis(c.jid, last.id, c.analysis.provider, c.analysis.summary, c.analysis.suggestions)
+      for (const a of c.alerts) this.repo.upsertAlert({ jid: c.jid, ...a })
     }
     this.repo.setSetting('wa.everConnected', '1')
     this.status = 'open'

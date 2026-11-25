@@ -2,7 +2,7 @@ import type { Clock } from '../clock'
 import type { Repo, JobRow } from '../db/repo'
 import type { RateLimiter } from './limiter'
 
-export type JobType = 'download_audio' | 'transcribe' | 'fetch_profile'
+export type JobType = 'download_audio' | 'transcribe' | 'fetch_profile' | 'classify'
 /** `signal` é abortado quando o job estoura o prazo do tipo (o resultado atrasado é descartado). */
 export type Handler = (payload: any, signal?: AbortSignal) => Promise<void>
 export type TickResult = 'ran' | 'idle' | 'paused' | 'waiting'
@@ -40,7 +40,8 @@ const BACKOFF_MS = [30_000, 2 * 60_000, 10 * 60_000]
 export const DEFAULT_JOB_TIMEOUTS_MS: Record<JobType, number> = {
   download_audio: 120_000,
   transcribe: 180_000,
-  fetch_profile: 60_000
+  fetch_profile: 60_000,
+  classify: 90_000
 }
 const SUMMARY_EVERY_MS = 5 * 60_000
 
@@ -101,7 +102,8 @@ export class JobQueue {
   constructor(
     private readonly repo: Repo,
     private readonly clock: Clock,
-    private readonly limiters: Record<JobType, RateLimiter>,
+    /** tipo sem limitador nunca roda (ex.: testes que não usam `classify`) */
+    private readonly limiters: Partial<Record<JobType, RateLimiter>>,
     opts: JobQueueOpts = {}
   ) {
     this.timeouts = { ...DEFAULT_JOB_TIMEOUTS_MS, ...(opts.timeoutsMs ?? {}) }
@@ -123,8 +125,10 @@ export class JobQueue {
       const now = this.clock.now()
       const parts: string[] = []
       for (const type of Object.keys(DEFAULT_JOB_TIMEOUTS_MS) as JobType[]) {
+        const lim = this.limiters[type]
+        if (!lim) continue
         const c = this.repo.jobCounts(type)
-        const next = this.limiters[type].nextAllowedAt(now) - now
+        const next = lim.nextAllowedAt(now) - now
         parts.push(
           `${type}: pending=${c.pending} running=${c.running} done=${c.done} failed=${c.failed} next_allowed=${next <= 0 ? 'now' : `+${Math.ceil(next / 1000)}s`}`
         )
@@ -242,7 +246,7 @@ export class JobQueue {
 
   /** Tipos que o laço pode rodar agora: com handler e não pausados. */
   private activeTypes(): JobType[] {
-    return [...this.handlers.keys()].filter((t) => !this.pausedTypes.has(t))
+    return [...this.handlers.keys()].filter((t) => !this.pausedTypes.has(t) && this.limiters[t])
   }
 
   register(type: JobType, handler: Handler): void {
@@ -270,10 +274,10 @@ export class JobQueue {
     if (candidates.length === 0) return 'idle'
     // mesma prioridade: primeiro a mensagem mais nova (payload.ts), depois a mais antiga na fila
     candidates.sort((a, b) => b.priority - a.priority || payloadTs(b) - payloadTs(a) || a.id - b.id)
-    const job = candidates.find((j) => this.limiters[j.type as JobType].nextAllowedAt(now) <= now)
+    const job = candidates.find((j) => this.limiters[j.type as JobType]!.nextAllowedAt(now) <= now)
     if (!job) return 'waiting'
 
-    const limiter = this.limiters[job.type as JobType]
+    const limiter = this.limiters[job.type as JobType]!
     // conta contra o ritmo mesmo que o job falhe (antes de marcar running: se lançar, nada fica preso)
     limiter.record(job.type === 'transcribe' ? Number((job.payload as any)?.durationSec) : 1)
     this.repo.markJobRunning(job.id)
@@ -332,8 +336,8 @@ export class JobQueue {
     let nextRunAt: number | null = null
     for (const { type, nextRunAt: n } of this.repo.pendingNextRunByType()) {
       // sem handler ou pausado, o laço nunca rodaria: não acordar à toa
-      if (!this.handlers.has(type as JobType) || this.pausedTypes.has(type as JobType)) continue
       const lim = this.limiters[type as JobType]
+      if (!lim || !this.handlers.has(type as JobType) || this.pausedTypes.has(type as JobType)) continue
       const t = Math.max(n, lim.nextAllowedAt())
       if (nextRunAt === null || t < nextRunAt) nextRunAt = t
     }

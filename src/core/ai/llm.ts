@@ -18,7 +18,8 @@ export interface LlmResult {
 
 export interface LlmProvider {
   name: 'groq' | 'claude'
-  complete(p: { system: string; user: string }): Promise<LlmResult>
+  /** `temperature`: só a Groq usa (padrão 0,7); a classificação de alertas pede uma baixa */
+  complete(p: { system: string; user: string; temperature?: number }): Promise<LlmResult>
 }
 
 /** 429: o provedor pediu para esperar. */
@@ -87,7 +88,7 @@ export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateL
     const fetchImpl = opts.fetchImpl ?? fetch
     const models = new GroqModels({ apiKey, fetchImpl, repo: opts.repo, clock: opts.clock, diag: opts.diag })
     const explicit = opts.model ?? opts.repo?.getSetting(SETTING_GROQ_MODEL) ?? null
-    const call = async (model: string, system: string, user: string): Promise<LlmResult> => {
+    const call = async (model: string, system: string, user: string, temperature = 0.7): Promise<LlmResult> => {
       const res = await fetchImpl(GROQ_URL, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -98,7 +99,7 @@ export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateL
             { role: 'user', content: user }
           ],
           response_format: { type: 'json_object' },
-          temperature: 0.7
+          temperature
         })
       })
       if (res.status === 401) throw new InvalidKeyError()
@@ -124,7 +125,7 @@ export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateL
     }
     return {
       name: 'groq',
-      complete: ({ system, user }) => models.withModel('chat', explicit, (model) => call(model, system, user))
+      complete: ({ system, user, temperature }) => models.withModel('chat', explicit, (model) => call(model, system, user, temperature))
     }
   }
 

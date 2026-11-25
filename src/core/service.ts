@@ -2,7 +2,9 @@ import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { systemClock, type Clock } from './clock'
-import type { ContactKind, ContactRow, MessageRow, Repo } from './db/repo'
+import type { AlertKind, AlertRow, ContactKind, ContactRow, MessageRow, Repo } from './db/repo'
+import { CLASSIFY_MAX_AGE_MS, RESOLVED_BY_REPLY, classifyChat } from './ai/classify'
+import { WAIT_RED_MS } from '../shared/triage'
 import { hasFreeSpace as defaultHasFreeSpace } from './disk'
 import { BudgetExceededError, CostTracker } from './ai/budget'
 import {
@@ -91,6 +93,11 @@ const STOPPED_STATE = 'wa.stoppedState'
  */
 const PERSISTED_STOPS: ReadonlySet<ConnState> = new Set(['stopped_restricted', 'stopped_replaced'])
 const EMIT_DELAY_MS = 150
+/** de quanto em quanto tempo a regra "esperando" (mais de 48 h sem resposta) é conferida */
+const WAITING_REFRESH_MS = 5 * 60_000
+/** os alertas em segundo plano ficam atrás dos áudios na fila */
+const CLASSIFY_PRIORITY = -1
+const WAITING_DETAIL = 'Sem resposta há mais de 2 dias.'
 const DEFAULT_STOP_TIMEOUT_MS = 5_000
 
 /** Espera `p` por até `ms`; erros de `p` (agora ou depois) nunca escapam. */
@@ -179,6 +186,9 @@ export class SagaService extends EventEmitter {
   /** `start()` falhou: a interface mostra o erro em vez de "Conectando…" */
   private startError: string | null = null
   private readonly diagFn?: (kind: string, detail: string) => void
+  /** por conversa: horário da mensagem mais nova que pediu classificação (pedidos durante um job em andamento) */
+  private classifyWanted = new Map<string, number>()
+  private waitingTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(opts: SagaServiceOpts) {
     super()
@@ -195,11 +205,18 @@ export class SagaService extends EventEmitter {
     this.cost = new CostTracker(repo, clock)
 
     const lim = (name: LimiterName) => new RateLimiter(LIMITS[name], clock, rng, { repo, key: `limiter:${name}` })
-    this.limiters = { wa_media: lim('wa_media'), wa_profile: lim('wa_profile'), groq_audio: lim('groq_audio'), llm: lim('llm') }
+    this.limiters = {
+      wa_media: lim('wa_media'),
+      wa_profile: lim('wa_profile'),
+      groq_audio: lim('groq_audio'),
+      llm: lim('llm'),
+      classify: lim('classify')
+    }
     const byType: Record<JobType, RateLimiter> = {
       download_audio: this.limiters.wa_media,
       transcribe: this.limiters.groq_audio,
-      fetch_profile: this.limiters.wa_profile
+      fetch_profile: this.limiters.wa_profile,
+      classify: this.limiters.classify
     }
     this.queue = new JobQueue(repo, clock, byType, { diag: (k, d) => this.diag(k, d) })
 
@@ -213,6 +230,26 @@ export class SagaService extends EventEmitter {
         this.transcribePauseReason = reason
         this.markState()
       }
+    })
+    this.queue.register('classify', (payload: { jid?: unknown }, signal) => {
+      if (typeof payload?.jid !== 'string') return Promise.resolve()
+      return classifyChat(
+        {
+          repo,
+          clock,
+          // só a IA gratuita em segundo plano: nunca gasta com o Claude, seja qual for o provedor das sugestões
+          getLlm: () => {
+            const key = this.settings.getKey('groq')
+            return key ? this.llmFactory('groq', key, { repo, clock, diag: (k, d) => this.diag(k, d) }) : null
+          },
+          cost: this.cost,
+          getCapUsd: () => this.settings.get().dailyCapUsd,
+          diag: (k, d) => this.diag(k, d),
+          onChanged: () => this.markContacts()
+        },
+        payload.jid,
+        signal
+      )
     })
     this.queue.onJobFailed((job) => {
       if (job.type === 'download_audio') {
@@ -231,6 +268,15 @@ export class SagaService extends EventEmitter {
       this.markState()
     })
     this.queue.onJobDone((job) => {
+      if (job.type === 'classify') {
+        const p = job.payload as { jid?: unknown; ts?: unknown } | null
+        if (typeof p?.jid !== 'string') return
+        // chegou mensagem enquanto o job rodava: classifica de novo (só as novas)
+        const wanted = this.classifyWanted.get(p.jid)
+        this.classifyWanted.delete(p.jid)
+        if (wanted !== undefined && wanted > Number(p.ts)) this.maybeClassify(p.jid, wanted)
+        return
+      }
       if (job.type === 'download_audio') {
         const c = repo.jobCounts('download_audio')
         this.downloadsDone = c.pending + c.running === 0 ? 0 : this.downloadsDone + 1
@@ -276,6 +322,13 @@ export class SagaService extends EventEmitter {
       } catch (e) {
         repo.logEvent('reconcile_error', e instanceof Error ? e.message : String(e))
       }
+      try {
+        // o mentor respondeu: os alertas de antes se resolvem (o desânimo fica até o mentor resolver)
+        if (m.fromMe) repo.dismissAlertsUpTo(m.jid, RESOLVED_BY_REPLY, m.ts)
+        else this.maybeClassify(m.jid, m.ts)
+      } catch (e) {
+        repo.logEvent('alerts_error', e instanceof Error ? e.message : String(e))
+      }
       this.markMessages(m.jid)
     })
   }
@@ -316,6 +369,18 @@ export class SagaService extends EventEmitter {
   private async doStart(): Promise<void> {
     this.queue.recoverAfterCrash()
     for (const l of Object.values(this.limiters)) l.startWarmup()
+    // alertas em segundo plano: o primeiro só sai depois de um intervalo inteiro (nada de rajada ao abrir)
+    this.limiters.classify.markFinished()
+    if (!this.waitingTimer) {
+      this.waitingTimer = setInterval(() => {
+        try {
+          if (this.refreshWaitingAlerts()) this.markContacts()
+        } catch {
+          // banco fechado: tenta de novo na próxima volta
+        }
+      }, WAITING_REFRESH_MS)
+      ;(this.waitingTimer as { unref?: () => void }).unref?.()
+    }
     const stopped = this.repo.getSetting(STOPPED_STATE) as ConnState | null
     // parada guardada que não vale mais entre reinícios (ex.: versão desatualizada da 0.1.0): descarta
     if (stopped && !PERSISTED_STOPS.has(stopped)) this.repo.deleteSetting(STOPPED_STATE)
@@ -343,6 +408,8 @@ export class SagaService extends EventEmitter {
     this.stopping ??= (async () => {
       if (this.emitTimer) clearTimeout(this.emitTimer)
       this.emitTimer = null
+      if (this.waitingTimer) clearInterval(this.waitingTimer)
+      this.waitingTimer = null
       const timeoutMs = opts.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
       await withDeadline(this.queue.stop(), timeoutMs)
       await withDeadline(this.wa.stop(), timeoutMs)
@@ -376,6 +443,7 @@ export class SagaService extends EventEmitter {
       setupDone: s.keys.groq && this.repo.getSetting(EVER_CONNECTED) === '1',
       provider: s.provider,
       update: this.update,
+      triage: this.repo.triageCounts(),
       ...(this.startError ? { startError: this.startError } : {})
     }
   }
@@ -410,6 +478,12 @@ export class SagaService extends EventEmitter {
   }
 
   private markState(): void {
+    this.pendingState = true
+    this.scheduleEmit()
+  }
+
+  private markContacts(): void {
+    this.pendingContacts = true
     this.pendingState = true
     this.scheduleEmit()
   }
@@ -449,7 +523,58 @@ export class SagaService extends EventEmitter {
    * (Baileys v7 não tem consulta de nome só de leitura); os nomes vêm da ingestão.
    */
   async listContacts(includeHidden: boolean, kind: ContactKind = 'all'): Promise<ContactRow[]> {
+    if (this.refreshWaitingAlerts()) this.markContacts()
     return this.repo.listContacts({ includeHidden, kind })
+  }
+
+  // --- fila do dia e alertas ---
+
+  /** Alertas ativos de uma conversa, ou de todas as que não estão escondidas (mais graves primeiro). */
+  async listAlerts(jid?: string): Promise<AlertRow[]> {
+    if (this.refreshWaitingAlerts()) this.markContacts()
+    return this.repo.listAlerts(jid)
+  }
+
+  /** "Resolver": tira o alerta da lista (fica no histórico; um sinal novo cria outro). */
+  async dismissAlert(jid: string, kind: AlertKind): Promise<void> {
+    if (this.repo.dismissAlert(jid, kind)) this.markContacts()
+  }
+
+  /**
+   * Agenda a procura de alertas pela IA numa conversa que recebeu mensagem do contato: só com chave da Groq,
+   * fora dos escondidos, para mensagens dos últimos dias e ainda não olhadas.
+   */
+  private maybeClassify(jid: string, ts: number): void {
+    if (ts < this.clock.now() - CLASSIFY_MAX_AGE_MS) return
+    const check = this.repo.getAlertCheck(jid)
+    if (check && ts <= check.lastTs) return
+    if (this.repo.isHidden(jid)) return
+    if (!this.settings.getKey('groq')) return
+    this.classifyWanted.set(jid, Math.max(ts, this.classifyWanted.get(jid) ?? -Infinity))
+    this.queue.requeue('classify', `classify:${jid}`, { jid, ts }, CLASSIFY_PRIORITY)
+  }
+
+  /**
+   * Regra "esperando" (sem IA): conversa aguardando resposta há mais de 48 h ganha o alerta; resolvido à mão,
+   * não volta na mesma espera. Em grupo, só se alguém mencionou o mentor nessa espera. `true` se mudou algo.
+   */
+  private refreshWaitingAlerts(): boolean {
+    const now = this.clock.now()
+    let changed = false
+    for (const c of this.repo.listContacts({ includeHidden: false })) {
+      const active = c.alerts.includes('esperando')
+      const late = c.waitingSince !== null && now - c.waitingSince > WAIT_RED_MS
+      if (late && !active) {
+        if (c.isGroup && !this.repo.hasMentionSince(c.jid, c.waitingSince!)) continue
+        const msgId = this.repo.waitingMessageId(c.jid, c.waitingSince!)
+        const last = this.repo.lastAlert(c.jid, 'esperando')
+        if (last && last.msgId === msgId) continue
+        changed = this.repo.upsertAlert({ jid: c.jid, kind: 'esperando', detail: WAITING_DETAIL, msgId }) || changed
+      } else if (active && c.waitingSince === null) {
+        changed = this.repo.dismissAlert(c.jid, 'esperando') || changed
+      }
+    }
+    return changed
   }
 
   async listMessages(jid: string): Promise<MessageView[]> {

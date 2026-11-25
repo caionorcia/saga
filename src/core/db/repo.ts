@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { systemClock, type Clock } from '../clock'
 import type { NormalizedMessage } from '../types'
+import { ALERT_KINDS, AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../shared/triage'
 
 /** Qualidade da fonte do nome guardado em `push_name` (maior vence; empate: o mais novo). */
 export const NAME_RANK = { push: 1, profile: 2, addressBook: 3 } as const
@@ -9,6 +10,18 @@ export type TranscriptStatus = 'done' | 'failed' | 'unavailable'
 
 /** Filtro da lista de conversas: todas, só pessoas ou só grupos. */
 export type ContactKind = 'all' | 'individual' | 'group'
+
+export { ALERT_KINDS, AI_ALERT_KINDS, alertSeverity, type AlertKind }
+
+export interface AlertRow {
+  jid: string
+  kind: AlertKind
+  /** o quê e por quê, em pt-BR (até 120 caracteres) */
+  detail: string
+  /** mensagem que motivou o alerta (para rolar até ela), ou null */
+  msgId: string | null
+  createdAt: number
+}
 
 /** Nome exibido de um grupo que ainda não tem assunto conhecido. */
 export const UNNAMED_GROUP = 'Grupo sem nome'
@@ -25,6 +38,13 @@ export interface ContactRow {
   awaitingReply: boolean
   /** conversa de grupo (`@g.us`) */
   isGroup: boolean
+  /**
+   * aguardando resposta desde (epoch ms, horário do WhatsApp): a primeira mensagem do contato depois da última
+   * do mentor; null quando o mentor falou por último (ou não há mensagens)
+   */
+  waitingSince: number | null
+  /** tipos de alerta ativos, do mais grave para o menos grave */
+  alerts: AlertKind[]
 }
 
 export interface MessageRow {
@@ -111,6 +131,19 @@ function toJob(r: Row): JobRow {
     priority: r.priority,
     lastError: r.last_error
   }
+}
+
+const ALERT_ORDER_SQL = `CASE kind ${ALERT_KINDS.map((k, i) => `WHEN '${k}' THEN ${i}`).join(' ')} END`
+
+function sortKinds(csv: string | null): AlertKind[] {
+  if (!csv) return []
+  return [...new Set(csv.split(',').filter((k): k is AlertKind => (ALERT_KINDS as readonly string[]).includes(k)))].sort(
+    (a, b) => alertSeverity(a) - alertSeverity(b)
+  )
+}
+
+function toAlert(r: Row): AlertRow {
+  return { jid: r.jid, kind: r.kind, detail: r.detail, msgId: r.msg_id ?? null, createdAt: r.created_at }
 }
 
 function toApproved(r: Row): ApprovedRow {
@@ -223,7 +256,13 @@ export class Repo {
     const rows = this.db
       .prepare(
         `SELECT c.jid, c.push_name, c.custom_name, c.hidden, c.notes, c.is_group,
-                l.ts AS last_ts, l.from_me AS last_from_me
+                l.ts AS last_ts, l.from_me AS last_from_me,
+                CASE WHEN l.from_me = 0 THEN (
+                  SELECT MIN(w.ts) FROM messages w
+                   WHERE w.jid = c.jid AND w.from_me = 0
+                     AND w.ts > COALESCE((SELECT MAX(me.ts) FROM messages me WHERE me.jid = c.jid AND me.from_me = 1), -1)
+                ) END AS waiting_since,
+                (SELECT group_concat(a.kind) FROM alerts a WHERE a.jid = c.jid AND a.dismissed_at IS NULL) AS alert_kinds
            FROM contacts c
            LEFT JOIN messages l ON l.id = (
              SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
@@ -241,8 +280,116 @@ export class Repo {
       displayName: r.custom_name ?? r.push_name ?? (r.is_group === 1 ? UNNAMED_GROUP : formatPhone(r.jid)),
       lastTs: r.last_ts,
       awaitingReply: r.last_from_me === 0,
-      isGroup: r.is_group === 1
+      isGroup: r.is_group === 1,
+      waitingSince: typeof r.waiting_since === 'number' ? r.waiting_since : null,
+      alerts: sortKinds(r.alert_kinds)
     }))
+  }
+
+  /** Conversas (fora as escondidas) aguardando resposta e conversas com algum alerta ativo. */
+  triageCounts(): { awaiting: number; withAlerts: number } {
+    const r = this.db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM contacts c
+             WHERE c.hidden = 0
+               AND (SELECT from_me FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1) = 0) AS awaiting,
+           (SELECT COUNT(DISTINCT a.jid) FROM alerts a JOIN contacts c ON c.jid = a.jid
+             WHERE a.dismissed_at IS NULL AND c.hidden = 0) AS with_alerts`
+      )
+      .get() as Row
+    return { awaiting: r.awaiting, withAlerts: r.with_alerts }
+  }
+
+  // --- alertas ---
+
+  /**
+   * Cria o alerta ativo do tipo, ou atualiza detalhe e mensagem do que já está ativo (um por conversa e tipo).
+   * `true` se algo mudou.
+   */
+  upsertAlert(a: { jid: string; kind: AlertKind; detail: string; msgId: string | null }): boolean {
+    const cur = this.db
+      .prepare('SELECT id, detail, msg_id FROM alerts WHERE jid = ? AND kind = ? AND dismissed_at IS NULL')
+      .get(a.jid, a.kind) as Row | undefined
+    if (cur) {
+      if (cur.detail === a.detail && (cur.msg_id ?? null) === a.msgId) return false
+      this.db.prepare('UPDATE alerts SET detail = ?, msg_id = ? WHERE id = ?').run(a.detail, a.msgId, cur.id)
+      return true
+    }
+    this.db
+      .prepare('INSERT INTO alerts(jid, kind, detail, msg_id, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(a.jid, a.kind, a.detail, a.msgId, this.clock.now())
+    return true
+  }
+
+  /** Alertas ativos (de uma conversa, ou de todas as não escondidas), mais graves primeiro. */
+  listAlerts(jid?: string): AlertRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT a.* FROM alerts a JOIN contacts c ON c.jid = a.jid
+          WHERE a.dismissed_at IS NULL AND (?1 IS NULL AND c.hidden = 0 OR a.jid = ?1)
+          ORDER BY ${ALERT_ORDER_SQL.replace(/kind/, 'a.kind')}, a.created_at, a.id`
+      )
+      .all(jid ?? null) as Row[]
+    return rows.map(toAlert)
+  }
+
+  /** O alerta mais recente do tipo (ativo ou resolvido), ou null. */
+  lastAlert(jid: string, kind: AlertKind): (AlertRow & { dismissedAt: number | null }) | null {
+    const r = this.db.prepare('SELECT * FROM alerts WHERE jid = ? AND kind = ? ORDER BY id DESC LIMIT 1').get(jid, kind) as
+      | Row
+      | undefined
+    return r ? { ...toAlert(r), dismissedAt: r.dismissed_at ?? null } : null
+  }
+
+  /** Resolve (dismiss) o alerta ativo do tipo. `true` se havia um. */
+  dismissAlert(jid: string, kind: AlertKind): boolean {
+    const res = this.db
+      .prepare('UPDATE alerts SET dismissed_at = ? WHERE jid = ? AND kind = ? AND dismissed_at IS NULL')
+      .run(this.clock.now(), jid, kind)
+    return Number(res.changes) > 0
+  }
+
+  /**
+   * Resolve os alertas ativos destes tipos cuja mensagem (ou, sem mensagem, a criação) é até `ts`
+   * (o mentor respondeu depois deles). Devolve quantos.
+   */
+  dismissAlertsUpTo(jid: string, kinds: ReadonlyArray<AlertKind>, ts: number): number {
+    const res = this.db
+      .prepare(
+        `UPDATE alerts SET dismissed_at = ?1
+          WHERE jid = ?2 AND dismissed_at IS NULL AND kind IN (SELECT value FROM json_each(?3))
+            AND COALESCE((SELECT m.ts FROM messages m WHERE m.id = alerts.msg_id), alerts.created_at) <= ?4`
+      )
+      .run(this.clock.now(), jid, JSON.stringify(kinds), ts)
+    return Number(res.changes)
+  }
+
+  /** Id da mensagem do contato no horário `ts` (a que abriu a espera), ou null. */
+  waitingMessageId(jid: string, ts: number): string | null {
+    const r = this.db
+      .prepare('SELECT id FROM messages WHERE jid = ? AND from_me = 0 AND ts = ? ORDER BY rowid LIMIT 1')
+      .get(jid, ts) as Row | undefined
+    return r ? r.id : null
+  }
+
+  /** Alguma mensagem do grupo desde `ts` menciona o mentor (ou cita uma mensagem dele)? */
+  hasMentionSince(jid: string, ts: number): boolean {
+    return !!this.db.prepare('SELECT 1 FROM messages WHERE jid = ? AND ts >= ? AND mentions_me = 1 LIMIT 1').get(jid, ts)
+  }
+
+  getAlertCheck(jid: string): { lastMsgId: string; lastTs: number; checkedAt: number } | null {
+    const r = this.db.prepare('SELECT * FROM alert_checks WHERE jid = ?').get(jid) as Row | undefined
+    return r ? { lastMsgId: r.last_msg_id, lastTs: r.last_ts, checkedAt: r.checked_at } : null
+  }
+
+  setAlertCheck(jid: string, lastMsgId: string, lastTs: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO alert_checks(jid, last_msg_id, last_ts, checked_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(jid) DO UPDATE SET last_msg_id = ?2, last_ts = ?3, checked_at = ?4`
+      )
+      .run(jid, lastMsgId, lastTs, this.clock.now())
   }
 
   // --- mensagens ---

@@ -174,3 +174,26 @@ describe('diagnóstico', () => {
     expect(() => validateIpcArgs(m, [200])).toThrow(InvalidIpcArgsError)
   })
 })
+
+describe('alertas', () => {
+  const ok = (m: Parameters<typeof validateIpcArgs>[0], ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).not.toThrow()
+  const bad = (m: Parameters<typeof validateIpcArgs>[0], ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).toThrow(InvalidIpcArgsError)
+
+  it('listAlerts: sem argumento ou um jid não vazio', () => {
+    ok('listAlerts')
+    ok('listAlerts', undefined)
+    ok('listAlerts', '5547999998888@s.whatsapp.net')
+    bad('listAlerts', '')
+    bad('listAlerts', 42)
+    bad('listAlerts', 'a', 'b')
+  })
+
+  it('dismissAlert: jid não vazio e tipo de alerta conhecido', () => {
+    for (const k of ['urgente', 'desanimo', 'reuniao', 'travado', 'esperando']) ok('dismissAlert', 'j@s.whatsapp.net', k)
+    bad('dismissAlert', 'j@s.whatsapp.net', 'spam')
+    bad('dismissAlert', '', 'urgente')
+    bad('dismissAlert', 'j@s.whatsapp.net')
+    bad('dismissAlert', 'j@s.whatsapp.net', 'urgente', 'extra')
+    bad('dismissAlert', { jid: 'x' }, 'urgente')
+  })
+})

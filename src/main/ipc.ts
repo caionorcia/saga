@@ -29,6 +29,8 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     getState: () => service.getState(),
     listContacts: (includeHidden, kind) => service.listContacts(!!includeHidden, kind ?? 'all'),
     listMessages: (jid) => service.listMessages(String(jid)),
+    listAlerts: (jid) => service.listAlerts(jid === undefined ? undefined : String(jid)),
+    dismissAlert: (jid, kind) => service.dismissAlert(String(jid), kind),
     getAnalysis: (jid) => service.getAnalysis(String(jid)),
     regenerate: (jid) => service.regenerate(String(jid)),
     saveReply: (input) => service.saveReply(input),

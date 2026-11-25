@@ -2,16 +2,20 @@
  * Contrato entre o processo principal e a interface (`window.saga`).
  * Só tipos e nomes de canais: nada daqui depende do Electron nem do core em tempo de execução.
  */
-import type { AnalysisRow, ContactKind, ContactRow, TranscriptStatus } from '../core/db/repo'
+import type { AlertRow, AnalysisRow, ContactKind, ContactRow, TranscriptStatus } from '../core/db/repo'
+import { ALERT_KINDS, type AlertKind } from './triage'
 import type { QueueStats } from '../core/queue/queue'
 import type { ConnState } from '../core/wa/client'
 import type { KeyKind, Provider, Settings, SettingsPatch, TranscriberKind } from '../core/settings'
 
-export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind }
+export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind }
+export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
 export const CONTACT_KINDS: ReadonlyArray<ContactKind> = ['all', 'individual', 'group']
 export type Contact = ContactRow
+/** Alerta ativo de uma conversa (ver `docs/.../design.md`, "Fila do dia e alertas"). */
+export type Alert = AlertRow
 export type Analysis = AnalysisRow
 export type SettingsView = Settings
 export type SaveSettingsInput = SettingsPatch
@@ -54,6 +58,8 @@ export interface AppState {
   setupDone: boolean
   provider: Provider
   update: UpdateState
+  /** conversas (fora as escondidas) aguardando resposta e conversas com algum alerta ativo */
+  triage: { awaiting: number; withAlerts: number }
   /** o início do app falhou (mensagem curta, sem dados sensíveis): mostrar com "Tentar de novo" (`manualReconnect`) */
   startError?: string
 }
@@ -128,6 +134,10 @@ export interface SagaApi {
   /** `kind`: todas (padrão), só individuais ou só grupos */
   listContacts(includeHidden: boolean, kind?: ContactKind): Promise<Contact[]>
   listMessages(jid: string): Promise<MessageView[]>
+  /** alertas ativos de uma conversa, ou de todas as não escondidas (mais graves primeiro) */
+  listAlerts(jid?: string): Promise<Alert[]>
+  /** "Resolver": tira o alerta ativo deste tipo; a lista de contatos é avisada (`onContactsChanged`) */
+  dismissAlert(jid: string, kind: AlertKind): Promise<void>
   /** gera se necessário (usa o cache quando a última mensagem não mudou) */
   getAnalysis(jid: string): Promise<AnalysisResult>
   regenerate(jid: string): Promise<AnalysisResult>
@@ -172,6 +182,8 @@ export const INVOKE_METHODS = [
   'getState',
   'listContacts',
   'listMessages',
+  'listAlerts',
+  'dismissAlert',
   'getAnalysis',
   'regenerate',
   'saveReply',

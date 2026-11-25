@@ -4,9 +4,10 @@ import schemaV2 from './schema-v2.sql?raw'
 import schemaV3 from './schema-v3.sql?raw'
 import schemaV4 from './schema-v4.sql?raw'
 import schemaV5 from './schema-v5.sql?raw'
+import schemaV6 from './schema-v6.sql?raw'
 
 /** Migrações em ordem; o índice + 1 é o `user_version` resultante. */
-const MIGRATIONS: string[] = [schemaV1, schemaV2, schemaV3, schemaV4, schemaV5]
+const MIGRATIONS: string[] = [schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6]
 
 export function openDb(file: string | ':memory:'): DatabaseSync {
   const db = new DatabaseSync(file)

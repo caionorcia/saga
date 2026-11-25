@@ -89,7 +89,14 @@
      "Boa, pessoal! Bruno, coloca o pró-labore numa linha separada das despesas fixas, que fica mais fácil de ver se a empresa se paga. Renata, ótima dúvida (muita gente passa por isso): vamos ver na quinta, com exemplos de como subir o preço sem perder cliente. Lucas, a gravação sai até amanhã.",
      "Bruno, separado! Na quinta mostro na planilha. E já aproveitando: quem mais está com dúvida sobre preço de serviço recorrente? Manda aqui que eu junto tudo para a aula 😉"
     ]
-   }
+   },
+   "alerts": [
+    {
+     "kind": "travado",
+     "detail": "Bruno não sabe onde entra o pró-labore na planilha do módulo 4 e pede sua confirmação.",
+     "messageId": "G8"
+    }
+   ]
   },
   {
    "jid": "5547999998888@s.whatsapp.net",
@@ -152,7 +159,14 @@
      "Sem problema! Vamos para sexta às 9h. Antes disso, te envio o modelo de pacote com quatro encontros para você olhar com calma.",
      "Tudo bem, imprevisto acontece. Sexta de manhã fica combinado. Me avisa o horário que for melhor para você."
     ]
-   }
+   },
+   "alerts": [
+    {
+     "kind": "reuniao",
+     "detail": "Pede para adiar a reunião de amanhã para sexta de manhã (imprevisto no trabalho).",
+     "messageId": "A5"
+    }
+   ]
   },
   {
    "jid": "5511988887777@s.whatsapp.net",
@@ -228,7 +242,14 @@
      "Oi Mariana! Posso te ligar hoje às 17h. Serve para você?",
      "Claro, te ligo assim que terminar uma reunião. Só não consegui ouvir o seu áudio, pode me contar em uma frase do que se trata?"
     ]
-   }
+   },
+   "alerts": [
+    {
+     "kind": "reuniao",
+     "detail": "Pede que você ligue quando puder (o áudio dela não chegou).",
+     "messageId": "M4"
+    }
+   ]
   },
   {
    "jid": "5585966665555@s.whatsapp.net",
@@ -276,21 +297,21 @@
     {
      "id": "F1",
      "fromMe": false,
-     "minutesAgo": 1500,
+     "minutesAgo": 1800,
      "kind": "text",
      "text": "Boa noite! Queria sua opinião: devo aceitar a proposta da agência ou continuar sozinha?"
     },
     {
      "id": "F2",
      "fromMe": true,
-     "minutesAgo": 1490,
+     "minutesAgo": 1790,
      "kind": "text",
      "text": "Boa noite, Fernanda! Qual é o valor e o prazo que eles propuseram?"
     },
     {
      "id": "F3",
      "fromMe": false,
-     "minutesAgo": 1400,
+     "minutesAgo": 1700,
      "kind": "text",
      "text": "R$ 3.000 por mês, contrato de 6 meses."
     }
@@ -335,6 +356,50 @@
      "senderJid": "5562911110000@s.whatsapp.net",
      "senderName": "Tatiane Rocha",
      "text": "Tenho sim, te mando no privado."
+    }
+   ]
+  },
+  {
+   "jid": "5548944443333@s.whatsapp.net",
+   "pushName": "Rafael Mendes",
+   "messages": [
+    {
+     "id": "R1",
+     "fromMe": true,
+     "minutesAgo": 5200,
+     "kind": "text",
+     "text": "Rafael, como estão as vendas desta semana?"
+    },
+    {
+     "id": "R2",
+     "fromMe": false,
+     "minutesAgo": 4400,
+     "kind": "text",
+     "text": "Mentor, sendo sincero: tô bem desanimado. Fiz tudo do módulo 3 e não fechei nenhuma venda. Tô pensando em parar o programa."
+    },
+    {
+     "id": "R3",
+     "fromMe": false,
+     "minutesAgo": 4390,
+     "kind": "text",
+     "text": "Preciso decidir até sexta se renovo o plano. Me dá um retorno?"
+    }
+   ],
+   "alerts": [
+    {
+     "kind": "urgente",
+     "detail": "Precisa decidir até sexta se renova o plano e pede um retorno seu.",
+     "messageId": "R3"
+    },
+    {
+     "kind": "desanimo",
+     "detail": "Diz estar desanimado, sem vendas depois do módulo 3, e pensa em parar o programa.",
+     "messageId": "R2"
+    },
+    {
+     "kind": "esperando",
+     "detail": "Sem resposta há mais de 2 dias.",
+     "messageId": "R2"
     }
    ]
   }

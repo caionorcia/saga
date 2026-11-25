@@ -108,7 +108,7 @@ describe('WhatsAppClient', () => {
   let clock: FakeClock
   let repo: Repo
   let queue: JobQueue
-  let limiters: Record<JobType, RateLimiter>
+  let limiters: Partial<Record<JobType, RateLimiter>>
   let sockets: FakeSocket[]
   let client: WhatsAppClient
   let statuses: ConnState[]

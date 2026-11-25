@@ -1,8 +1,8 @@
 import raw from '../../tests/fixtures/wa/demo.json'
 import type { NormalizedMessage } from './types'
-import type { TranscriptStatus } from './db/repo'
+import type { AlertKind, TranscriptStatus } from './db/repo'
 
-/** Dados de demonstração (5 pessoas e 2 grupos) usados pelo modo `SAGA_FAKE_WA=1`, pela pré-visualização e pelos testes. */
+/** Dados de demonstração (6 pessoas e 2 grupos, alguns com alertas) usados pelo modo `SAGA_FAKE_WA=1`, pela pré-visualização e pelos testes. */
 export interface DemoMessage extends NormalizedMessage {
   hasAudio: boolean
   transcript: string | null
@@ -17,6 +17,8 @@ export interface DemoContact {
   notes: string | null
   messages: DemoMessage[]
   analysis: { provider: 'groq' | 'claude'; summary: string; suggestions: string[] } | null
+  /** alertas ativos de demonstração */
+  alerts: Array<{ kind: AlertKind; detail: string; msgId: string | null }>
 }
 
 interface RawMessage {
@@ -42,6 +44,7 @@ interface RawContact {
   notes?: string
   messages: RawMessage[]
   analysis?: { provider: string; summary: string; suggestions: string[] }
+  alerts?: Array<{ kind: string; detail: string; messageId?: string }>
 }
 
 export function loadDemo(now: number): DemoContact[] {
@@ -54,6 +57,7 @@ export function loadDemo(now: number): DemoContact[] {
     analysis: c.analysis
       ? { provider: c.analysis.provider === 'claude' ? 'claude' : 'groq', summary: c.analysis.summary, suggestions: c.analysis.suggestions }
       : null,
+    alerts: (c.alerts ?? []).map((a) => ({ kind: a.kind as AlertKind, detail: a.detail, msgId: a.messageId ?? null })),
     messages: c.messages
       .map((m) => ({
         id: m.id,

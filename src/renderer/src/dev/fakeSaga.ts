@@ -3,7 +3,9 @@
  * Usado pelos testes e pela pré-visualização no navegador (`npm run preview:ui`); nunca no app real.
  */
 import { loadDemo, type DemoContact } from '../../../core/demo'
+import { alertSeverity, type AlertKind } from '../../../shared/triage'
 import type {
+  Alert,
   AnalysisResult,
   AppState,
   Contact,
@@ -26,7 +28,8 @@ export const DEFAULT_STATE: AppState = {
   costTodayUsd: 0,
   setupDone: true,
   provider: 'groq',
-  update: { status: 'none' }
+  update: { status: 'none' },
+  triage: { awaiting: 0, withAlerts: 0 }
 }
 
 export interface FakeControl {
@@ -52,6 +55,11 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   const names = new Map<string, string>()
   const notes = new Map<string, string>(demo.flatMap((c) => (c.notes ? [[c.jid, c.notes] as const] : [])))
   const analyses = new Map(demo.flatMap((c) => (c.analysis ? [[c.jid, c.analysis] as const] : [])))
+  const alerts = new Map<string, Alert[]>(
+    demo.map((c) => [c.jid, c.alerts.map((a) => ({ jid: c.jid, ...a, createdAt: now - 10 * 60_000 }))] as const)
+  )
+  const activeAlerts = (jid: string): Alert[] =>
+    [...(alerts.get(jid) ?? [])].sort((a, b) => alertSeverity(a.kind) - alertSeverity(b.kind))
   const settings: SettingsView = {
     provider: 'groq',
     transcriber: 'groq',
@@ -68,7 +76,13 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   let generation = 0
   const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
-  const emitState = () => stateListeners.forEach((l) => l({ ...state }))
+  const snapshot = (): AppState => {
+    const visible = demo.filter((c) => !hidden.has(c.jid))
+    const awaiting = visible.filter((c) => !c.messages[c.messages.length - 1]?.fromMe).length
+    const withAlerts = visible.filter((c) => activeAlerts(c.jid).length > 0).length
+    return { ...state, triage: { awaiting, withAlerts } }
+  }
+  const emitState = () => stateListeners.forEach((l) => l(snapshot()))
   const record = <T>(method: string, args: unknown[], value: T): T => {
     calls.push({ method, args })
     return value
@@ -86,8 +100,18 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       displayName: displayName(c),
       lastTs: last?.ts ?? null,
       awaitingReply: !!last && !last.fromMe,
-      isGroup: c.isGroup
+      isGroup: c.isGroup,
+      waitingSince: waitingSince(c),
+      alerts: activeAlerts(c.jid).map((a) => a.kind)
     }
+  }
+  /** primeira mensagem do contato depois da última do mentor */
+  function waitingSince(c: DemoContact): number | null {
+    const last = c.messages[c.messages.length - 1]
+    if (!last || last.fromMe) return null
+    let i = c.messages.length - 1
+    while (i > 0 && !c.messages[i - 1].fromMe) i--
+    return c.messages[i].ts
   }
   const toView = (m: DemoContact['messages'][number]): MessageView => ({
     id: m.id,
@@ -130,7 +154,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   }
 
   const api: SagaApi = {
-    getState: async () => ({ ...state }),
+    getState: async () => snapshot(),
     onState: (cb) => {
       stateListeners.add(cb)
       return () => void stateListeners.delete(cb)
@@ -148,6 +172,22 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
         .filter((c) => kind === 'all' || (kind === 'group') === c.isGroup)
         .sort((a, b) => (b.lastTs ?? 0) - (a.lastTs ?? 0)),
     listMessages: async (jid) => (find(jid)?.messages ?? []).map(toView),
+    listAlerts: async (jid) =>
+      jid !== undefined
+        ? activeAlerts(jid)
+        : demo
+            .filter((c) => !hidden.has(c.jid))
+            .flatMap((c) => activeAlerts(c.jid))
+            .sort((a, b) => alertSeverity(a.kind) - alertSeverity(b.kind)),
+    dismissAlert: async (jid, kind: AlertKind) => {
+      record('dismissAlert', [jid, kind], undefined)
+      alerts.set(
+        jid,
+        (alerts.get(jid) ?? []).filter((a) => a.kind !== kind)
+      )
+      contactListeners.forEach((l) => l())
+      emitState()
+    },
     getAnalysis: (jid) => analysisFor(jid, false),
     regenerate: (jid) => analysisFor(jid, true),
 
@@ -170,6 +210,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       if (h) hidden.add(jid)
       else hidden.delete(jid)
       contactListeners.forEach((l) => l())
+      emitState()
     },
     setNotes: async (jid, text) => {
       notes.set(jid, text)

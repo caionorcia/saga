@@ -12,7 +12,7 @@ export interface LimitConfig {
   minBilledSec?: number
 }
 
-export type LimiterName = 'wa_media' | 'wa_profile' | 'groq_audio' | 'llm'
+export type LimiterName = 'wa_media' | 'wa_profile' | 'groq_audio' | 'llm' | 'classify'
 
 export const LIMITS: Record<LimiterName, LimitConfig> = {
   wa_media: { minGapMs: 4000, maxGapMs: 12000, perHour: 300, perDay: 2000 },
@@ -25,7 +25,9 @@ export const LIMITS: Record<LimiterName, LimitConfig> = {
     audioSecondsPerDay: 28800,
     minBilledSec: 10
   },
-  llm: { minGapMs: 0, maxGapMs: 1000, perHour: 600, perDay: 2000 }
+  llm: { minGapMs: 0, maxGapMs: 1000, perHour: 600, perDay: 2000 },
+  /** alertas em segundo plano (IA gratuita): uma conversa a cada 20–40 s, no máximo 60 por hora e 400 por dia */
+  classify: { minGapMs: 20_000, maxGapMs: 40_000, perHour: 60, perDay: 400 }
 }
 
 const HOUR = 3_600_000

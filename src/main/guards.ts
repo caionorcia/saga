@@ -2,7 +2,7 @@
  * Regras puras de segurança do processo principal (sem importar o Electron, para testar).
  */
 import { posix, win32 } from 'node:path'
-import { CONTACT_KINDS, type InvokeMethod } from '../shared/api'
+import { ALERT_KINDS, CONTACT_KINDS, type InvokeMethod } from '../shared/api'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -96,6 +96,8 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   getState: () => true,
   listContacts: ([h, k]) => isBool(h) && (k === undefined || (CONTACT_KINDS as readonly unknown[]).includes(k)),
   listMessages: ([j]) => nonEmpty(j),
+  listAlerts: (a) => a.length <= 1 && (a[0] === undefined || nonEmpty(a[0])),
+  dismissAlert: (a) => a.length === 2 && nonEmpty(a[0]) && (ALERT_KINDS as readonly unknown[]).includes(a[1]),
   getAnalysis: ([j]) => nonEmpty(j),
   regenerate: ([j]) => nonEmpty(j),
   saveReply: ([i]) =>

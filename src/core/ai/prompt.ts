@@ -55,7 +55,8 @@ function clip(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max).trimEnd()}…` : s
 }
 
-function render(m: MessageRow, isGroup = false): string {
+/** Uma linha do prompt: "Mentor: …", "Mentorado: …" ou, em grupo, "Nome (menciona você): …". */
+export function render(m: MessageRow, isGroup = false): string {
   const who = m.fromMe
     ? 'Mentor'
     : isGroup
@@ -94,7 +95,8 @@ export function buildPrompt(p: PromptInput): { system: string; user: string } {
   return { system: group ? SYSTEM_GROUP : SYSTEM, user: parts.join('\n\n') }
 }
 
-function extractJson(raw: string): unknown {
+/** JSON da resposta da IA (aceita bloco ```json``` e texto em volta); lança `InvalidOutputError`. */
+export function extractJson(raw: string): unknown {
   const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw)
   const candidates = [raw.trim()]
   if (fence) candidates.unshift(fence[1].trim())

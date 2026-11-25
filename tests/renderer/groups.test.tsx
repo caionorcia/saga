@@ -92,7 +92,9 @@ describe('Conversation em grupo', () => {
     displayName: 'Mentoria',
     lastTs: 1,
     awaitingReply: true,
-    isGroup: true
+    isGroup: true,
+    waitingSince: 1,
+    alerts: []
   }
   const analysis: Analysis = { jid: GRP, lastMsgId: 'G8', provider: 'groq', summary: 'Bruno te marcou.', suggestions: ['a', 'b'], createdAt: 1, transcriptFp: '', pendingAudios: 0 }
 

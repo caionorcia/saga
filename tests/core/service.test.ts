@@ -144,7 +144,7 @@ describe('SagaService', () => {
   })
 
   describe('start()', () => {
-    it('recoverAfterCrash, aquecimento em todos os 4 limitadores, cliente e fila; nenhuma chamada de IA', async () => {
+    it('recoverAfterCrash, aquecimento em todos os 5 limitadores, cliente e fila; nenhuma chamada de IA', async () => {
       const order: string[] = []
       const recover = vi.spyOn(JobQueue.prototype, 'recoverAfterCrash').mockImplementation(function () {
         order.push('recover')
@@ -162,21 +162,24 @@ describe('SagaService', () => {
       settings.save({ groqKey: GROQ_KEY })
       await service.start()
       expect(recover).toHaveBeenCalledTimes(1)
-      expect(warm).toHaveBeenCalledTimes(4)
+      expect(warm).toHaveBeenCalledTimes(5)
       expect(qstart).toHaveBeenCalledTimes(1)
-      expect(order).toEqual(['recover', 'warmup', 'warmup', 'warmup', 'warmup', 'wa.start', 'queue.start'])
+      expect(order).toEqual(['recover', 'warmup', 'warmup', 'warmup', 'warmup', 'warmup', 'wa.start', 'queue.start'])
       expect(llmFactory).not.toHaveBeenCalled()
       expect(llm.calls).toBe(0)
     })
 
-    it('200 áudios recebidos offline (histórico): 0 chamadas ao LLM e 200 pendentes na fila', async () => {
+    it('200 áudios recebidos offline (histórico): 0 chamadas ao LLM, 200 downloads e 1 procura de alertas na fila', async () => {
       settings.save({ groqKey: GROQ_KEY })
       await service.start()
       const messages = Array.from({ length: 200 }, (_, i) => wamsg({ id: `A${i}`, ts: NOW - (i + 1) * 60_000, audio: 12 }))
       await emit('messaging-history.set', { chats: [], contacts: [], messages })
       const st = await service.getState()
-      expect(st.queue.pending).toBe(200)
-      expect(repo.listJobs('pending').every((j) => j.type === 'download_audio')).toBe(true)
+      expect(st.queue.pending).toBe(201)
+      const pending = repo.listJobs('pending')
+      expect(pending.filter((j) => j.type === 'download_audio')).toHaveLength(200)
+      // uma por conversa (não por mensagem), e ela espera o limitador próprio: nada roda em rajada
+      expect(pending.filter((j) => j.type === 'classify')).toHaveLength(1)
       expect(llmFactory).not.toHaveBeenCalled()
       expect(llm.calls).toBe(0)
     })
@@ -186,7 +189,7 @@ describe('SagaService', () => {
         lim.record()
         expect(repo.getSetting(`limiter:${name}`), name).not.toBeNull()
       }
-      expect(Object.keys(service.limiters).sort()).toEqual(['groq_audio', 'llm', 'wa_media', 'wa_profile'])
+      expect(Object.keys(service.limiters).sort()).toEqual(['classify', 'groq_audio', 'llm', 'wa_media', 'wa_profile'])
     })
   })
 
@@ -617,6 +620,132 @@ describe('SagaService', () => {
       expect(await service.testKey('groq', GROQ_KEY)).toBe(true)
       expect(f).toHaveBeenCalledTimes(1)
       expect(JSON.stringify(repo.recentEvents(100))).not.toContain(GROQ_KEY)
+    })
+  })
+
+  describe('fila do dia e alertas', () => {
+    const H = 3_600_000
+    const ins = (id: string, ts: number, fromMe = false, text = 'oi') =>
+      repo.upsertContact({ jid: JID }) ?? repo.insertMessage({ id, jid: JID, fromMe, ts, kind: 'text', text, mediaKeyJson: null, durationSec: null })
+    const classifyJobs = () => [...repo.listJobs('pending'), ...repo.listJobs('running')].filter((j) => j.type === 'classify')
+    const alertLlm = (alerts: unknown[]) => {
+      const p = {
+        name: 'groq' as const,
+        calls: [] as string[],
+        async complete(x: { user: string }) {
+          p.calls.push(x.user)
+          return { text: JSON.stringify({ alerts }), inputTokens: 1, outputTokens: 1 }
+        }
+      }
+      return p
+    }
+
+    it('limitador próprio (20–40 s, 60/h, 400/dia) e sem rajada ao iniciar', async () => {
+      const { LIMITS } = await import('../../src/core/queue/limiter')
+      expect(LIMITS.classify).toEqual({ minGapMs: 20_000, maxGapMs: 40_000, perHour: 60, perDay: 400 })
+      await service.start()
+      // aquecimento: o primeiro job de alertas só sai depois de um intervalo (dobrado)
+      expect(service.limiters.classify.nextAllowedAt() - clock.now()).toBeGreaterThanOrEqual(40_000)
+    })
+
+    it('mensagem nova do contato agenda a classificação só com chave da Groq; mensagens antigas e escondidos não', async () => {
+      await service.start()
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'c1', ts: NOW - 60_000, text: 'Oi' })] })
+      expect(classifyJobs()).toHaveLength(0)
+      settings.save({ groqKey: GROQ_KEY })
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'c0', ts: NOW - 10 * 24 * H, text: 'antiga' })] })
+      expect(classifyJobs()).toHaveLength(0)
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'c2', ts: NOW - 30_000, text: 'Oi de novo' })] })
+      expect(classifyJobs()).toEqual([expect.objectContaining({ key: `classify:${JID}`, payload: { jid: JID, ts: NOW - 30_000 } })])
+      repo.markJobDone(classifyJobs()[0].id)
+      await service.setHidden(JID, true)
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'c3', ts: NOW - 20_000, text: 'escondido' })] })
+      expect(classifyJobs()).toHaveLength(0)
+    })
+
+    it('usa a Groq mesmo com o Claude escolhido para as sugestões; sem chave da Groq, nunca chama o Claude', async () => {
+      const groq = alertLlm([{ kind: 'reuniao', detail: 'Pede uma ligação amanhã', messageId: 1 }])
+      llmFactory.mockImplementation(() => groq)
+      settings.save({ claudeKey: 'sk-ant-SEGREDO', provider: 'claude' })
+      ins('c1', NOW - 60_000, false, 'Pode me ligar amanhã?')
+      service.queue.enqueue('classify', `classify:${JID}`, { jid: JID, ts: NOW - 60_000 })
+      expect(await service.queue.tick()).toBe('ran')
+      expect(llmFactory).not.toHaveBeenCalled()
+      expect(repo.listAlerts(JID)).toEqual([])
+
+      settings.save({ groqKey: GROQ_KEY })
+      service.queue.requeue('classify', `classify:${JID}`, { jid: JID, ts: NOW - 60_000 })
+      clock.advance(60_000)
+      expect(await service.queue.tick()).toBe('ran')
+      expect(llmFactory).toHaveBeenCalledTimes(1)
+      expect(llmFactory).toHaveBeenCalledWith('groq', GROQ_KEY, expect.anything())
+      expect(groq.calls).toHaveLength(1)
+      expect(await service.listAlerts(JID)).toEqual([expect.objectContaining({ kind: 'reuniao', msgId: 'c1' })])
+    })
+
+    it('registro de diagnóstico: uma linha por job de alertas, sem texto nem jid', async () => {
+      const lines: string[] = []
+      await service.stop()
+      service = make({ diag: (k, d) => lines.push(`${k} ${d}`) })
+      llmFactory.mockImplementation(() => alertLlm([{ kind: 'urgente', detail: 'Prazo de amanhã', messageId: 1 }]))
+      settings.save({ groqKey: GROQ_KEY })
+      ins('c1', NOW - 60_000, false, 'Preciso até amanhã!!')
+      service.queue.enqueue('classify', `classify:${JID}`, { jid: JID, ts: NOW - 60_000 })
+      await service.queue.tick()
+      const mine = lines.filter((l) => l.startsWith('classify '))
+      expect(mine).toEqual([expect.stringMatching(/^classify result=ok alerts=1 ms=\d+$/)])
+      expect(lines.join('\n')).not.toMatch(/amanhã|5547999998888|SEGREDO|gsk_/)
+    })
+
+    it('resposta do mentor resolve urgente/travado/reunião/esperando; desânimo fica até resolver à mão', async () => {
+      await service.start()
+      ins('c1', NOW - 60_000)
+      for (const kind of ['urgente', 'travado', 'reuniao', 'esperando', 'desanimo'] as const) {
+        repo.upsertAlert({ jid: JID, kind, detail: kind, msgId: 'c1' })
+      }
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'me1', fromMe: true, ts: NOW, text: 'Respondi' })] })
+      expect((await service.listAlerts(JID)).map((a) => a.kind)).toEqual(['desanimo'])
+      const changed = vi.fn()
+      service.onContactsChanged(changed)
+      await service.dismissAlert(JID, 'desanimo')
+      expect(await service.listAlerts(JID)).toEqual([])
+      await vi.waitFor(() => expect(changed).toHaveBeenCalled())
+    })
+
+    it('"esperando" nasce por regra depois de 48 h sem resposta; resolvido à mão não volta na mesma espera', async () => {
+      repo.upsertContact({ jid: JID, pushName: 'Ana' })
+      ins('m0', NOW - 50 * H, true)
+      ins('c1', NOW - 47 * H)
+      let [c] = await service.listContacts(false)
+      expect(c.waitingSince).toBe(NOW - 47 * H)
+      expect(c.alerts).toEqual([])
+      clock.advance(2 * H)
+      ;[c] = await service.listContacts(false)
+      expect(c.alerts).toEqual(['esperando'])
+      expect(service.state().triage).toEqual({ awaiting: 1, withAlerts: 1 })
+      await service.dismissAlert(JID, 'esperando')
+      ;[c] = await service.listContacts(false)
+      expect(c.alerts).toEqual([])
+      // o mentor responde e o contato escreve de novo: nova espera, novo alerta depois de 48 h
+      ins('m1', clock.now(), true)
+      ins('c2', clock.now() + 1000)
+      clock.advance(49 * H)
+      expect((await service.listAlerts(JID)).map((a) => a.kind)).toEqual(['esperando'])
+      // escondido: fora dos alertas e da contagem
+      await service.setHidden(JID, true)
+      expect(await service.listAlerts()).toEqual([])
+      expect(service.state().triage).toEqual({ awaiting: 0, withAlerts: 0 })
+    })
+
+    it('grupo: "esperando" só quando alguém mencionou o mentor na espera', async () => {
+      const GRP = '120363025555555555@g.us'
+      repo.upsertContact({ jid: GRP, isGroup: true })
+      const g = (id: string, ts: number, mentionsMe: boolean) =>
+        repo.insertMessage({ id, jid: GRP, fromMe: false, ts, kind: 'text', text: 'x', mediaKeyJson: null, durationSec: null, isGroup: true, senderJid: '5511@s.whatsapp.net', mentionsMe })
+      g('g1', NOW - 60 * H, false)
+      expect((await service.listContacts(false)).find((c) => c.jid === GRP)!.alerts).toEqual([])
+      g('g2', NOW - 59 * H, true)
+      expect((await service.listContacts(false)).find((c) => c.jid === GRP)!.alerts).toEqual(['esperando'])
     })
   })
 

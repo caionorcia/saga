@@ -11,7 +11,7 @@ import { join } from 'node:path'
 
 const T0 = 1_700_000_000_000
 
-function makeLimiters(clock: FakeClock, repo?: Repo): Record<JobType, RateLimiter> {
+function makeLimiters(clock: FakeClock, repo?: Repo): Partial<Record<JobType, RateLimiter>> {
   const p = (k: string) => (repo ? { repo, key: `limiter:${k}` } : undefined)
   return {
     download_audio: new RateLimiter(LIMITS.wa_media, clock, () => 0, p('wa_media')),
@@ -444,8 +444,23 @@ describe('JobQueue', () => {
       expect(repo.listJobs('done')).toHaveLength(1)
     })
 
-    it('prazos padrão: download 120 s, transcrição 180 s, perfil 60 s', () => {
-      expect(DEFAULT_JOB_TIMEOUTS_MS).toEqual({ download_audio: 120_000, transcribe: 180_000, fetch_profile: 60_000 })
+    it('tipo sem limitador nunca roda (e não quebra o resumo)', async () => {
+      const diag: string[] = []
+      const tq = new JobQueue(repo, clock, makeLimiters(clock), { diag: (k, d) => diag.push(`${k} ${d}`) })
+      let ran = 0
+      tq.register('classify', async () => {
+        ran++
+      })
+      tq.enqueue('classify', 'c', { jid: 'x' })
+      expect(await tq.tick()).toBe('idle')
+      expect(ran).toBe(0)
+      expect(tq.stats().nextRunAt).toBeNull()
+      tq.logSummary()
+      expect(diag[0]).toMatch(/^queue_summary /)
+    })
+
+    it('prazos padrão: download 120 s, transcrição 180 s, perfil 60 s, alertas 90 s', () => {
+      expect(DEFAULT_JOB_TIMEOUTS_MS).toEqual({ download_audio: 120_000, transcribe: 180_000, fetch_profile: 60_000, classify: 90_000 })
     })
   })
 
