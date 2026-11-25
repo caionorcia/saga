@@ -278,6 +278,24 @@ describe('SagaService', () => {
       expect((await service.listContacts(false)).map((c) => c.jid)).toEqual([JID])
     })
 
+    it('grupos: listContacts filtra por tipo e listMessages traz o nome de quem mandou e a menção', async () => {
+      const GRP = '120363025555555555@g.us'
+      repo.upsertContact({ jid: JID })
+      repo.insertMessage({ id: 'i1', jid: JID, fromMe: false, ts: NOW - 2000, kind: 'text', text: 'oi', mediaKeyJson: null, durationSec: null })
+      repo.upsertContact({ jid: GRP, isGroup: true })
+      repo.insertMessage({
+        id: 'g1', jid: GRP, fromMe: false, ts: NOW - 1000, kind: 'text', text: 'Mentor?', mediaKeyJson: null, durationSec: null,
+        isGroup: true, senderJid: '5511988887777@s.whatsapp.net', senderName: 'Bruno', mentionsMe: true
+      })
+      expect((await service.listContacts(false)).map((c) => c.jid)).toEqual([GRP, JID])
+      expect((await service.listContacts(false, 'all')).map((c) => c.jid)).toEqual([GRP, JID])
+      expect((await service.listContacts(false, 'group')).map((c) => [c.jid, c.isGroup])).toEqual([[GRP, true]])
+      expect((await service.listContacts(false, 'individual')).map((c) => c.jid)).toEqual([JID])
+      const [g] = await service.listMessages(GRP)
+      expect(g).toMatchObject({ id: 'g1', senderJid: '5511988887777@s.whatsapp.net', senderName: 'Bruno', mentionsMe: true })
+      expect((await service.listMessages(JID))[0]).toMatchObject({ senderJid: null, senderName: null, mentionsMe: false })
+    })
+
     it('transcrição que falha 3 vezes termina como failed', async () => {
       transcriber = {
         transcribe: async () => {
@@ -619,6 +637,8 @@ describe('SagaService', () => {
       let release!: () => void
       await service.start()
       service.queue.register('fetch_profile', () => new Promise<void>((r) => (release = r)))
+      // consultas ao WhatsApp ficam pausadas até a conexão abrir; aqui o job só serve para pendurar a fila
+      service.queue.resumeType('fetch_profile')
       service.queue.enqueue('fetch_profile', 'tarde', {})
       await vi.waitFor(() => expect(repo.listJobs('running')).toHaveLength(1))
       const unhandled = vi.fn()
@@ -637,6 +657,7 @@ describe('SagaService', () => {
     it('para a fila esperando o job atual por no máximo o tempo dado, e para o cliente', async () => {
       await service.start()
       service.queue.register('fetch_profile', () => new Promise<void>(() => {}))
+      service.queue.resumeType('fetch_profile')
       service.queue.enqueue('fetch_profile', 'pendura', {})
       await vi.waitFor(() => expect(repo.listJobs('running')).toHaveLength(1))
       const waStop = vi.spyOn(client(), 'stop')

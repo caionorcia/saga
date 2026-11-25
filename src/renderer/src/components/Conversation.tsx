@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Analysis, Contact, MessageView } from '../../../shared/api'
 import { formatDayHeading, formatDuration, formatTime, initials, sameDay } from '../format'
+import { GroupIcon } from './GroupIcon'
 
 interface Props {
   contact: Contact
@@ -45,19 +46,26 @@ export function Conversation({ contact, analysis }: Props) {
   }, [])
 
   return (
-    <section className="conversation" aria-label={`Conversa com ${contact.displayName}`}>
+    <section className="conversation" aria-label={`${contact.isGroup ? 'Grupo' : 'Conversa com'} ${contact.displayName}`}>
       <header className="conv-head">
-        <span className="avatar" aria-hidden="true">
-          {initials(contact.displayName)}
-        </span>
+        {contact.isGroup ? (
+          <span className="avatar avatar-group" aria-hidden="true">
+            <GroupIcon />
+          </span>
+        ) : (
+          <span className="avatar" aria-hidden="true">
+            {initials(contact.displayName)}
+          </span>
+        )}
         <div>
           <h2>{contact.displayName}</h2>
+          {contact.isGroup && <p className="muted small">Grupo</p>}
           {contact.notes && <p className="muted small conv-notes">{contact.notes}</p>}
         </div>
       </header>
 
       <div className="summary-card" aria-live="polite">
-        <h3>O que a pessoa quer</h3>
+        <h3>{contact.isGroup ? 'O que pedem a você' : 'O que a pessoa quer'}</h3>
         <p>{analysis && analysis.jid === jid ? analysis.summary : <span className="muted">Resumo a caminho…</span>}</p>
         {analysis && analysis.jid === jid && analysis.pendingAudios > 0 && (
           <p className="small pending-note">
@@ -79,24 +87,48 @@ export function Conversation({ contact, analysis }: Props) {
       >
         {messages === null && <p className="empty">Carregando mensagens…</p>}
         {messages?.length === 0 && <p className="empty">Nenhuma mensagem dos últimos 30 dias.</p>}
-        {messages?.map((m, i) => (
-          <Fragment key={m.id}>
-            {(i === 0 || !sameDay(messages[i - 1].ts, m.ts)) && (
-              <div className="day-sep">
-                <span>{formatDayHeading(m.ts)}</span>
-              </div>
-            )}
-            <Bubble m={m} />
-          </Fragment>
-        ))}
+        {messages?.map((m, i) => {
+          const prev = i > 0 ? messages[i - 1] : null
+          const newDay = !prev || !sameDay(prev.ts, m.ts)
+          // grupo: o nome aparece uma vez por sequência da mesma pessoa (de novo depois de outra pessoa ou de outro dia)
+          const showSender =
+            contact.isGroup && !m.fromMe && (newDay || !prev || prev.fromMe || senderKey(prev) !== senderKey(m))
+          return (
+            <Fragment key={m.id}>
+              {newDay && (
+                <div className="day-sep">
+                  <span>{formatDayHeading(m.ts)}</span>
+                </div>
+              )}
+              <Bubble m={m} sender={showSender ? (m.senderName ?? 'Participante') : null} group={contact.isGroup} />
+            </Fragment>
+          )
+        })}
       </div>
     </section>
   )
 }
 
-function Bubble({ m }: { m: MessageView }) {
+const senderKey = (m: MessageView) => m.senderJid ?? m.senderName ?? ''
+
+/** Cores escuras (contraste AA sobre branco) para o nome de quem mandou, fixas por pessoa. */
+const SENDER_COLORS = ['#0b6e69', '#8a4b08', '#5b3fa0', '#a3324a', '#2d5f9a', '#3f6b1f', '#8c3a8c', '#6b5a12']
+
+function senderColor(key: string): string {
+  let h = 0
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0
+  return SENDER_COLORS[h % SENDER_COLORS.length]
+}
+
+function Bubble({ m, sender, group }: { m: MessageView; sender: string | null; group: boolean }) {
   return (
-    <div className={`bubble ${m.fromMe ? 'bubble-me' : 'bubble-them'}`}>
+    <div className={`bubble ${m.fromMe ? 'bubble-me' : 'bubble-them'}${group && !m.fromMe && !sender ? ' bubble-cont' : ''}`}>
+      {sender && (
+        <p className="bubble-sender" style={{ color: senderColor(senderKey(m)) }}>
+          {sender}
+        </p>
+      )}
+      {group && m.mentionsMe && <p className="bubble-mention">menciona você</p>}
       {m.kind === 'audio' ? <AudioBody m={m} /> : <p className="bubble-text">{m.text ?? 'Mensagem sem texto (imagem, vídeo ou outro tipo).'}</p>}
       <time className="bubble-time">{formatTime(m.ts)}</time>
     </div>

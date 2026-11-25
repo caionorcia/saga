@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Contact } from '../../../shared/api'
+import type { Contact, ContactKind } from '../../../shared/api'
 import { formatListTime, initials } from '../format'
+import { GroupIcon } from './GroupIcon'
 
 interface Props {
   selected: string | null
@@ -11,9 +12,41 @@ type Editing = { jid: string; mode: 'rename' | 'notes' } | null
 
 const norm = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
 
+/** Filtro escolhido (lembrado só neste computador; sem armazenamento, volta para "Todos"). */
+const KIND_KEY = 'saga.contactKind'
+const KINDS: ReadonlyArray<{ kind: ContactKind; label: string }> = [
+  { kind: 'all', label: 'Todos' },
+  { kind: 'individual', label: 'Individuais' },
+  { kind: 'group', label: 'Grupos' }
+]
+
+function readKind(): ContactKind {
+  try {
+    const v = localStorage.getItem(KIND_KEY)
+    return v === 'individual' || v === 'group' ? v : 'all'
+  } catch {
+    return 'all'
+  }
+}
+
+function writeKind(kind: ContactKind): void {
+  try {
+    localStorage.setItem(KIND_KEY, kind)
+  } catch {
+    // sem armazenamento: o filtro vale só até fechar
+  }
+}
+
+const EMPTY: Record<ContactKind, string> = {
+  all: 'Ainda não há conversas. Elas aparecem aqui assim que forem importadas.',
+  individual: 'Nenhuma conversa individual ainda.',
+  group: 'Nenhum grupo ainda. Os grupos aparecem aqui assim que forem importados.'
+}
+
 export function ContactList({ selected, onSelect }: Props) {
   const [contacts, setContacts] = useState<Contact[] | null>(null)
   const [showHidden, setShowHidden] = useState(false)
+  const [kind, setKindState] = useState<ContactKind>(readKind)
   const [query, setQuery] = useState('')
   const [menuJid, setMenuJid] = useState<string | null>(null)
   const [editing, setEditing] = useState<Editing>(null)
@@ -22,7 +55,7 @@ export function ContactList({ selected, onSelect }: Props) {
     let alive = true
     const load = () =>
       window.saga
-        .listContacts(showHidden)
+        .listContacts(showHidden, kind)
         .then((c) => alive && setContacts(c))
         .catch(() => alive && setContacts((old) => old ?? []))
     void load()
@@ -31,7 +64,14 @@ export function ContactList({ selected, onSelect }: Props) {
       alive = false
       off()
     }
-  }, [showHidden])
+  }, [showHidden, kind])
+
+  const setKind = (k: ContactKind) => {
+    if (k === kind) return
+    writeKind(k)
+    setContacts(null)
+    setKindState(k)
+  }
 
   const visible = useMemo(() => {
     const q = norm(query.trim())
@@ -56,13 +96,27 @@ export function ContactList({ selected, onSelect }: Props) {
     <nav className="contacts" aria-label="Conversas">
       <div className="contacts-head">
         <h1 className="brand">Saga</h1>
+        <div className="kind-filter" role="radiogroup" aria-label="Mostrar conversas">
+          {KINDS.map((k) => (
+            <button
+              key={k.kind}
+              type="button"
+              role="radio"
+              aria-checked={kind === k.kind}
+              className={kind === k.kind ? 'is-active' : undefined}
+              onClick={() => setKind(k.kind)}
+            >
+              {k.label}
+            </button>
+          ))}
+        </div>
         <label htmlFor="busca" className="sr-only">
-          Buscar pessoa
+          Buscar pessoa ou grupo
         </label>
         <input
           id="busca"
           type="search"
-          placeholder="Buscar pessoa"
+          placeholder={kind === 'group' ? 'Buscar grupo' : kind === 'individual' ? 'Buscar pessoa' : 'Buscar pessoa ou grupo'}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -75,7 +129,7 @@ export function ContactList({ selected, onSelect }: Props) {
       <ul className="contacts-list">
         {contacts === null && <li className="empty">Carregando…</li>}
         {contacts !== null && visible.length === 0 && (
-          <li className="empty">{query ? 'Ninguém encontrado.' : 'Ainda não há conversas. Elas aparecem aqui assim que forem importadas.'}</li>
+          <li className="empty">{query ? 'Nada encontrado.' : EMPTY[kind]}</li>
         )}
         {visible.map((c) => (
           <li key={c.jid} className={`contact${c.jid === selected ? ' is-selected' : ''}${c.hidden ? ' is-hidden' : ''}`}>
@@ -85,11 +139,20 @@ export function ContactList({ selected, onSelect }: Props) {
               aria-current={c.jid === selected ? 'true' : undefined}
               onClick={() => onSelect(c.jid)}
             >
-              <span className="avatar" aria-hidden="true">
-                {initials(c.displayName)}
-              </span>
+              {c.isGroup ? (
+                <span className="avatar avatar-group" aria-hidden="true">
+                  <GroupIcon />
+                </span>
+              ) : (
+                <span className="avatar" aria-hidden="true">
+                  {initials(c.displayName)}
+                </span>
+              )}
               <span className="contact-text">
-                <span className="contact-name">{c.displayName}</span>
+                {c.isGroup && <span className="sr-only">Grupo: </span>}
+                <span className="contact-name" title={c.displayName}>
+                  {c.displayName}
+                </span>
                 <span className="contact-sub">
                   {c.hidden ? 'Escondido' : c.awaitingReply ? 'Aguardando resposta' : 'Você respondeu'}
                 </span>

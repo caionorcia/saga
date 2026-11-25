@@ -2,7 +2,7 @@ import raw from '../../tests/fixtures/wa/demo.json'
 import type { NormalizedMessage } from './types'
 import type { TranscriptStatus } from './db/repo'
 
-/** Dados de demonstração (5 contatos) usados pelo modo `SAGA_FAKE_WA=1`, pela pré-visualização e pelos testes. */
+/** Dados de demonstração (5 pessoas e 2 grupos) usados pelo modo `SAGA_FAKE_WA=1`, pela pré-visualização e pelos testes. */
 export interface DemoMessage extends NormalizedMessage {
   hasAudio: boolean
   transcript: string | null
@@ -11,6 +11,7 @@ export interface DemoMessage extends NormalizedMessage {
 
 export interface DemoContact {
   jid: string
+  isGroup: boolean
   pushName: string
   customName: string | null
   notes: string | null
@@ -28,10 +29,14 @@ interface RawMessage {
   hasAudio?: boolean
   transcriptStatus?: TranscriptStatus | null
   transcript?: string | null
+  senderJid?: string
+  senderName?: string
+  mentionsMe?: boolean
 }
 
 interface RawContact {
   jid: string
+  isGroup?: boolean
   pushName: string
   customName?: string
   notes?: string
@@ -42,6 +47,7 @@ interface RawContact {
 export function loadDemo(now: number): DemoContact[] {
   return (raw.contacts as RawContact[]).map((c) => ({
     jid: c.jid,
+    isGroup: c.isGroup === true,
     pushName: c.pushName,
     customName: c.customName ?? null,
     notes: c.notes ?? null,
@@ -60,7 +66,15 @@ export function loadDemo(now: number): DemoContact[] {
         durationSec: m.durationSec ?? null,
         hasAudio: m.hasAudio ?? false,
         transcript: m.transcript ?? null,
-        transcriptStatus: m.transcriptStatus ?? null
+        transcriptStatus: m.transcriptStatus ?? null,
+        ...(c.isGroup
+          ? {
+              isGroup: true,
+              senderJid: m.fromMe ? null : (m.senderJid ?? null),
+              senderName: m.fromMe ? null : (m.senderName ?? null),
+              mentionsMe: m.mentionsMe === true
+            }
+          : {})
       }))
       .sort((a, b) => a.ts - b.ts)
   }))

@@ -85,7 +85,8 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       notes: notes.get(c.jid) ?? null,
       displayName: displayName(c),
       lastTs: last?.ts ?? null,
-      awaitingReply: !!last && !last.fromMe
+      awaitingReply: !!last && !last.fromMe,
+      isGroup: c.isGroup
     }
   }
   const toView = (m: DemoContact['messages'][number]): MessageView => ({
@@ -98,7 +99,10 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     durationSec: m.durationSec,
     hasAudio: m.hasAudio,
     transcript: m.transcript,
-    transcriptStatus: m.transcriptStatus
+    transcriptStatus: m.transcriptStatus,
+    senderJid: m.senderJid ?? null,
+    senderName: m.senderName ?? null,
+    mentionsMe: m.mentionsMe ?? false
   })
   const find = (jid: string) => demo.find((c) => c.jid === jid)
 
@@ -137,10 +141,11 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     },
     onMessages: () => () => {},
 
-    listContacts: async (includeHidden) =>
+    listContacts: async (includeHidden, kind = 'all') =>
       demo
         .map(toContact)
         .filter((c) => includeHidden || !c.hidden)
+        .filter((c) => kind === 'all' || (kind === 'group') === c.isGroup)
         .sort((a, b) => (b.lastTs ?? 0) - (a.lastTs ?? 0)),
     listMessages: async (jid) => (find(jid)?.messages ?? []).map(toView),
     getAnalysis: (jid) => analysisFor(jid, false),

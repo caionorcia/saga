@@ -76,6 +76,70 @@ describe('Repo', () => {
     expect(repo.listContacts({ includeHidden: true }).find((c) => c.jid === JID_A)!.displayName).toBe('Mentor Zé')
   })
 
+  describe('grupos', () => {
+    const GRP = '120363025555555555@g.us'
+    const GRP2 = '120363026666666666@g.us'
+    beforeEach(() => {
+      repo.upsertContact({ jid: GRP, isGroup: true })
+      repo.upsertContact({ jid: GRP2, isGroup: true })
+    })
+
+    it('isGroup no contato; filtro kind individual/grupo/todos; busca a mesma ordem', () => {
+      repo.insertMessage(msg({ id: 'a1', jid: JID_A, ts: 1_000 }))
+      repo.insertMessage(msg({ id: 'g1', jid: GRP, ts: 2_000, isGroup: true, senderJid: JID_B, senderName: 'Bia' }))
+      const all = repo.listContacts({ includeHidden: true })
+      expect(all.map((c) => [c.jid, c.isGroup])).toEqual([
+        [GRP, true],
+        [JID_A, false],
+        [GRP2, true],
+        [JID_B, false]
+      ])
+      expect(repo.listContacts({ includeHidden: true, kind: 'all' })).toHaveLength(4)
+      expect(repo.listContacts({ includeHidden: true, kind: 'group' }).map((c) => c.jid)).toEqual([GRP, GRP2])
+      expect(repo.listContacts({ includeHidden: true, kind: 'individual' }).map((c) => c.jid)).toEqual([JID_A, JID_B])
+      repo.setHidden(GRP2, true)
+      expect(repo.listContacts({ includeHidden: false, kind: 'group' }).map((c) => c.jid)).toEqual([GRP])
+    })
+
+    it('upsertContact de um contato já existente marca como grupo (nunca desmarca)', () => {
+      repo.upsertContact({ jid: JID_A, isGroup: true })
+      repo.upsertContact({ jid: JID_A })
+      expect(repo.listContacts({ includeHidden: true }).find((c) => c.jid === JID_A)!.isGroup).toBe(true)
+    })
+
+    it('aguardando resposta = última mensagem não é minha; nome do grupo (assunto) ou "Grupo sem nome"', () => {
+      repo.insertMessage(msg({ id: 'g1', jid: GRP, ts: 1_000, isGroup: true, senderJid: JID_B }))
+      let g = repo.listContacts({ includeHidden: true }).find((c) => c.jid === GRP)!
+      expect(g.awaitingReply).toBe(true)
+      expect(g.displayName).toBe('Grupo sem nome')
+      repo.insertMessage(msg({ id: 'g2', jid: GRP, ts: 2_000, fromMe: true, isGroup: true }))
+      repo.setContactName(GRP, 'Mentoria Turma 3', 2)
+      g = repo.listContacts({ includeHidden: true }).find((c) => c.jid === GRP)!
+      expect(g.awaitingReply).toBe(false)
+      expect(g.displayName).toBe('Mentoria Turma 3')
+    })
+
+    it('mensagens de grupo guardam remetente, nome e menção; o nome exibido prefere a agenda/perfil', () => {
+      repo.insertMessage(msg({ id: 'g1', jid: GRP, ts: 1_000, isGroup: true, senderJid: JID_B, senderName: 'bia.oficial', mentionsMe: true }))
+      repo.insertMessage(msg({ id: 'g2', jid: GRP, ts: 2_000, isGroup: true, senderJid: '5511900001111@s.whatsapp.net', senderName: null }))
+      repo.insertMessage(msg({ id: 'g3', jid: GRP, ts: 3_000, fromMe: true, isGroup: true }))
+      let [m1, m2, m3] = repo.listMessages(GRP)
+      expect(m1).toMatchObject({ senderJid: JID_B, senderName: 'bia.oficial', senderLabel: 'bia.oficial', mentionsMe: true })
+      expect(m2).toMatchObject({ senderName: null, senderLabel: '+55 11 90000-1111', mentionsMe: false })
+      expect(m3).toMatchObject({ senderJid: null, senderLabel: null })
+      // pushName de mensagem individual (rank 1) não vence o pushName do grupo; agenda (3) e nome personalizado vencem
+      repo.setContactName(JID_B, 'Beatriz Lima', 3)
+      ;[m1] = repo.listMessages(GRP)
+      expect(m1.senderLabel).toBe('Beatriz Lima')
+      repo.renameContact(JID_B, 'Bia (turma 3)')
+      ;[m1] = repo.listMessages(GRP)
+      expect(m1.senderLabel).toBe('Bia (turma 3)')
+      // mensagem individual: sem remetente
+      repo.insertMessage(msg({ id: 'a1', jid: JID_A }))
+      expect(repo.listMessages(JID_A)[0]).toMatchObject({ senderJid: null, senderName: null, senderLabel: null, mentionsMe: false })
+    })
+  })
+
   it('upsertContact sem pushName não apaga o nome existente', () => {
     repo.upsertContact({ jid: JID_A, pushName: 'Fulano' })
     repo.upsertContact({ jid: JID_A })

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { BufferJSON, type WAMessage } from '@whiskeysockets/baileys'
-import { normalize, isIndividualJid, toPhoneJid } from '../../../src/core/wa/normalize'
+import { normalize, isGroupJid, isIndividualJid, toPhoneJid } from '../../../src/core/wa/normalize'
 
 const FIX = join(__dirname, '../../fixtures/wa')
 const load = (name: string): WAMessage => JSON.parse(readFileSync(join(FIX, `${name}.json`), 'utf8'), BufferJSON.reviver)
@@ -46,8 +46,46 @@ describe('normalize', () => {
     expect(Buffer.compare(back.message.audioMessage.mediaKey, raw.message!.audioMessage!.mediaKey as Buffer)).toBe(0)
   })
 
-  it('mensagem de grupo → null', () => {
-    expect(normalize(load('group'))).toBeNull()
+  it('mensagem de grupo: conversa @g.us com o remetente (participant) e o pushName dele', () => {
+    expect(normalize(load('group'))).toEqual({
+      id: 'GRP1',
+      jid: '120363025555555555@g.us',
+      fromMe: false,
+      ts: 1763900000_000,
+      kind: 'text',
+      text: 'mensagem no grupo',
+      mediaKeyJson: null,
+      durationSec: null,
+      isGroup: true,
+      senderJid: JID,
+      senderName: 'Ana',
+      mentionsMe: false
+    })
+  })
+
+  it('grupo: participant @lid com participantAlt em telefone usa o telefone; sem alternativa fica o @lid', () => {
+    const g = (key: any) => normalize(make({ conversation: 'x' }, { remoteJid: '1203@g.us', ...key }))!
+    expect(g({ participant: '999:2@lid', participantAlt: '5511988887777:4@s.whatsapp.net' }).senderJid).toBe('5511988887777@s.whatsapp.net')
+    expect(g({ participant: '999:2@lid' }).senderJid).toBe('999@lid')
+    expect(g({ participant: '5511988887777:7@s.whatsapp.net' }).senderJid).toBe('5511988887777@s.whatsapp.net')
+  })
+
+  it('grupo: mensagem minha não tem remetente nem nome; fromMe igual', () => {
+    const n = normalize({ ...make({ conversation: 'eu' }, { remoteJid: '1203@g.us', fromMe: true, participant: '5547900000000@s.whatsapp.net' }), pushName: 'Mentor' } as WAMessage)!
+    expect(n).toMatchObject({ jid: '1203@g.us', fromMe: true, isGroup: true, senderJid: null, senderName: null })
+  })
+
+  it('grupo: menção ao mentor (telefone ou @lid) ou citação de mensagem dele → mentionsMe', () => {
+    const opts = { ownJid: '5547900000000:3@s.whatsapp.net', ownLid: '777000:3@lid' }
+    const g = (message: any) => normalize(make(message, { remoteJid: '1203@g.us', participant: JID }), opts)!.mentionsMe
+    expect(g({ extendedTextMessage: { text: '@5547900000000 pode ajudar?', contextInfo: { mentionedJid: ['5547900000000@s.whatsapp.net'] } } })).toBe(true)
+    expect(g({ extendedTextMessage: { text: '@777000 oi', contextInfo: { mentionedJid: ['777000@lid'] } } })).toBe(true)
+    expect(g({ extendedTextMessage: { text: '@outro', contextInfo: { mentionedJid: ['5511988887777@s.whatsapp.net'] } } })).toBe(false)
+    expect(g({ extendedTextMessage: { text: 'isso!', contextInfo: { participant: '777000@lid', stanzaId: 'Q1' } } })).toBe(true)
+    expect(g({ audioMessage: { seconds: 5, contextInfo: { mentionedJid: ['5547900000000@s.whatsapp.net'] } } })).toBe(true)
+    expect(g({ conversation: 'sem menção' })).toBe(false)
+    // sem saber quem sou: nunca marca
+    expect(normalize(make({ extendedTextMessage: { text: 'x', contextInfo: { mentionedJid: ['5547900000000@s.whatsapp.net'] } } }, { remoteJid: '1203@g.us', participant: JID }))!.mentionsMe).toBe(false)
   })
 
   it('protocolMessage REVOKE → null', () => {
@@ -129,6 +167,14 @@ describe('helpers de JID', () => {
     expect(isIndividualJid('1@g.us')).toBe(false)
     expect(isIndividualJid('status@broadcast')).toBe(false)
     expect(isIndividualJid(undefined)).toBe(false)
+  })
+
+  it('isGroupJid', () => {
+    expect(isGroupJid('120363025555555555@g.us')).toBe(true)
+    expect(isGroupJid(JID)).toBe(false)
+    expect(isGroupJid('status@broadcast')).toBe(false)
+    expect(isGroupJid('120363000000000000@newsletter')).toBe(false)
+    expect(isGroupJid(null)).toBe(false)
   })
 
   it('toPhoneJid normaliza só JIDs de telefone', () => {

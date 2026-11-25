@@ -7,6 +7,12 @@ export const NAME_RANK = { push: 1, profile: 2, addressBook: 3 } as const
 
 export type TranscriptStatus = 'done' | 'failed' | 'unavailable'
 
+/** Filtro da lista de conversas: todas, só pessoas ou só grupos. */
+export type ContactKind = 'all' | 'individual' | 'group'
+
+/** Nome exibido de um grupo que ainda não tem assunto conhecido. */
+export const UNNAMED_GROUP = 'Grupo sem nome'
+
 export interface ContactRow {
   jid: string
   pushName: string | null
@@ -15,7 +21,10 @@ export interface ContactRow {
   notes: string | null
   displayName: string
   lastTs: number | null
+  /** a última mensagem não é do mentor (num grupo: de qualquer participante) */
   awaitingReply: boolean
+  /** conversa de grupo (`@g.us`) */
+  isGroup: boolean
 }
 
 export interface MessageRow {
@@ -30,6 +39,17 @@ export interface MessageRow {
   audioPath: string | null
   transcript: string | null
   transcriptStatus: TranscriptStatus | null
+  /** grupo: quem mandou (null nas minhas e em conversas individuais) */
+  senderJid: string | null
+  /** grupo: o pushName de quem mandou, como chegou na mensagem */
+  senderName: string | null
+  /**
+   * grupo: nome para exibir de quem mandou: nome personalizado ou da agenda/perfil desse contato,
+   * senão o pushName da mensagem, senão o número. null nas minhas e em conversas individuais.
+   */
+  senderLabel: string | null
+  /** grupo: a mensagem menciona o mentor ou cita uma mensagem dele */
+  mentionsMe: boolean
 }
 
 export interface AnalysisRow {
@@ -118,9 +138,18 @@ function toMessage(r: Row): MessageRow {
     durationSec: r.duration_sec,
     audioPath: r.audio_path,
     transcript: r.transcript,
-    transcriptStatus: r.transcript_status
+    transcriptStatus: r.transcript_status,
+    senderJid: r.sender_jid ?? null,
+    senderName: r.sender_name ?? null,
+    senderLabel: r.sender_jid
+      ? (r.s_custom ?? (r.s_rank >= NAME_RANK.profile ? r.s_push : null) ?? r.sender_name ?? r.s_push ?? formatPhone(r.sender_jid))
+      : null,
+    mentionsMe: r.mentions_me === 1
   }
 }
+
+/** Colunas extras do contato de quem mandou (grupos), para `senderLabel`. */
+const SENDER_COLS = 'sc.custom_name AS s_custom, sc.push_name AS s_push, sc.name_rank AS s_rank'
 
 /** `5547999998888@s.whatsapp.net` -> `+55 47 99999-8888` */
 export function formatPhone(jid: string): string {
@@ -143,19 +172,20 @@ export class Repo {
    * 1 = pushName de mensagem, 2 = perfil/chat, 3 = agenda; veja `NAME_RANK`). O nome personalizado
    * (`custom_name`) fica separado e sempre vence na exibição.
    */
-  upsertContact(c: { jid: string; pushName?: string | null; nameRank?: number }): void {
+  upsertContact(c: { jid: string; pushName?: string | null; nameRank?: number; isGroup?: boolean }): void {
     const name = c.pushName ?? null
     const rank = name === null ? 0 : (c.nameRank ?? NAME_RANK.push)
     this.db
       .prepare(
-        `INSERT INTO contacts(jid, push_name, name_rank) VALUES (?1, ?2, ?3)
+        `INSERT INTO contacts(jid, push_name, name_rank, is_group) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(jid) DO UPDATE SET
+           is_group = MAX(is_group, excluded.is_group),
            push_name = CASE WHEN excluded.push_name IS NOT NULL AND excluded.name_rank >= name_rank
                             THEN excluded.push_name ELSE push_name END,
            name_rank = CASE WHEN excluded.push_name IS NOT NULL AND excluded.name_rank >= name_rank
                             THEN excluded.name_rank ELSE name_rank END`
       )
-      .run(c.jid, name, rank)
+      .run(c.jid, name, rank, c.isGroup ? 1 : 0)
   }
 
   /** Guarda o nome de um contato que já existe, se não for pior que o atual. `true` se mudou. */
@@ -174,6 +204,11 @@ export class Repo {
     this.db.prepare('UPDATE contacts SET hidden = ? WHERE jid = ?').run(hidden ? 1 : 0, jid)
   }
 
+  isGroup(jid: string): boolean {
+    const r = this.db.prepare('SELECT is_group FROM contacts WHERE jid = ?').get(jid) as Row | undefined
+    return r?.is_group === 1
+  }
+
   isHidden(jid: string): boolean {
     const r = this.db.prepare('SELECT hidden FROM contacts WHERE jid = ?').get(jid) as Row | undefined
     return r?.hidden === 1
@@ -183,27 +218,30 @@ export class Repo {
     this.db.prepare('UPDATE contacts SET notes = ? WHERE jid = ?').run(text, jid)
   }
 
-  listContacts(opts: { includeHidden: boolean }): ContactRow[] {
+  listContacts(opts: { includeHidden: boolean; kind?: ContactKind }): ContactRow[] {
+    const kind = opts.kind ?? 'all'
     const rows = this.db
       .prepare(
-        `SELECT c.jid, c.push_name, c.custom_name, c.hidden, c.notes,
+        `SELECT c.jid, c.push_name, c.custom_name, c.hidden, c.notes, c.is_group,
                 l.ts AS last_ts, l.from_me AS last_from_me
            FROM contacts c
            LEFT JOIN messages l ON l.id = (
              SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
-          WHERE (? = 1 OR c.hidden = 0)
+          WHERE (?1 = 1 OR c.hidden = 0)
+            AND (?2 = 'all' OR (?2 = 'group') = (c.is_group = 1))
           ORDER BY l.ts IS NULL, l.ts DESC, c.jid`
       )
-      .all(opts.includeHidden ? 1 : 0) as Row[]
+      .all(opts.includeHidden ? 1 : 0, kind) as Row[]
     return rows.map((r) => ({
       jid: r.jid,
       pushName: r.push_name,
       customName: r.custom_name,
       hidden: r.hidden === 1,
       notes: r.notes,
-      displayName: r.custom_name ?? r.push_name ?? formatPhone(r.jid),
+      displayName: r.custom_name ?? r.push_name ?? (r.is_group === 1 ? UNNAMED_GROUP : formatPhone(r.jid)),
       lastTs: r.last_ts,
-      awaitingReply: r.last_from_me === 0
+      awaitingReply: r.last_from_me === 0,
+      isGroup: r.is_group === 1
     }))
   }
 
@@ -212,10 +250,22 @@ export class Repo {
   insertMessage(m: NormalizedMessage): boolean {
     const res = this.db
       .prepare(
-        `INSERT OR IGNORE INTO messages(id, jid, from_me, ts, kind, text, media_key_json, duration_sec)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO messages(id, jid, from_me, ts, kind, text, media_key_json, duration_sec, sender_jid, sender_name, mentions_me)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(m.id, m.jid, m.fromMe ? 1 : 0, m.ts, m.kind, m.text, m.mediaKeyJson, m.durationSec)
+      .run(
+        m.id,
+        m.jid,
+        m.fromMe ? 1 : 0,
+        m.ts,
+        m.kind,
+        m.text,
+        m.mediaKeyJson,
+        m.durationSec,
+        m.senderJid ?? null,
+        m.senderName ?? null,
+        m.mentionsMe ? 1 : 0
+      )
     return Number(res.changes) > 0
   }
 
@@ -223,8 +273,9 @@ export class Repo {
   listMessages(jid: string, limit?: number): MessageRow[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM (SELECT rowid AS rid, * FROM messages WHERE jid = ? ORDER BY ts DESC, rowid DESC LIMIT ?)
-         ORDER BY ts ASC, rid ASC`
+        `SELECT m.*, ${SENDER_COLS} FROM (SELECT rowid AS rid, * FROM messages WHERE jid = ? ORDER BY ts DESC, rowid DESC LIMIT ?) m
+         LEFT JOIN contacts sc ON sc.jid = m.sender_jid
+         ORDER BY m.ts ASC, m.rid ASC`
       )
       .all(jid, limit ?? -1) as Row[]
     return rows.map(toMessage)
@@ -239,7 +290,9 @@ export class Repo {
   }
 
   getMessage(id: string): MessageRow | null {
-    const r = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as Row | undefined
+    const r = this.db
+      .prepare(`SELECT m.*, ${SENDER_COLS} FROM messages m LEFT JOIN contacts sc ON sc.jid = m.sender_jid WHERE m.id = ?`)
+      .get(id) as Row | undefined
     return r ? toMessage(r) : null
   }
 

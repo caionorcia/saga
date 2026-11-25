@@ -278,3 +278,41 @@ describe('createLlm claude', () => {
     expect(e.retryAfterMs).toBe(5000)
   })
 })
+
+describe('grupos', () => {
+  const GRP = '120363025555555555@g.us'
+  const gmsg = (id: string, fromMe: boolean, ts: number, text = `t ${id}`, over: Record<string, unknown> = {}) =>
+    repo.insertMessage({ id, jid: GRP, fromMe, ts, kind: 'text', text, mediaKeyJson: null, durationSec: null, isGroup: true, senderJid: fromMe ? null : JID, senderName: fromMe ? null : 'Bruno', ...over })
+
+  beforeEach(() => {
+    repo.upsertContact({ jid: GRP, isGroup: true })
+    repo.setContactName(GRP, 'Mentoria Turma 3', 2)
+  })
+
+  it('novas = depois da minha última mensagem, no máximo as últimas 40; anteriores 20', () => {
+    for (let i = 0; i < 30; i++) gmsg(`a${i}`, false, T0 + i)
+    gmsg('me', true, T0 + 100)
+    for (let i = 0; i < 50; i++) gmsg(`b${i}`, false, T0 + 200 + i)
+    const ctx = analysisContext(repo, GRP)
+    expect(ctx.newMessages).toHaveLength(40)
+    expect(ctx.newMessages[0].id).toBe('b10')
+    expect(ctx.newMessages.at(-1)!.id).toBe('b49')
+    expect(ctx.priorMessages).toHaveLength(20)
+    expect(ctx.priorMessages.at(-1)!.id).toBe('b9')
+  })
+
+  it('individual: novas depois do último fromMe continuam sem teto', () => {
+    for (let i = 0; i < 50; i++) addMsg(`n${i + 10}`, false, `x${i}`, T0 + 1_000_000 + i)
+    expect(analysisContext(repo, JID).newMessages).toHaveLength(51)
+  })
+
+  it('o prompt usa a variante de grupo com o nome do grupo e dos remetentes', async () => {
+    gmsg('g1', false, T0 + 1, 'Professor, consegue revisar meu pitch?', { mentionsMe: true })
+    const llm = fakeLlm([GOOD])
+    await generateAnalysis(deps(llm), GRP)
+    expect(llm.calls[0].user).toContain('Grupo: Mentoria Turma 3')
+    expect(llm.calls[0].user).toContain('Bruno (menciona você): Professor, consegue revisar meu pitch?')
+    expect(llm.calls[0].system).toContain('grupo')
+    expect(repo.getAnalysis(GRP)!.lastMsgId).toBe('g1')
+  })
+})

@@ -128,13 +128,17 @@ function Main({
         <Conversation key={contact.jid} contact={contact} analysis={analysis} />
       ) : (
         <section className="conversation conversation-empty">
-          <p>Escolha uma pessoa na lista para ver a conversa.</p>
+          <p>Escolha uma conversa na lista para ver as mensagens.</p>
         </section>
       )}
       <ColumnDivider {...cols.divider('right')} />
       <aside className="suggestions" aria-label="Sugestões de resposta">
         <h2>Sugestões de resposta</h2>
-        <p className="muted small">Edite como quiser, depois copie e cole no WhatsApp. O Saga não envia nada.</p>
+        <p className="muted small">
+          {contact?.isGroup
+            ? 'Mensagens para você postar no grupo. Edite como quiser, depois copie e cole no grupo do WhatsApp. O Saga não envia nada.'
+            : 'Edite como quiser, depois copie e cole no WhatsApp. O Saga não envia nada.'}
+        </p>
         {contact ? <Suggestions key={contact.jid} jid={contact.jid} drafts={drafts.current} onAnalysis={setAnalysis} onOpenSettings={onOpenSettings} /> : <p className="empty">As sugestões aparecem aqui.</p>}
       </aside>
     </div>

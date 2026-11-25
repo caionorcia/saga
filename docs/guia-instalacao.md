@@ -68,9 +68,9 @@ O Saga traz os últimos 30 dias de conversas e baixa os áudios aos poucos, de p
 
 ![Tela principal](img/05-tela-principal.png)
 
-- **Esquerda:** as conversas. A bolinha verde indica que a pessoa está aguardando a sua resposta.
-- **Meio:** a conversa, com os áudios já transcritos e o resumo "O que a pessoa quer".
-- **Direita:** sugestões de resposta. Edite como quiser, clique em **Copiar** e cole no WhatsApp. **Salvar** guarda a sua versão final para o Saga aprender o seu jeito. **Gerar novas** pede outras sugestões.
+- **Esquerda:** as conversas, pessoas e grupos. A bolinha verde indica que alguém está aguardando a sua resposta (num grupo: a última mensagem não é sua). No topo, escolha **Todos**, **Individuais** ou **Grupos**; o Saga lembra a escolha. A busca procura pessoas e grupos.
+- **Meio:** a conversa, com os áudios já transcritos e o resumo "O que a pessoa quer". Nos grupos, cada mensagem mostra o nome de quem mandou, as que mencionam você aparecem marcadas, e o resumo se chama "O que pedem a você": perguntas e pedidos para você, não um resumo do grupo inteiro.
+- **Direita:** sugestões de resposta (num grupo, mensagens para você postar no grupo). Edite como quiser, clique em **Copiar** e cole no WhatsApp. **Salvar** guarda a sua versão final para o Saga aprender o seu jeito. **Gerar novas** pede outras sugestões.
 
 Fechar a janela (no X) **não** encerra o Saga: ele continua na bandeja, perto do relógio. Para sair de verdade, clique com o botão direito no ícone e escolha **Sair**.
 
@@ -122,7 +122,7 @@ Clique em **Atualizar**. O Saga baixa a versão nova e a instala **quando você 
 - Suas conversas, áudios e configurações ficam **neste computador** (pasta de dados do Saga no seu usuário do Windows). Não existe servidor do Saga.
 - A chave de acesso é guardada com a criptografia do Windows.
 - Só saem do computador: o **texto das conversas** e os **áudios**, enviados para a IA que você escolheu (Groq e, se configurado, Claude ou OpenAI) para transcrever e gerar sugestões.
-- O Saga só lê conversas individuais. Grupos e status são ignorados.
+- O Saga lê conversas individuais e grupos, sem nunca escrever nem mudar nada neles. Status, canais e listas de transmissão são ignorados.
 
 ## 8. Desinstalar
 

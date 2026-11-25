@@ -184,6 +184,8 @@ export interface AnalysisDeps {
 const MAX_ATTEMPTS = 2
 const PRIOR_LIMIT = 20
 const NO_MENTOR_REPLY_LIMIT = 40
+/** grupo: no máximo as últimas 40 mensagens depois da minha última (o grupo pode ter muita conversa) */
+const GROUP_NEW_LIMIT = 40
 
 function textOf(m: MessageRow): string {
   return (m.kind === 'text' ? m.text : m.transcriptStatus === 'done' ? m.transcript : null) ?? ''
@@ -193,7 +195,7 @@ function textOf(m: MessageRow): string {
 export interface AnalysisContext {
   /** histórico considerado, em ordem cronológica */
   all: MessageRow[]
-  /** depois do último fromMe (sem nenhum fromMe: as últimas 40) */
+  /** depois do último fromMe (sem nenhum fromMe: as últimas 40; em grupo, sempre no máximo as últimas 40) */
   newMessages: MessageRow[]
   /** até 20 mensagens antes das novas */
   priorMessages: MessageRow[]
@@ -212,7 +214,7 @@ function transcriptFingerprint(msgs: MessageRow[]): string {
 }
 
 /**
- * Novas = mensagens depois do último fromMe (sem nenhum fromMe: as últimas 40).
+ * Novas = mensagens depois do último fromMe (sem nenhum fromMe: as últimas 40). Em grupo, no máximo as últimas 40.
  * Se o mentor falou por último, novas = [] (botão "Gerar novas" continua permitido).
  * `upToId`: o contexto como era quando essa mensagem era a última (ex.: a análise que gerou a sugestão salva);
  * se ela não estiver entre as mensagens recentes, usa todas.
@@ -230,7 +232,8 @@ export function analysisContext(repo: Repo, jid: string, upToId?: string | null)
       break
     }
   }
-  const newMessages = lastMe === -1 ? all.slice(-NO_MENTOR_REPLY_LIMIT) : all.slice(lastMe + 1)
+  let newMessages = lastMe === -1 ? all.slice(-NO_MENTOR_REPLY_LIMIT) : all.slice(lastMe + 1)
+  if (repo.isGroup(jid)) newMessages = newMessages.slice(-GROUP_NEW_LIMIT)
   const newStart = all.length - newMessages.length
   const priorMessages = all.slice(Math.max(0, newStart - PRIOR_LIMIT), newStart)
   const used = [...priorMessages, ...newMessages]
@@ -275,7 +278,8 @@ export async function generateAnalysis(
     notes: contact?.notes ?? null,
     newMessages,
     priorMessages,
-    examples: selectExamples(repo, jid, contextText)
+    examples: selectExamples(repo, jid, contextText),
+    isGroup: contact?.isGroup ?? false
   })
 
   let lastErr: unknown

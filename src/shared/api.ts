@@ -2,12 +2,15 @@
  * Contrato entre o processo principal e a interface (`window.saga`).
  * Só tipos e nomes de canais: nada daqui depende do Electron nem do core em tempo de execução.
  */
-import type { AnalysisRow, ContactRow, TranscriptStatus } from '../core/db/repo'
+import type { AnalysisRow, ContactKind, ContactRow, TranscriptStatus } from '../core/db/repo'
 import type { QueueStats } from '../core/queue/queue'
 import type { ConnState } from '../core/wa/client'
 import type { KeyKind, Provider, Settings, SettingsPatch, TranscriberKind } from '../core/settings'
 
-export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind }
+export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind }
+
+/** Valores aceitos pelo filtro de `listContacts`. */
+export const CONTACT_KINDS: ReadonlyArray<ContactKind> = ['all', 'individual', 'group']
 export type Contact = ContactRow
 export type Analysis = AnalysisRow
 export type SettingsView = Settings
@@ -68,6 +71,12 @@ export interface MessageView {
   hasAudio: boolean
   transcript: string | null
   transcriptStatus: TranscriptStatus | null
+  /** grupo: quem mandou (para juntar mensagens seguidas da mesma pessoa); null nas minhas e em conversas individuais */
+  senderJid: string | null
+  /** grupo: nome de quem mandou (personalizado, agenda, pushName ou número); null nas minhas e em individuais */
+  senderName: string | null
+  /** grupo: a mensagem menciona o mentor ou cita uma mensagem dele */
+  mentionsMe: boolean
 }
 
 export type AiErrorCode =
@@ -116,7 +125,8 @@ export interface SagaApi {
   /** chegou mensagem (ou transcrição) desse contato: chamar `listMessages(jid)` de novo */
   onMessages(jid: string, cb: () => void): Unsubscribe
 
-  listContacts(includeHidden: boolean): Promise<Contact[]>
+  /** `kind`: todas (padrão), só individuais ou só grupos */
+  listContacts(includeHidden: boolean, kind?: ContactKind): Promise<Contact[]>
   listMessages(jid: string): Promise<MessageView[]>
   /** gera se necessário (usa o cache quando a última mensagem não mudou) */
   getAnalysis(jid: string): Promise<AnalysisResult>

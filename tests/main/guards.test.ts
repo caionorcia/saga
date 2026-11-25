@@ -90,6 +90,11 @@ describe('validateIpcArgs', () => {
     bad('setNotes', '', 'notas')
     ok('listContacts', false)
     bad('listContacts', 'sim')
+    ok('listContacts', true, 'all')
+    ok('listContacts', false, 'group')
+    ok('listContacts', false, 'individual')
+    bad('listContacts', false, 'grupos')
+    bad('listContacts', false, 1)
   })
 
   it('saveSettings: só campos conhecidos com tipos válidos', () => {

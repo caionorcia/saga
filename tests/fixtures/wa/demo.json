@@ -1,6 +1,97 @@
 {
  "contacts": [
   {
+   "jid": "120363025555555555@g.us",
+   "isGroup": true,
+   "pushName": "Mentoria Turma 3 — Negócios",
+   "messages": [
+    {
+     "id": "G1",
+     "fromMe": true,
+     "minutesAgo": 1500,
+     "kind": "text",
+     "text": "Bom dia, turma! Lembrete: nossa aula ao vivo é quinta, às 20h. Tragam as dúvidas do módulo 4."
+    },
+    {
+     "id": "G2",
+     "fromMe": false,
+     "minutesAgo": 1495,
+     "kind": "text",
+     "senderJid": "5511944443333@s.whatsapp.net",
+     "senderName": "Bruno Alves",
+     "text": "Bom dia! Estarei lá 🙌"
+    },
+    {
+     "id": "G3",
+     "fromMe": false,
+     "minutesAgo": 240,
+     "kind": "text",
+     "senderJid": "5531933332222@s.whatsapp.net",
+     "senderName": "Renata Dias",
+     "text": "Pessoal, alguém já conseguiu montar a planilha de fluxo de caixa do módulo 4?"
+    },
+    {
+     "id": "G4",
+     "fromMe": false,
+     "minutesAgo": 232,
+     "kind": "text",
+     "senderJid": "5511944443333@s.whatsapp.net",
+     "senderName": "Bruno Alves",
+     "text": "Eu montei, mas não entendi onde entra o pró-labore."
+    },
+    {
+     "id": "G5",
+     "fromMe": false,
+     "minutesAgo": 230,
+     "kind": "text",
+     "senderJid": "5511944443333@s.whatsapp.net",
+     "senderName": "Bruno Alves",
+     "text": "Entra como despesa fixa ou separado?"
+    },
+    {
+     "id": "G6",
+     "fromMe": false,
+     "minutesAgo": 95,
+     "kind": "audio",
+     "senderJid": "5531933332222@s.whatsapp.net",
+     "senderName": "Renata Dias",
+     "mentionsMe": true,
+     "durationSec": 34,
+     "hasAudio": true,
+     "transcriptStatus": "done",
+     "transcript": "@Mentor, queria saber se dá pra gente ver na aula de quinta como precificar serviço recorrente. Eu tô cobrando muito barato e não sei como subir o preço sem perder cliente."
+    },
+    {
+     "id": "G7",
+     "fromMe": false,
+     "minutesAgo": 60,
+     "kind": "text",
+     "senderJid": "5541922221111@s.whatsapp.net",
+     "senderName": "Lucas Prado",
+     "text": "Também queria isso! E a gravação da última aula, já saiu?"
+    },
+    {
+     "id": "G8",
+     "fromMe": false,
+     "minutesAgo": 20,
+     "kind": "text",
+     "senderJid": "5511944443333@s.whatsapp.net",
+     "senderName": "Bruno Alves",
+     "mentionsMe": true,
+     "text": "@Mentor pode confirmar a dúvida do pró-labore quando puder? 🙏"
+    }
+   ],
+   "analysis": {
+    "provider": "groq",
+    "summary": "Bruno te marcou para saber se o pró-labore entra como despesa fixa na planilha de fluxo de caixa. Renata (em áudio) pede para ver na aula de quinta como precificar serviço recorrente e subir o preço, e Lucas reforça o pedido e pergunta se a gravação da última aula já saiu.",
+    "suggestions": [
+     "Bruno, o pró-labore entra separado, como uma linha própria logo abaixo das despesas fixas: assim você enxerga o lucro do negócio antes de pagar você. Renata e Lucas, combinado: na quinta abro a aula com precificação de serviço recorrente. A gravação sai amanhã!",
+     "Boa, pessoal! Bruno, coloca o pró-labore numa linha separada das despesas fixas, que fica mais fácil de ver se a empresa se paga. Renata, ótima dúvida (muita gente passa por isso): vamos ver na quinta, com exemplos de como subir o preço sem perder cliente. Lucas, a gravação sai até amanhã.",
+     "Bruno, separado! Na quinta mostro na planilha. E já aproveitando: quem mais está com dúvida sobre preço de serviço recorrente? Manda aqui que eu junto tudo para a aula 😉"
+    ]
+   }
+  },
+  {
    "jid": "5547999998888@s.whatsapp.net",
    "pushName": "Ana Paula Souza",
    "messages": [
@@ -202,6 +293,48 @@
      "minutesAgo": 1400,
      "kind": "text",
      "text": "R$ 3.000 por mês, contrato de 6 meses."
+    }
+   ]
+  },
+  {
+   "jid": "120363026666666666@g.us",
+   "isGroup": true,
+   "pushName": "Mastermind Vendas 2026",
+   "notes": "Grupo pequeno, encontros quinzenais.",
+   "messages": [
+    {
+     "id": "H1",
+     "fromMe": false,
+     "minutesAgo": 3000,
+     "kind": "text",
+     "senderJid": "5562911110000@s.whatsapp.net",
+     "senderName": "Tatiane Rocha",
+     "text": "Fechei meu primeiro contrato anual! Obrigada pelas dicas da última sessão."
+    },
+    {
+     "id": "H2",
+     "fromMe": true,
+     "minutesAgo": 2990,
+     "kind": "text",
+     "text": "Que notícia boa, Tati! Parabéns, merecido demais 👏"
+    },
+    {
+     "id": "H3",
+     "fromMe": false,
+     "minutesAgo": 420,
+     "kind": "text",
+     "senderJid": "5541922221111@s.whatsapp.net",
+     "senderName": "Lucas Prado",
+     "text": "Gente, alguém tem um modelo de proposta comercial pra compartilhar?"
+    },
+    {
+     "id": "H4",
+     "fromMe": false,
+     "minutesAgo": 410,
+     "kind": "text",
+     "senderJid": "5562911110000@s.whatsapp.net",
+     "senderName": "Tatiane Rocha",
+     "text": "Tenho sim, te mando no privado."
     }
    ]
   }

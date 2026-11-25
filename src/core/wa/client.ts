@@ -22,7 +22,7 @@ import type { RateLimiter } from '../queue/limiter'
 import { DeferJobError, type JobQueue } from '../queue/queue'
 import type { NormalizedMessage } from '../types'
 import { useAtomicAuthState, type AtomicAuthState } from './authState'
-import { normalize, stripDevice, toPhoneJid } from './normalize'
+import { isGroupJid, normalize, stripDevice, toPhoneJid } from './normalize'
 import { ReconnectPolicy, classifyDisconnect } from './reconnect'
 import { WaVersionResolver, formatWaVersion, type WaVersionFetcher } from './version'
 
@@ -39,12 +39,14 @@ export type ConnState =
 
 /**
  * O pedaço do socket do Baileys que o cliente usa. De propósito não inclui nada que envie
- * mensagem, recibo de leitura ou presença.
+ * mensagem, recibo de leitura ou presença, nem nada que altere grupos.
  */
 export interface WaSocket {
   ev: { on(event: string, listener: (arg: any) => void): unknown }
   end(error: Error | undefined): unknown
   signalRepository?: { lidMapping?: { getPNForLID(lid: string): Promise<string | null> } }
+  /** só leitura (uma consulta IQ): os grupos de que o mentor participa, com o assunto. Sempre pela fila. */
+  groupFetchAllParticipating?(): Promise<Record<string, { id?: string; subject?: string | null }>>
 }
 
 export type SocketFactory = (config: UserFacingSocketConfig) => WaSocket
@@ -97,6 +99,14 @@ const BROWSER_LADDER: Array<[string, string, string]> = [
   Browsers.windows('Desktop')
 ]
 const BROWSER_SETTING = 'wa.browserIdx'
+/** quando os nomes dos grupos foram buscados pela última vez (epoch ms do PC) */
+const GROUPS_FETCHED_SETTING = 'wa.groupsFetchedAt'
+/** no máximo uma busca dos nomes dos grupos por dia */
+const GROUPS_FETCH_EVERY_MS = DAY
+/** chave fixa do job (um só pendente por vez; volta para a fila depois de concluído) */
+const GROUPS_JOB_KEY = 'wa:group_subjects'
+/** sem conexão aberta quando o job roda: tenta de novo daqui a 1 min, sem gastar tentativa */
+const GROUPS_DEFER_MS = 60_000
 /** com a conexão aberta, mede o disco de novo a cada 10 min */
 const DISK_CHECK_MS = 10 * 60_000
 
@@ -157,6 +167,12 @@ interface ChatLike {
   displayName?: string | null
   pnJid?: string | null
   lidJid?: string | null
+}
+
+/** O que o cliente lê de um grupo do Baileys (`GroupMetadata`): só o id e o assunto. */
+interface GroupLike {
+  id?: string | null
+  subject?: string | null
 }
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -226,8 +242,9 @@ export class WhatsAppClient extends EventEmitter {
     this.baileysLogger = makeBaileysLogger(deps.diag)
     deps.queue.register('download_audio', (p, signal) => this.downloadAudio(p, signal))
     deps.queue.register('fetch_profile', (p) => this.fetchProfile(p))
-    // downloads só com a conexão aberta
+    // downloads e consultas ao WhatsApp só com a conexão aberta
     deps.queue.pauseType('download_audio')
+    deps.queue.pauseType('fetch_profile')
   }
 
   getStatus(): ConnState | null {
@@ -263,6 +280,7 @@ export class WhatsAppClient extends EventEmitter {
     this.clearDiskTimer()
     this.dropSocket()
     this.deps.queue.pauseType('download_audio')
+    this.deps.queue.pauseType('fetch_profile')
     await this.whenIdle()
     await this.auth?.close()
   }
@@ -323,6 +341,7 @@ export class WhatsAppClient extends EventEmitter {
     // downloads de mídia só com a conexão aberta (a volta é em onOpen, depois de checar o disco)
     if (s !== 'open') {
       this.deps.queue.pauseType('download_audio')
+      this.deps.queue.pauseType('fetch_profile')
       this.clearDiskTimer()
     }
     if (this.status === s) return
@@ -475,6 +494,8 @@ export class WhatsAppClient extends EventEmitter {
     on('contacts.update', (cs: Partial<Contact>[]) => this.learnContacts('contacts.update', cs ?? []))
     on('chats.upsert', (cs: ChatLike[]) => this.learnChats('chats.upsert', cs ?? []))
     on('chats.update', (cs: ChatLike[]) => this.learnChats('chats.update', cs ?? []))
+    on('groups.upsert', (gs: GroupLike[]) => this.learnGroups(gs ?? []))
+    on('groups.update', (gs: GroupLike[]) => this.learnGroups(gs ?? []))
   }
 
   private async onConnectionUpdate(u: {
@@ -521,6 +542,7 @@ export class WhatsAppClient extends EventEmitter {
       this.deps.queue.resume()
     }
     this.setStatus('open')
+    this.deps.queue.resumeType('fetch_profile')
     this.deps.repo.logEvent('wa_open', 'conectado')
     const gen = this.gen
     await this.checkDisk()
@@ -529,6 +551,17 @@ export class WhatsAppClient extends EventEmitter {
     // grava as credenciais atuais antes de copiar: o backup sempre reflete uma sessão que abriu
     await this.auth?.saveCreds()
     await this.auth?.backup()
+    this.scheduleGroupSubjects()
+  }
+
+  /**
+   * Uma vez por abertura, no máximo uma vez a cada 24 h: pede os nomes (assuntos) dos grupos PELA FILA,
+   * como um job `fetch_profile` (respeita o ritmo do limitador). Nunca chama na hora.
+   */
+  private scheduleGroupSubjects(): void {
+    const last = Number(this.deps.repo.getSetting(GROUPS_FETCHED_SETTING) ?? 0)
+    if (Number.isFinite(last) && last > 0 && this.deps.clock.now() - last < GROUPS_FETCH_EVERY_MS) return
+    this.deps.queue.requeue('fetch_profile', GROUPS_JOB_KEY, { kind: 'group_subjects' })
   }
 
   private stopWith(state: ConnState, detail: string): void {
@@ -684,6 +717,21 @@ export class WhatsAppClient extends EventEmitter {
     return typeof j === 'string' && (j.endsWith('@s.whatsapp.net') || j.endsWith('@lid'))
   }
 
+  /** Nome (assunto) de grupos vindos de `groups.upsert`/`groups.update` ou da consulta pela fila. `true` se algum mudou. */
+  private applyGroupNames(groups: GroupLike[]): boolean {
+    let applied = false
+    for (const g of groups) {
+      const subject = g?.subject?.trim()
+      if (!subject || !g.id || !isGroupJid(g.id)) continue
+      if (this.rememberName(g.id, subject, NAME_RANK.profile)) applied = true
+    }
+    return applied
+  }
+
+  private learnGroups(groups: GroupLike[]): void {
+    if (this.applyGroupNames(groups)) this.emit('contacts')
+  }
+
   /** Aplica nomes de uma lista de JIDs que são a mesma pessoa (id, telefone, @lid). */
   private async learnName(ids: Array<string | null | undefined>, name: string, rank: number): Promise<boolean> {
     const targets = new Set<string>()
@@ -716,7 +764,13 @@ export class WhatsAppClient extends EventEmitter {
     let applied = 0
     for (const c of chats) {
       const name = (c?.name || c?.displayName)?.trim()
-      if (!name || !WhatsAppClient.isPersonJid(c.id)) continue
+      if (!name) continue
+      if (c.id && isGroupJid(c.id)) {
+        named++
+        if (this.rememberName(c.id, name, NAME_RANK.profile)) applied++
+        continue
+      }
+      if (!WhatsAppClient.isPersonJid(c.id)) continue
       named++
       if (await this.learnName([c.id, c.pnJid, c.lidJid], name, NAME_RANK.profile)) applied++
     }
@@ -761,8 +815,9 @@ export class WhatsAppClient extends EventEmitter {
 
   private async ingest(messages: WAMessage[]): Promise<void> {
     const { repo, queue } = this.deps
-    const ownJid = this.auth?.state.creds.me?.id
-    const normalized = messages.map((raw) => ({ raw, n: normalize(raw, { ownJid }) }))
+    const me = this.auth?.state.creds.me as { id?: string; lid?: string } | undefined
+    const opts = { ownJid: me?.id, ownLid: me?.lid }
+    const normalized = messages.map((raw) => ({ raw, n: normalize(raw, opts) }))
     const bound = this.anchorBound()
     const batchMax = normalized.reduce((m, { n }) => (n && n.ts > m && n.ts <= bound ? n.ts : m), -Infinity)
     // janela de 30 dias pelo horário das mensagens do WhatsApp, nunca pelo relógio do PC
@@ -772,8 +827,10 @@ export class WhatsAppClient extends EventEmitter {
       if (!n || n.ts < cutoff) continue
       const lid = n.jid
       n.jid = await this.resolveJid(n.jid)
-      const pushName = n.fromMe ? null : raw.pushName?.trim() || null
-      repo.upsertContact({ jid: n.jid, pushName, nameRank: NAME_RANK.push })
+      if (n.senderJid) n.senderJid = await this.resolveJid(n.senderJid)
+      // num grupo o pushName é de quem mandou (vai na mensagem), nunca o nome do grupo
+      const pushName = n.fromMe || n.isGroup ? null : raw.pushName?.trim() || null
+      repo.upsertContact({ jid: n.jid, pushName, nameRank: NAME_RANK.push, isGroup: n.isGroup === true })
       // nome melhor já conhecido (agenda, perfil, chat), inclusive o que chegou para o @lid
       const known = this.knownNames.get(n.jid) ?? (lid !== n.jid ? this.knownNames.get(lid) : undefined)
       if (known) {
@@ -791,14 +848,20 @@ export class WhatsAppClient extends EventEmitter {
     // contatos escondidos não têm os áudios baixados (voltam para a fila se forem mostrados de novo)
     for (const a of audios) {
       if (repo.isHidden(a.jid)) continue
-      queue.enqueue('download_audio', a.id, { id: a.id, ts: a.ts }, this.priorityFor(a.jid, a.ts))
+      queue.enqueue('download_audio', a.id, { id: a.id, ts: a.ts }, this.priorityFor(a))
     }
   }
 
-  /** 10 se o contato aguarda resposta e a mensagem tem menos de 3 dias (horário do WhatsApp); senão 0. */
-  private priorityFor(jid: string, ts: number): number {
-    if (ts < this.waNow() - URGENT_WINDOW_MS) return 0
-    const lastMsg = this.deps.repo.listMessages(jid, 1)[0]
+  /**
+   * Mensagem com menos de 3 dias (horário do WhatsApp) e:
+   * - individual: o contato aguarda resposta → 10;
+   * - grupo: me menciona ou cita uma mensagem minha → 10 (o resto do grupo fica com 0).
+   * Senão 0.
+   */
+  private priorityFor(m: { jid: string; ts: number; mentionsMe?: boolean }): number {
+    if (m.ts < this.waNow() - URGENT_WINDOW_MS) return 0
+    if (this.deps.repo.isGroup(m.jid)) return m.mentionsMe ? URGENT_PRIORITY : 0
+    const lastMsg = this.deps.repo.listMessages(m.jid, 1)[0]
     return lastMsg && !lastMsg.fromMe ? URGENT_PRIORITY : 0
   }
 
@@ -849,16 +912,34 @@ export class WhatsAppClient extends EventEmitter {
       'transcribe',
       `transcribe:${row.id}`,
       { id: row.id, durationSec: row.durationSec, ts: row.ts },
-      this.priorityFor(row.jid, row.ts)
+      this.priorityFor(row)
     )
   }
 
   /**
-   * O Baileys v7 não tem consulta de nome de contato que seja só leitura e confiável
+   * `{ kind: 'group_subjects' }`: os nomes dos grupos, numa única consulta só de leitura
+   * (`groupFetchAllParticipating`, uma IQ). Sem conexão aberta, adia sem gastar tentativa.
+   *
+   * `{ jid }` (antigo): o Baileys v7 não tem consulta de nome de contato que seja só leitura e confiável
    * (`onWhatsApp` não traz nome; `getBusinessProfile` só serve a contas comerciais).
    * Os nomes vêm do `pushName` e do histórico na ingestão; aqui só registramos e concluímos.
    */
-  private async fetchProfile(payload: { jid: string }): Promise<void> {
+  private async fetchProfile(payload: { jid?: string; kind?: string }): Promise<void> {
+    if (payload?.kind === 'group_subjects') return this.fetchGroupSubjects()
     this.deps.repo.logEvent('fetch_profile_skipped', String(payload?.jid))
+  }
+
+  private async fetchGroupSubjects(): Promise<void> {
+    const sock = this.sock
+    if (!sock || this.status !== 'open' || !sock.groupFetchAllParticipating) {
+      throw new DeferJobError('sem conexão aberta para buscar os nomes dos grupos', GROUPS_DEFER_MS)
+    }
+    const all = await sock.groupFetchAllParticipating()
+    // mesmo se o socket caiu enquanto buscava, a resposta (só leitura) vale
+    const groups = Object.entries(all ?? {}).map(([id, g]) => ({ id: g?.id ?? id, subject: g?.subject ?? null }))
+    // só a contagem: nunca os nomes dos grupos
+    this.diag('wa_groups', `nomes de grupos: ${groups.length} grupos`)
+    this.deps.repo.setSetting(GROUPS_FETCHED_SETTING, String(this.deps.clock.now()))
+    if (this.applyGroupNames(groups)) this.emit('contacts')
   }
 }

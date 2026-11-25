@@ -3,6 +3,12 @@ import type { NormalizedMessage } from '../types'
 
 const PN_SERVER = 's.whatsapp.net'
 const LID_SERVER = 'lid'
+const GROUP_SERVER = 'g.us'
+
+/** Grupo do WhatsApp (`@g.us`). Status, newsletters e listas de transmissão não são grupos. */
+export function isGroupJid(jid: string | null | undefined): boolean {
+  return !!jid && jid.endsWith(`@${GROUP_SERVER}`)
+}
 
 /** Conversa individual: número de telefone (`@s.whatsapp.net`) ou LID (`@lid`, endereçamento do Baileys v7). */
 export function isIndividualJid(jid: string | null | undefined): jid is string {
@@ -27,6 +33,8 @@ export function toPhoneJid(jid: string | null | undefined): string | null {
 export interface NormalizeOptions {
   /** meu próprio JID (`creds.me.id`), para não confundir minhas respostas com o contato */
   ownJid?: string | null
+  /** meu próprio @lid (`creds.me.lid`), para reconhecer menções em grupos que usam LID */
+  ownLid?: string | null
 }
 
 /**
@@ -39,6 +47,7 @@ export interface NormalizeOptions {
  */
 function contactJid(key: WAMessage['key'], opts: NormalizeOptions): string | null {
   const jid = key.remoteJid
+  if (jid && isGroupJid(jid)) return jid
   if (!isIndividualJid(jid)) return null
   if (!jid.endsWith(`@${LID_SERVER}`)) return stripDevice(jid)
   const alt = toPhoneJid(key.remoteJidAlt)
@@ -79,6 +88,39 @@ function unwrap(content: WAMessageContent | null | undefined): WAMessageContent 
   return c
 }
 
+/** Grupo: quem mandou. O telefone (`participantAlt` ou `participant`) quando há; senão o @lid sem dispositivo. */
+function groupSender(key: WAMessage['key']): string | null {
+  const k = key as WAMessage['key'] & { participantAlt?: string | null }
+  const pn = toPhoneJid(k.participantAlt) ?? toPhoneJid(k.participant)
+  if (pn) return pn
+  const p = k.participant ?? k.participantAlt
+  return p && isIndividualJid(p) ? stripDevice(p) : null
+}
+
+interface ContextInfoLike {
+  mentionedJid?: string[] | null
+  participant?: string | null
+}
+
+/** O `contextInfo` da mensagem (texto, áudio, imagem…), onde ficam menções e a citação. */
+function contextInfoOf(c: WAMessageContent): ContextInfoLike | null {
+  for (const v of Object.values(c)) {
+    const ci = (v as { contextInfo?: ContextInfoLike | null } | null)?.contextInfo
+    if (ci && typeof ci === 'object') return ci
+  }
+  return null
+}
+
+/** A mensagem de grupo me menciona ou cita uma mensagem minha (pelo meu telefone ou pelo meu @lid). */
+function mentionsMe(c: WAMessageContent, opts: NormalizeOptions): boolean {
+  const mine = new Set([opts.ownJid, opts.ownLid].filter((j): j is string => !!j).map(stripDevice))
+  if (mine.size === 0) return false
+  const ci = contextInfoOf(c)
+  if (!ci) return false
+  if (ci.participant && mine.has(stripDevice(ci.participant))) return true
+  return (ci.mentionedJid ?? []).some((j) => typeof j === 'string' && mine.has(stripDevice(j)))
+}
+
 const nonEmpty = (s: string | null | undefined): string | null => (s && s.trim() ? s : null)
 
 type Body = Pick<NormalizedMessage, 'kind' | 'text' | 'durationSec'> & { serialize: boolean }
@@ -114,7 +156,8 @@ function body(c: WAMessageContent): Body | null {
 
 /**
  * Converte uma mensagem do Baileys no formato do Saga.
- * Devolve `null` para tudo que não é conversa individual com conteúdo.
+ * Devolve `null` para tudo que não é conversa individual ou de grupo com conteúdo
+ * (status, newsletters, listas de transmissão, reações, edições…).
  */
 export function normalize(msg: WAMessage, opts: NormalizeOptions = {}): NormalizedMessage | null {
   const key = msg.key
@@ -128,10 +171,20 @@ export function normalize(msg: WAMessage, opts: NormalizeOptions = {}): Normaliz
   const b = body(content)
   if (!b) return null
 
+  const fromMe = key.fromMe === true
+  const group = isGroupJid(jid)
+    ? {
+        isGroup: true,
+        senderJid: fromMe ? null : groupSender(key),
+        senderName: fromMe ? null : nonEmpty(msg.pushName?.trim()),
+        mentionsMe: !fromMe && mentionsMe(content, opts)
+      }
+    : {}
+
   return {
     id: key.id,
     jid,
-    fromMe: key.fromMe === true,
+    fromMe,
     ts,
     kind: b.kind,
     text: b.text,
@@ -139,6 +192,7 @@ export function normalize(msg: WAMessage, opts: NormalizeOptions = {}): Normaliz
     mediaKeyJson: b.serialize
       ? JSON.stringify({ key, message: msg.message, messageTimestamp: msg.messageTimestamp }, BufferJSON.replacer)
       : null,
-    durationSec: b.durationSec
+    durationSec: b.durationSec,
+    ...group
   }
 }

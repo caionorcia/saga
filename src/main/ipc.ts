@@ -27,7 +27,7 @@ export interface IpcOptions {
 export function registerIpc(service: SagaService, opts: IpcOptions): () => void {
   const h: Handlers = {
     getState: () => service.getState(),
-    listContacts: (includeHidden) => service.listContacts(!!includeHidden),
+    listContacts: (includeHidden, kind) => service.listContacts(!!includeHidden, kind ?? 'all'),
     listMessages: (jid) => service.listMessages(String(jid)),
     getAnalysis: (jid) => service.getAnalysis(String(jid)),
     regenerate: (jid) => service.regenerate(String(jid)),

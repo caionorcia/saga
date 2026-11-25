@@ -140,3 +140,24 @@ describe('reconcileSaved (copiou, enviou e só depois salvou)', () => {
     expect(repo.listApproved({ jid: A, limit: 1 })[0].sentText).toBeNull()
   })
 })
+
+describe('grupos', () => {
+  const G = '120363025555555555@g.us'
+  beforeEach(() => repo.upsertContact({ jid: G, isGroup: true }))
+
+  it('same_contact usa o jid do grupo; sent_history pareia minha mensagem no grupo com a anterior de um participante', () => {
+    save(G, 'ctx do grupo', 'resposta no grupo')
+    save(A, 'ctx A', 'resposta A')
+    repo.insertMessage({ ...msg('g1', G, false, T0 - 5000, 'Mentor, quando sai a gravação?'), isGroup: true, senderJid: B, senderName: 'Bia' })
+    repo.insertMessage({ ...msg('g2', G, true, T0 - 4000, 'Sai amanhã, Bia!'), isGroup: true })
+    const ex = selectExamples(repo, G, 'x')
+    expect(ex[0]).toMatchObject({ source: 'same_contact', reply: 'resposta no grupo' })
+    expect(ex.find((e) => e.source === 'sent_history')).toEqual({ context: 'Mentor, quando sai a gravação?', reply: 'Sai amanhã, Bia!', source: 'sent_history' })
+  })
+
+  it('reconcileSent liga a resposta aprovada à mensagem que postei no grupo', () => {
+    const id = save(G, 'ctx', 'Sai amanhã, pessoal!')
+    reconcileSent(repo, { ...msg('g9', G, true, clock.now() + 1000, 'Sai amanhã, pessoal!!'), isGroup: true })
+    expect(repo.listApproved({ jid: G, limit: 5 }).find((a) => a.id === id)!.sentText).toBe('Sai amanhã, pessoal!!')
+  })
+})

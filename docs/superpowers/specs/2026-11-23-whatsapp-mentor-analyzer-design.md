@@ -40,12 +40,46 @@ cada vez menos correção.
 - Memória de aprendizado: respostas salvas viram exemplos nas próximas
   gerações (ver "Memória").
 
+## Grupos (v0.1.5, a pedido do mentor)
+
+Os grupos eram um não-objetivo da v1. O mentor pediu para vê-los, porque quase
+todos os grupos dele são de mentoria. Decisão: **todos os grupos** entram, com
+resumo e sugestões como nas conversas individuais, e um filtro para ver só
+grupos ou só individuais.
+
+- **Ingestão:** conversas `@g.us` entram (status, newsletters e listas de
+  transmissão continuam fora). Cada mensagem de grupo guarda quem mandou
+  (`participant`, com `@lid` → telefone pelo mesmo mapa das conversas
+  individuais, ou `participantAlt`) e o pushName dessa pessoa. Valem a janela
+  de 30 dias, o "esconder" e a fila de áudios.
+- **Prioridade dos áudios de grupo:** 0, a não ser que a mensagem mencione o
+  mentor (@) ou cite uma mensagem dele; aí vale como "aguardando resposta e
+  recente" (10). Conversas individuais seguem a regra de antes.
+- **Nome do grupo:** vem dos eventos `groups.upsert`/`groups.update`, dos
+  nomes de conversa do histórico e, uma vez por abertura (no máximo a cada
+  24 h), de uma consulta só de leitura (`groupFetchAllParticipating`) feita
+  **pela fila**, com o ritmo das consultas de perfil. O app nunca chama nada
+  que altere grupos (criar, sair, mudar assunto, participantes etc.).
+- **Lista:** filtro "Todos | Individuais | Grupos" no topo (a escolha fica
+  guardada neste computador); grupos com ícone próprio; a busca vale para os
+  dois. Num grupo, "aguardando resposta" = a última mensagem não é do mentor.
+- **Conversa:** em cada balão de grupo aparece o nome de quem mandou (uma vez
+  por sequência da mesma pessoa) e um selo quando a mensagem menciona o
+  mentor. O resumo de grupo se chama "O que pedem a você".
+- **IA:** cada mensagem vai como "Nome: texto". O resumo de grupo foca no que
+  pedem ao mentor (perguntas e pedidos para ele, menções, dúvidas sem
+  resposta), não na conversa inteira. As 2–3 sugestões são mensagens para o
+  mentor postar no grupo, chamando as pessoas pelo nome quando ajudar.
+  "Mensagens novas" = depois da última mensagem do mentor, no máximo as
+  últimas 40 (para controlar o custo); contexto anterior: 20. A memória
+  funciona igual (o "mesmo contato" é o grupo).
+
 ## Não-objetivos (v1)
 
 - Enviar mensagens pelo app (fica para a v2).
 - Integração com o Claude Code ("responde o Michael") — v2, via servidor MCP
   que expõe: listar respostas aprovadas, ver resposta de um contato, enviar.
-- Grupos do WhatsApp.
+- ~~Grupos do WhatsApp.~~ Entraram na v0.1.5 a pedido do mentor (ver "Grupos").
 - Rodar em servidor na nuvem / acesso pelo celular (possível v3).
 - Multiusuário, login.
 
@@ -240,9 +274,10 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 
 ## Dados (esboço)
 
-- `contacts` (jid, nome, escondido, notas)
+- `contacts` (jid, nome, escondido, notas, é_grupo)
 - `messages` (id, jid, de_mim, timestamp, tipo, texto, caminho_audio,
-  transcricao, status_transcricao)
+  transcricao, status_transcricao; em grupos: remetente, nome_remetente,
+  menciona_mentor)
 - `analyses` (jid, ultima_msg_id, resumo, sugestoes_json, criado_em)
 - `approved_replies` (como acima)
 - `jobs` (fila única: tipo, chave única, status, tentativas, próxima_execução)

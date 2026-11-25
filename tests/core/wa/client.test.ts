@@ -18,12 +18,41 @@ const JID2 = '5511988887777@s.whatsapp.net'
 const OWN = '5547900000000:3@s.whatsapp.net'
 const STABLE_MS = 5 * 60_000
 
-const FORBIDDEN = ['sendMessage', 'readMessages', 'sendReceipt', 'sendReceipts', 'sendPresenceUpdate', 'chatModify', 'updateMediaMessage', 'logout'] as const
+const OWN_LID = '777000:3@lid'
+const GRP = '120363025555555555@g.us'
+const GRP2 = '120363026666666666@g.us'
+
+const FORBIDDEN = [
+  'sendMessage',
+  'readMessages',
+  'sendReceipt',
+  'sendReceipts',
+  'sendPresenceUpdate',
+  'chatModify',
+  'updateMediaMessage',
+  'logout',
+  // grupos: nunca escrever
+  'groupCreate',
+  'groupLeave',
+  'groupUpdateSubject',
+  'groupUpdateDescription',
+  'groupParticipantsUpdate',
+  'groupRequestParticipantsUpdate',
+  'groupSettingUpdate',
+  'groupToggleEphemeral',
+  'groupMemberAddMode',
+  'groupJoinApprovalMode',
+  'groupRevokeInvite',
+  'groupAcceptInvite',
+  'groupAcceptInviteV4'
+] as const
 
 class FakeSocket {
   ev = new EventEmitter()
   end = vi.fn()
   signalRepository = { lidMapping: { getPNForLID: vi.fn(async (_lid: string) => null as string | null) } }
+  /** leitura (IQ): os grupos de que participo */
+  groupFetchAllParticipating = vi.fn(async () => ({}) as Record<string, { id: string; subject?: string }>)
   spies: Record<string, ReturnType<typeof vi.fn>> = {}
   constructor(public config: any) {
     for (const name of FORBIDDEN) {
@@ -49,12 +78,25 @@ function wamsg(o: {
   audio?: number
   pushName?: string
   alt?: string
+  participant?: string
+  participantAlt?: string
+  contextInfo?: any
 }): any {
+  const ci = o.contextInfo ? { contextInfo: o.contextInfo } : {}
   const message = o.audio !== undefined
-    ? { audioMessage: { url: 'https://mmg.whatsapp.net/x.enc', directPath: '/x.enc', mediaKey: Buffer.alloc(32, 1), seconds: o.audio, ptt: true } }
-    : { conversation: o.text ?? 'oi' }
+    ? { audioMessage: { url: 'https://mmg.whatsapp.net/x.enc', directPath: '/x.enc', mediaKey: Buffer.alloc(32, 1), seconds: o.audio, ptt: true, ...ci } }
+    : o.contextInfo
+      ? { extendedTextMessage: { text: o.text ?? 'oi', ...ci } }
+      : { conversation: o.text ?? 'oi' }
   return {
-    key: { remoteJid: o.jid ?? JID, remoteJidAlt: o.alt, fromMe: o.fromMe ?? false, id: o.id },
+    key: {
+      remoteJid: o.jid ?? JID,
+      remoteJidAlt: o.alt,
+      fromMe: o.fromMe ?? false,
+      id: o.id,
+      ...(o.participant ? { participant: o.participant } : {}),
+      ...(o.participantAlt ? { participantAlt: o.participantAlt } : {})
+    },
     messageTimestamp: Math.floor(o.ts / 1000),
     pushName: o.pushName,
     message
@@ -133,7 +175,7 @@ describe('WhatsAppClient', () => {
       },
       authStateFactory: async (dir, backupDir) => {
         const a = await useAtomicAuthState(dir, backupDir)
-        a.state.creds.me = { id: OWN, name: 'Mentor' }
+        a.state.creds.me = { id: OWN, name: 'Mentor', lid: OWN_LID }
         const real = a.restoreBackup
         a.restoreBackup = () => {
           const r = real()
@@ -194,7 +236,7 @@ describe('WhatsAppClient', () => {
   })
 
   describe('ingestão', () => {
-    it('janela de 30 dias pelo timestamp da mensagem; grupos e status ignorados', async () => {
+    it('janela de 30 dias pelo timestamp da mensagem; grupos entram; status, newsletter e transmissão ignorados', async () => {
       await emit('messaging-history.set', {
         chats: [],
         contacts: [],
@@ -202,12 +244,158 @@ describe('WhatsAppClient', () => {
           wamsg({ id: 'old', ts: NOW - 31 * DAY }),
           wamsg({ id: 'new', ts: NOW - 29 * DAY }),
           wamsg({ id: 'today', ts: NOW - 1000 }),
-          wamsg({ id: 'grp', jid: '120363000000000000@g.us', ts: NOW - DAY }),
-          wamsg({ id: 'sts', jid: 'status@broadcast', ts: NOW - DAY })
+          wamsg({ id: 'grp', jid: GRP, participant: JID2, ts: NOW - DAY }),
+          wamsg({ id: 'grp-old', jid: GRP, participant: JID2, ts: NOW - 31 * DAY }),
+          wamsg({ id: 'sts', jid: 'status@broadcast', ts: NOW - DAY }),
+          wamsg({ id: 'nws', jid: '120363000000000000@newsletter', ts: NOW - DAY }),
+          wamsg({ id: 'bcl', jid: '1234567890@broadcast', ts: NOW - DAY })
         ]
       })
       expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['new', 'today'])
-      expect(repo.listContacts({ includeHidden: true }).map((c) => c.jid)).toEqual([JID])
+      expect(repo.listMessages(GRP).map((m) => m.id)).toEqual(['grp'])
+      expect(repo.listContacts({ includeHidden: true }).map((c) => [c.jid, c.isGroup])).toEqual([
+        [JID, false],
+        [GRP, true]
+      ])
+    })
+
+    describe('grupos', () => {
+      it('guarda o remetente (@lid → telefone pelo mapa; participantAlt) e o pushName dele; o pushName não vira o nome do grupo', async () => {
+        await emit('messaging-history.set', {
+          chats: [],
+          contacts: [],
+          lidPnMappings: [{ lid: '222@lid', pn: JID2 }],
+          messages: [
+            wamsg({ id: 'g1', jid: GRP, participant: '222:5@lid', pushName: 'Bruno', ts: NOW - 3000 }),
+            wamsg({ id: 'g2', jid: GRP, participant: '333@lid', participantAlt: '5511933334444@s.whatsapp.net', pushName: 'Carla', ts: NOW - 2000 }),
+            wamsg({ id: 'g3', jid: GRP, participant: '444@lid', ts: NOW - 1500 }),
+            wamsg({ id: 'g4', jid: GRP, fromMe: true, participant: OWN, pushName: 'Mentor', ts: NOW - 1000 })
+          ]
+        })
+        const msgs = repo.listMessages(GRP)
+        expect(msgs.map((m) => [m.id, m.fromMe, m.senderJid, m.senderName])).toEqual([
+          ['g1', false, JID2, 'Bruno'],
+          ['g2', false, '5511933334444@s.whatsapp.net', 'Carla'],
+          ['g3', false, '444@lid', null],
+          ['g4', true, null, null]
+        ])
+        const g = repo.listContacts({ includeHidden: true }).find((c) => c.jid === GRP)!
+        expect(g).toMatchObject({ isGroup: true, pushName: null, displayName: 'Grupo sem nome', awaitingReply: false })
+        // remetentes não viram conversas
+        expect(repo.listContacts({ includeHidden: true }).map((c) => c.jid)).toEqual([GRP])
+      })
+
+      it('áudio de grupo: prioridade 0, mesmo aguardando; 10 se me menciona ou cita minha mensagem (e é recente)', async () => {
+        await emit('messaging-history.set', {
+          chats: [],
+          contacts: [],
+          messages: [
+            wamsg({ id: 'ga-plain', jid: GRP, participant: JID2, audio: 10, ts: NOW - DAY }),
+            wamsg({ id: 'ga-mention', jid: GRP, participant: JID2, audio: 10, ts: NOW - DAY, contextInfo: { mentionedJid: ['5547900000000@s.whatsapp.net'] } }),
+            wamsg({ id: 'ga-lid', jid: GRP2, participant: JID2, audio: 10, ts: NOW - DAY, contextInfo: { mentionedJid: ['777000@lid'] } }),
+            wamsg({ id: 'ga-quote', jid: GRP2, participant: JID2, audio: 10, ts: NOW - DAY, contextInfo: { participant: '5547900000000@s.whatsapp.net', stanzaId: 'X' } }),
+            wamsg({ id: 'ga-old', jid: GRP2, participant: JID2, audio: 10, ts: NOW - 5 * DAY, contextInfo: { mentionedJid: ['5547900000000@s.whatsapp.net'] } }),
+            wamsg({ id: 'ga-other', jid: GRP2, participant: JID2, audio: 10, ts: NOW - DAY, contextInfo: { mentionedJid: [JID] } }),
+            // 1:1 continua como antes
+            wamsg({ id: 'a-recent', jid: JID, audio: 10, ts: NOW - DAY })
+          ]
+        })
+        const prio = Object.fromEntries(repo.listJobs('pending').map((j) => [j.key, j.priority]))
+        expect(prio).toEqual({ 'ga-plain': 0, 'ga-mention': 10, 'ga-lid': 10, 'ga-quote': 10, 'ga-old': 0, 'ga-other': 0, 'a-recent': 10 })
+        expect(repo.getMessage('ga-mention')!.mentionsMe).toBe(true)
+        expect(repo.getMessage('ga-plain')!.mentionsMe).toBe(false)
+      })
+
+      it('grupo escondido: o áudio é gravado mas não entra na fila', async () => {
+        await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'g0', jid: GRP, participant: JID2, ts: NOW - 2000 })] })
+        repo.setHidden(GRP, true)
+        await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'ga', jid: GRP, participant: JID2, audio: 5, ts: NOW - 1000 })] })
+        expect(repo.getMessage('ga')).not.toBeNull()
+        expect(repo.listJobs('pending')).toEqual([])
+      })
+
+      it('nome do grupo: groups.upsert, groups.update (assunto novo vence) e conversas do histórico', async () => {
+        const name = (jid: string) => repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)?.displayName
+        await emit('groups.upsert', [{ id: GRP, subject: 'Mentoria Turma 3' }])
+        await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'g1', jid: GRP, participant: JID2, pushName: 'Bruno', ts: NOW - 1000 })] })
+        expect(name(GRP)).toBe('Mentoria Turma 3')
+        await emit('groups.update', [{ id: GRP, subject: 'Mentoria Turma 3 (2026)' }])
+        expect(name(GRP)).toBe('Mentoria Turma 3 (2026)')
+        await emit('groups.update', [{ id: GRP, announce: true }])
+        expect(name(GRP)).toBe('Mentoria Turma 3 (2026)')
+        await emit('messaging-history.set', {
+          chats: [{ id: GRP2, name: 'Mastermind Vendas' }],
+          contacts: [],
+          messages: [wamsg({ id: 'h1', jid: GRP2, participant: JID2, ts: NOW - DAY })]
+        })
+        expect(name(GRP2)).toBe('Mastermind Vendas')
+        // nome personalizado continua vencendo
+        repo.renameContact(GRP, 'Turma 3')
+        await emit('groups.update', [{ id: GRP, subject: 'Outro' }])
+        expect(name(GRP)).toBe('Turma 3')
+      })
+
+      describe('nomes dos grupos pela fila (groupFetchAllParticipating)', () => {
+        const groupJobs = () => repo.listJobs('pending').filter((j) => j.type === 'fetch_profile')
+        beforeEach(async () => {
+          await emit('messages.upsert', {
+            type: 'notify',
+            messages: [wamsg({ id: 'g1', jid: GRP, participant: JID2, ts: NOW - 1000 }), wamsg({ id: 'g2', jid: GRP2, participant: JID2, ts: NOW - 900 })]
+          })
+          last().groupFetchAllParticipating.mockResolvedValue({
+            [GRP]: { id: GRP, subject: 'Mentoria Turma 3' },
+            [GRP2]: { id: GRP2, subject: 'Mastermind' },
+            '120363027777777777@g.us': { id: '120363027777777777@g.us', subject: 'Sem mensagens' }
+          })
+        })
+
+        it('ao abrir enfileira um fetch_profile (sem chamar na hora); a fila chama, aplica os nomes e registra só a contagem', async () => {
+          await emit('connection.update', { connection: 'open' })
+          expect(last().groupFetchAllParticipating).not.toHaveBeenCalled()
+          expect(groupJobs()).toHaveLength(1)
+          expect(await queue.tick()).toBe('ran')
+          expect(last().groupFetchAllParticipating).toHaveBeenCalledTimes(1)
+          const names = Object.fromEntries(repo.listContacts({ includeHidden: true }).map((c) => [c.jid, c.displayName]))
+          expect(names).toEqual({ [GRP]: 'Mentoria Turma 3', [GRP2]: 'Mastermind' })
+          const lines = diagLines.filter(([k]) => k === 'wa_groups')
+          expect(lines).toEqual([['wa_groups', 'nomes de grupos: 3 grupos']])
+          expect(repo.listJobs('done').some((j) => j.type === 'fetch_profile')).toBe(true)
+        })
+
+        it('no máximo uma vez a cada 24 h (horário gravado), mesmo reconectando ou reiniciando', async () => {
+          await emit('connection.update', { connection: 'open' })
+          await queue.tick()
+          await close(428)
+          await advance(10_000)
+          await emit('connection.update', { connection: 'open' })
+          expect(groupJobs()).toHaveLength(0)
+          clock.advance(24 * 3_600_000)
+          await close(428)
+          await client.manualReconnect()
+          await emit('connection.update', { connection: 'open' })
+          expect(groupJobs()).toHaveLength(1)
+        })
+
+        it('várias aberturas antes da fila rodar: um job só', async () => {
+          await emit('connection.update', { connection: 'open' })
+          await close(428)
+          await advance(10_000)
+          await emit('connection.update', { connection: 'open' })
+          expect(groupJobs()).toHaveLength(1)
+        })
+
+        it('conexão fechada: o tipo fica pausado (sem chamar) e o job espera a próxima abertura', async () => {
+          await emit('connection.update', { connection: 'open' })
+          await close(428)
+          const s = last()
+          expect(queue.isTypePaused('fetch_profile')).toBe(true)
+          expect(await queue.tick()).toBe('idle')
+          expect(s.groupFetchAllParticipating).not.toHaveBeenCalled()
+          const j = groupJobs()[0]
+          expect(j.attempts).toBe(0)
+          expect(repo.getSetting('wa.groupsFetchedAt')).toBeNull()
+        })
+      })
     })
 
     it('relógio do PC muito atrasado: a janela nunca encolhe (âncora limitada a PC + 1 dia só alarga)', async () => {
@@ -417,6 +605,8 @@ describe('WhatsAppClient', () => {
 
   describe('download_audio', () => {
     beforeEach(async () => {
+      // nomes dos grupos buscados há pouco: a fila aqui só tem o áudio
+      repo.setSetting('wa.groupsFetchedAt', String(NOW))
       await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'AUD1', audio: 37, ts: NOW - 1000 })] })
       await emit('connection.update', { connection: 'open' })
     })
@@ -519,7 +709,9 @@ describe('WhatsAppClient', () => {
   })
 
   describe('fetch_profile', () => {
-    it('não faz chamada de rede: registra e conclui', async () => {
+    it('payload de contato (antigo): não faz chamada de rede: registra e conclui', async () => {
+      repo.setSetting('wa.groupsFetchedAt', String(NOW))
+      await emit('connection.update', { connection: 'open' })
       repo.upsertContact({ jid: JID })
       queue.enqueue('fetch_profile', `profile:${JID}`, { jid: JID })
       expect(await queue.tick()).toBe('ran')

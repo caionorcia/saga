@@ -56,7 +56,7 @@ O modelo de texto padrão é `llama-3.3-70b-versatile` (constante `DEFAULT_GROQ_
 ## Princípios de segurança
 
 - Somente leitura: não existe chamada a `sendMessage`; nunca se chama `readMessages`, `sendReceipt(s)` ou `sendPresenceUpdate`; o socket usa `markOnlineOnConnect: false` (sem confirmação de leitura nem "online").
-- Só conversas individuais; grupos, status e newsletters são ignorados.
+- Conversas individuais e grupos (só leitura: nenhum método que altere grupos é chamado; os nomes dos grupos vêm de eventos e de uma consulta `groupFetchAllParticipating` pela fila, no máximo 1 vez por dia). Status, newsletters e listas de transmissão são ignorados.
 - Toda ação de rede para o WhatsApp passa pela fila com limites de ritmo.
 - Chaves de API só em `safeStorage`, nunca em texto puro nem em logs.
 - Dados em `app.getPath('userData')`: `saga.db`, `auth/`, `auth-backup/`, `media/`. Nada sai do computador, exceto texto e áudio enviados à IA escolhida.

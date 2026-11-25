@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { systemClock, type Clock } from './clock'
-import type { ContactRow, MessageRow, Repo } from './db/repo'
+import type { ContactKind, ContactRow, MessageRow, Repo } from './db/repo'
 import { hasFreeSpace as defaultHasFreeSpace } from './disk'
 import { BudgetExceededError, CostTracker } from './ai/budget'
 import {
@@ -111,7 +111,10 @@ function toView(m: MessageRow): MessageView {
     durationSec: m.durationSec,
     hasAudio: !!m.audioPath,
     transcript: m.transcript,
-    transcriptStatus: m.transcriptStatus
+    transcriptStatus: m.transcriptStatus,
+    senderJid: m.senderJid,
+    senderName: m.senderLabel,
+    mentionsMe: m.mentionsMe
   }
 }
 
@@ -445,8 +448,8 @@ export class SagaService extends EventEmitter {
    * Nomes de perfil não são buscados aqui: o handler `fetch_profile` não faz chamada de rede
    * (Baileys v7 não tem consulta de nome só de leitura); os nomes vêm da ingestão.
    */
-  async listContacts(includeHidden: boolean): Promise<ContactRow[]> {
-    return this.repo.listContacts({ includeHidden })
+  async listContacts(includeHidden: boolean, kind: ContactKind = 'all'): Promise<ContactRow[]> {
+    return this.repo.listContacts({ includeHidden, kind })
   }
 
   async listMessages(jid: string): Promise<MessageView[]> {

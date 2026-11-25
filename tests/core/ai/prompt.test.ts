@@ -5,7 +5,8 @@ import { InvalidOutputError, buildPrompt, parseSuggestions } from '../../../src/
 function m(id: string, fromMe: boolean, over: Partial<MessageRow> = {}): MessageRow {
   return {
     id, jid: 'j', fromMe, ts: 1, kind: 'text', text: `texto ${id}`, mediaKeyJson: null, durationSec: null,
-    audioPath: null, transcript: null, transcriptStatus: null, ...over
+    audioPath: null, transcript: null, transcriptStatus: null,
+    senderJid: null, senderName: null, senderLabel: null, mentionsMe: false, ...over
   }
 }
 
@@ -82,5 +83,42 @@ describe('parseSuggestions', () => {
     expect(() => parseSuggestions('{"resumo":"x","sugestoes":["só uma"]}')).toThrow(InvalidOutputError)
     expect(() => parseSuggestions('blá blá')).toThrow(InvalidOutputError)
     expect(() => parseSuggestions('{"resumo":1,"sugestoes":"x"}')).toThrow(InvalidOutputError)
+  })
+})
+
+describe('buildPrompt em grupo', () => {
+  it('cada mensagem com o nome de quem mandou; menção marcada; sistema focado no que pedem ao mentor', () => {
+    const p = buildPrompt({
+      contactName: 'Mentoria Turma 3',
+      notes: null,
+      isGroup: true,
+      newMessages: [
+        m('g1', false, { senderLabel: 'Bruno', text: 'Alguém tem o link da aula?' }),
+        m('g2', false, { senderLabel: 'Carla', text: '@5547900000000 pode revisar meu pitch?', mentionsMe: true }),
+        m('g3', false, { senderLabel: 'Carla', kind: 'audio', text: null, transcript: 'é rapidinho', transcriptStatus: 'done' }),
+        m('g4', false, { senderLabel: null, text: 'sem nome' })
+      ],
+      priorMessages: [m('p1', true, { text: 'Bom dia, turma!' })],
+      examples: []
+    })
+    expect(p.user).toContain('Grupo: Mentoria Turma 3')
+    expect(p.user).toContain('Bruno: Alguém tem o link da aula?')
+    expect(p.user).toContain('Carla (menciona você): @5547900000000 pode revisar meu pitch?')
+    expect(p.user).toContain('Carla: [áudio transcrito] é rapidinho')
+    expect(p.user).toContain('Participante: sem nome')
+    expect(p.user).toContain('Mentor: Bom dia, turma!')
+    expect(p.user).not.toContain('Mentorado:')
+    expect(p.system).toContain('pt-BR')
+    expect(p.system).toContain('grupo')
+    expect(p.system).toMatch(/pedidos|perguntas/)
+    expect(p.system).toContain('"resumo"')
+    expect(p.system).toContain('[áudio ainda sendo transcrito]')
+  })
+
+  it('individual continua igual (sem nome de remetente)', () => {
+    const p = buildPrompt({ contactName: 'Ana', notes: null, newMessages: [m('a', false, { senderLabel: 'X' })], priorMessages: [], examples: [] })
+    expect(p.user).toContain('Mentorado: Ana')
+    expect(p.user).toContain('Mentorado: texto a')
+    expect(p.system).not.toContain('grupo')
   })
 })

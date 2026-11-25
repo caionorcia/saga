@@ -5,7 +5,7 @@ import type { WaClientLike } from '../core/service'
 import type { ConnState } from '../core/wa/client'
 
 /**
- * Cliente do WhatsApp falso (`SAGA_FAKE_WA=1`): sem rede, grava os 5 contatos de demonstração no banco
+ * Cliente do WhatsApp falso (`SAGA_FAKE_WA=1`): sem rede, grava as conversas de demonstração (pessoas e grupos) no banco
  * e fica "conectado". Só é carregado quando a variável de ambiente existe.
  */
 export class FakeWaClient extends EventEmitter implements WaClientLike {
@@ -18,7 +18,7 @@ export class FakeWaClient extends EventEmitter implements WaClientLike {
   async start(): Promise<void> {
     const now = Date.now()
     for (const c of loadDemo(now)) {
-      this.repo.upsertContact({ jid: c.jid, pushName: c.pushName })
+      this.repo.upsertContact({ jid: c.jid, pushName: c.pushName, isGroup: c.isGroup })
       if (c.customName) this.repo.renameContact(c.jid, c.customName)
       if (c.notes) this.repo.setNotes(c.jid, c.notes)
       for (const m of c.messages) {
