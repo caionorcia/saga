@@ -5,6 +5,8 @@ import { systemClock, type Clock } from './clock'
 import type { AlertKind, AlertRow, ContactKind, ContactRow, MessageRow, Repo } from './db/repo'
 import { CLASSIFY_MAX_AGE_MS, RESOLVED_BY_REPLY, classifyChat } from './ai/classify'
 import { WAIT_RED_MS } from '../shared/triage'
+import type { AlertQuality, RateReason } from '../shared/feedback'
+import { alertQuality, feedbackCsv, rateAlert, reportMissedAlert } from './ai/alertFeedback'
 import { hasFreeSpace as defaultHasFreeSpace } from './disk'
 import { BudgetExceededError, CostTracker } from './ai/budget'
 import {
@@ -548,6 +550,37 @@ export class SagaService extends EventEmitter {
   /** "Resolver": tira o alerta da lista (fica no histórico; um sinal novo cria outro). */
   async dismissAlert(jid: string, kind: AlertKind): Promise<void> {
     if (this.repo.dismissAlert(jid, kind)) this.markContacts()
+  }
+
+  /**
+   * 👍/👎 num alerta da IA (ver `ai/alertFeedback.ts`). O 👎 resolve o alerta e, com o tipo certo, cria esse.
+   * O registro de diagnóstico só leva o veredito e o tipo (nunca texto nem jid).
+   */
+  async rateAlert(alertId: number, verdict: 'up' | 'down', reason?: RateReason): Promise<void> {
+    const changed = rateAlert(this.repo, alertId, verdict, reason)
+    this.diag('alert_feedback', `verdict=${verdict}${reason ? ` reason=${reason.code}` : ''}`)
+    if (changed) this.markContacts()
+  }
+
+  /** "Faltou um alerta?": grava o exemplo e cria o alerta, marcado como do mentor. */
+  async reportMissedAlert(jid: string, kind: AlertKind, msgId?: string | null, text?: string | null): Promise<void> {
+    const changed = reportMissedAlert(this.repo, jid, kind, msgId ?? null, text ?? null)
+    this.diag('alert_feedback', `verdict=missed kind=${kind}`)
+    if (changed) this.markContacts()
+  }
+
+  /** "Qualidade dos alertas": contagens dos últimos 30 dias. */
+  async alertQuality(): Promise<AlertQuality> {
+    return alertQuality(this.repo, this.clock.now())
+  }
+
+  /** O CSV de todas as avaliações (o processo principal grava no arquivo escolhido). */
+  alertFeedbackCsv(opts: { anonymize: boolean }): { csv: string; rows: number } {
+    const rows = this.repo.listFeedback()
+    const names = new Map(this.repo.listContacts({ includeHidden: true }).map((c) => [c.jid, c.displayName]))
+    const csv = feedbackCsv(rows, (jid) => names.get(jid) ?? 'Conversa removida', opts.anonymize)
+    this.diag('alert_feedback_export', `rows=${rows.length} anonymized=${opts.anonymize}`)
+    return { csv, rows: rows.length }
   }
 
   /**

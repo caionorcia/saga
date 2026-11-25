@@ -12,6 +12,7 @@ import { ModelUnavailableError } from './groqModels'
 import { LlmRateLimitError, type LlmProvider } from './llm'
 import { InvalidOutputError, extractJson, render } from './prompt'
 import { InvalidKeyError, isNetworkError } from './transcriber'
+import { renderAlertExamples, selectAlertExamples } from './alertFeedback'
 
 /** no máximo estas mensagens novas do contato por chamada */
 export const CLASSIFY_MAX_NEW = 20
@@ -80,15 +81,25 @@ const SYSTEM_GROUP_EXTRA = `
 - Esta conversa é um GRUPO: cada mensagem aparece como "Nome: texto"; "Mentor" é o próprio mentor e "(menciona você)" marca quem mencionou o mentor ou respondeu a ele.
 - Num grupo, marque só sinais dirigidos ao mentor (perguntas, pedidos, menções a ele) ou sobre a mentoria; ignore conversas entre os participantes. Diga no "detail" quem é a pessoa.`
 
+/** A janela de mensagens como a IA a vê (guardada no alerta: vira o exemplo quando o mentor avalia). */
+export function windowText(p: { isGroup: boolean; prior: MessageRow[]; newMessages: MessageRow[] }): string {
+  const parts: string[] = []
+  if (p.prior.length) parts.push(`Conversa anterior (só contexto):\n${p.prior.map((m) => render(m, p.isGroup)).join('\n')}`)
+  parts.push(`Mensagens novas:\n${p.newMessages.map((m, i) => `#${i + 1} ${render(m, p.isGroup)}`).join('\n')}`)
+  return parts.join('\n\n')
+}
+
 export function buildAlertPrompt(p: {
   contactName: string
   isGroup: boolean
   prior: MessageRow[]
   newMessages: MessageRow[]
+  /** avaliações anteriores do mentor (`renderAlertExamples`), ou vazio */
+  examples?: string
 }): { system: string; user: string } {
   const parts: string[] = [p.isGroup ? `Grupo: ${p.contactName}` : `Mentorado: ${p.contactName}`]
-  if (p.prior.length) parts.push(`Conversa anterior (só contexto):\n${p.prior.map((m) => render(m, p.isGroup)).join('\n')}`)
-  parts.push(`Mensagens novas:\n${p.newMessages.map((m, i) => `#${i + 1} ${render(m, p.isGroup)}`).join('\n')}`)
+  if (p.examples?.trim()) parts.push(p.examples.trim())
+  parts.push(windowText(p))
   parts.push('Responda agora apenas com o JSON pedido.')
   return { system: p.isGroup ? SYSTEM + SYSTEM_GROUP_EXTRA : SYSTEM, user: parts.join('\n\n') }
 }
@@ -168,13 +179,16 @@ export async function classifyChat(deps: ClassifyDeps, jid: string, signal?: Abo
     throw new DeferJobError('teto diário de gasto atingido', deps.cost.msUntilTomorrow())
   }
 
-  const prompt = buildAlertPrompt({ contactName: contact.displayName, isGroup: contact.isGroup, prior: win.prior, newMessages: win.newMessages })
+  const examples = renderAlertExamples(selectAlertExamples(repo, jid))
+  const prompt = buildAlertPrompt({ contactName: contact.displayName, isGroup: contact.isGroup, prior: win.prior, newMessages: win.newMessages, examples })
   let text: string
+  let model: string | null = null
   try {
     const res = await llm.complete({ ...prompt, temperature: 0.2 })
     signal?.throwIfAborted()
     deps.cost.add(llm.name, res.inputTokens, res.outputTokens, res.model)
     text = res.text
+    model = res.model ?? null
   } catch (e) {
     if (signal?.aborted) throw e
     if (e instanceof LlmRateLimitError) {
@@ -202,8 +216,11 @@ export async function classifyChat(deps: ClassifyDeps, jid: string, signal?: Abo
   }
   // o mentor já respondeu depois dessas mensagens: só o desânimo continua valendo
   if (win.last?.fromMe) alerts = alerts.filter((a) => !RESOLVED_BY_REPLY.includes(a.kind))
+  // o mentor já disse 👎 para este tipo nesta mensagem: não volta
+  alerts = alerts.filter((a) => !(a.msgId && repo.hasDownFeedback(jid, a.kind, a.msgId)))
+  const contextText = windowText({ isGroup: contact.isGroup, prior: win.prior, newMessages: win.newMessages })
   let changed = false
-  for (const a of alerts) changed = repo.upsertAlert({ jid, ...a }) || changed
+  for (const a of alerts) changed = repo.upsertAlert({ jid, ...a, source: 'ai', contextText, model }) || changed
   if (win.last) repo.setAlertCheck(jid, win.last.id, win.last.ts)
   log('ok', alerts.length)
   if (changed) deps.onChanged(jid)

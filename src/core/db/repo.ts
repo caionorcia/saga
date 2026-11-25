@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { systemClock, type Clock } from '../clock'
 import type { NormalizedMessage } from '../types'
 import { ALERT_KINDS, AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../shared/triage'
+import type { ReasonCode, Verdict } from '../../shared/feedback'
 
 /** Qualidade da fonte do nome guardado em `push_name` (maior vence; empate: o mais novo). */
 export const NAME_RANK = { push: 1, profile: 2, addressBook: 3 } as const
@@ -13,13 +14,38 @@ export type ContactKind = 'all' | 'individual' | 'group'
 
 export { ALERT_KINDS, AI_ALERT_KINDS, alertSeverity, type AlertKind }
 
+/** De onde veio o alerta: a IA, a regra "esperando" ou o próprio mentor ("Faltou um alerta?", tipo certo do 👎). */
+export type AlertSource = 'ai' | 'rule' | 'user'
+
 export interface AlertRow {
+  id: number
   jid: string
   kind: AlertKind
   /** o quê e por quê, em pt-BR (até 120 caracteres) */
   detail: string
   /** mensagem que motivou o alerta (para rolar até ela), ou null */
   msgId: string | null
+  createdAt: number
+  source: AlertSource
+  /** avaliação do mentor para este alerta (👍 = 'up'), ou null */
+  rating: Verdict | null
+}
+
+/** Uma avaliação de alerta: um exemplo rotulado completo (com a janela de mensagens que a IA viu). */
+export interface FeedbackRow {
+  id: number
+  alertId: number | null
+  jid: string
+  kind: AlertKind
+  msgId: string | null
+  verdict: Verdict
+  reasonCode: ReasonCode | null
+  reasonText: string | null
+  /** 👎 "Não é esse tipo": o tipo certo; null = nenhum ou não informado */
+  correctKind: AlertKind | null
+  contextText: string
+  detail: string
+  model: string | null
   createdAt: number
 }
 
@@ -143,8 +169,37 @@ function sortKinds(csv: string | null): AlertKind[] {
 }
 
 function toAlert(r: Row): AlertRow {
-  return { jid: r.jid, kind: r.kind, detail: r.detail, msgId: r.msg_id ?? null, createdAt: r.created_at }
+  return {
+    id: r.id,
+    jid: r.jid,
+    kind: r.kind,
+    detail: r.detail,
+    msgId: r.msg_id ?? null,
+    createdAt: r.created_at,
+    source: r.source ?? 'ai',
+    rating: r.rating ?? null
+  }
 }
+
+function toFeedback(r: Row): FeedbackRow {
+  return {
+    id: r.id,
+    alertId: r.alert_id ?? null,
+    jid: r.jid,
+    kind: r.kind,
+    msgId: r.msg_id ?? null,
+    verdict: r.verdict,
+    reasonCode: r.reason_code ?? null,
+    reasonText: r.reason_text ?? null,
+    correctKind: r.correct_kind ?? null,
+    contextText: r.context_text,
+    detail: r.detail,
+    model: r.model ?? null,
+    createdAt: r.created_at
+  }
+}
+
+const RATING_SQL = '(SELECT f.verdict FROM alert_feedback f WHERE f.alert_id = a.id) AS rating'
 
 function toApproved(r: Row): ApprovedRow {
   return {
@@ -305,20 +360,33 @@ export class Repo {
 
   /**
    * Cria o alerta ativo do tipo, ou atualiza detalhe e mensagem do que já está ativo (um por conversa e tipo).
-   * `true` se algo mudou.
+   * Um alerta marcado pelo mentor (`source = 'user'`) não é reescrito pela IA. `true` se algo mudou.
+   * `contextText`: a janela de mensagens que a IA viu (vira o exemplo quando o mentor avalia o alerta).
    */
-  upsertAlert(a: { jid: string; kind: AlertKind; detail: string; msgId: string | null }): boolean {
+  upsertAlert(a: {
+    jid: string
+    kind: AlertKind
+    detail: string
+    msgId: string | null
+    source?: AlertSource
+    contextText?: string | null
+    model?: string | null
+  }): boolean {
+    const source = a.source ?? (a.kind === 'esperando' ? 'rule' : 'ai')
     const cur = this.db
-      .prepare('SELECT id, detail, msg_id FROM alerts WHERE jid = ? AND kind = ? AND dismissed_at IS NULL')
+      .prepare('SELECT id, detail, msg_id, source FROM alerts WHERE jid = ? AND kind = ? AND dismissed_at IS NULL')
       .get(a.jid, a.kind) as Row | undefined
     if (cur) {
+      if (cur.source === 'user' && source !== 'user') return false
       if (cur.detail === a.detail && (cur.msg_id ?? null) === a.msgId) return false
-      this.db.prepare('UPDATE alerts SET detail = ?, msg_id = ? WHERE id = ?').run(a.detail, a.msgId, cur.id)
+      this.db
+        .prepare('UPDATE alerts SET detail = ?, msg_id = ?, context_text = COALESCE(?, context_text), model = COALESCE(?, model) WHERE id = ?')
+        .run(a.detail, a.msgId, a.contextText ?? null, a.model ?? null, cur.id)
       return true
     }
     this.db
-      .prepare('INSERT INTO alerts(jid, kind, detail, msg_id, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(a.jid, a.kind, a.detail, a.msgId, this.clock.now())
+      .prepare('INSERT INTO alerts(jid, kind, detail, msg_id, created_at, source, context_text, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(a.jid, a.kind, a.detail, a.msgId, this.clock.now(), source, a.contextText ?? null, a.model ?? null)
     return true
   }
 
@@ -326,7 +394,7 @@ export class Repo {
   listAlerts(jid?: string): AlertRow[] {
     const rows = this.db
       .prepare(
-        `SELECT a.* FROM alerts a JOIN contacts c ON c.jid = a.jid
+        `SELECT a.*, ${RATING_SQL} FROM alerts a JOIN contacts c ON c.jid = a.jid
           WHERE a.dismissed_at IS NULL AND (?1 IS NULL AND c.hidden = 0 OR a.jid = ?1)
           ORDER BY ${ALERT_ORDER_SQL.replace(/kind/, 'a.kind')}, a.created_at, a.id`
       )
@@ -336,10 +404,72 @@ export class Repo {
 
   /** O alerta mais recente do tipo (ativo ou resolvido), ou null. */
   lastAlert(jid: string, kind: AlertKind): (AlertRow & { dismissedAt: number | null }) | null {
-    const r = this.db.prepare('SELECT * FROM alerts WHERE jid = ? AND kind = ? ORDER BY id DESC LIMIT 1').get(jid, kind) as
+    const r = this.db.prepare(`SELECT a.*, ${RATING_SQL} FROM alerts a WHERE jid = ? AND kind = ? ORDER BY id DESC LIMIT 1`).get(jid, kind) as
       | Row
       | undefined
     return r ? { ...toAlert(r), dismissedAt: r.dismissed_at ?? null } : null
+  }
+
+  /** Um alerta pelo id (ativo ou resolvido), com a janela que a IA viu e o modelo; ou null. */
+  getAlert(id: number): (AlertRow & { dismissedAt: number | null; contextText: string | null; model: string | null }) | null {
+    const r = this.db.prepare(`SELECT a.*, ${RATING_SQL} FROM alerts a WHERE a.id = ?`).get(id) as Row | undefined
+    return r ? { ...toAlert(r), dismissedAt: r.dismissed_at ?? null, contextText: r.context_text ?? null, model: r.model ?? null } : null
+  }
+
+  /** Resolve um alerta pelo id. `true` se estava ativo. */
+  dismissAlertById(id: number): boolean {
+    const res = this.db.prepare('UPDATE alerts SET dismissed_at = ? WHERE id = ? AND dismissed_at IS NULL').run(this.clock.now(), id)
+    return Number(res.changes) > 0
+  }
+
+  // --- avaliação dos alertas ---
+
+  /** Grava a avaliação; com `alertId`, uma por alerta (mudar de ideia atualiza a mesma linha). Devolve o id. */
+  saveFeedback(f: Omit<FeedbackRow, 'id' | 'createdAt'>): number {
+    const now = this.clock.now()
+    if (f.alertId !== null) {
+      const cur = this.db.prepare('SELECT id FROM alert_feedback WHERE alert_id = ?').get(f.alertId) as Row | undefined
+      if (cur) {
+        this.db
+          .prepare(
+            `UPDATE alert_feedback SET verdict = ?, reason_code = ?, reason_text = ?, correct_kind = ?, created_at = ?
+              WHERE id = ?`
+          )
+          .run(f.verdict, f.reasonCode, f.reasonText, f.correctKind, now, cur.id)
+        return cur.id
+      }
+    }
+    const res = this.db
+      .prepare(
+        `INSERT INTO alert_feedback(alert_id, jid, kind, msg_id, verdict, reason_code, reason_text, correct_kind, context_text, detail, model, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(f.alertId, f.jid, f.kind, f.msgId, f.verdict, f.reasonCode, f.reasonText, f.correctKind, f.contextText, f.detail, f.model, now)
+    return Number(res.lastInsertRowid)
+  }
+
+  /** O mentor já disse 👎 para um alerta deste tipo nesta mensagem? */
+  hasDownFeedback(jid: string, kind: AlertKind, msgId: string): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM alert_feedback WHERE jid = ? AND kind = ? AND msg_id = ? AND verdict = 'down' LIMIT 1")
+      .get(jid, kind, msgId)
+  }
+
+  /** Avaliações, mais novas primeiro (desde `since`, se dado). */
+  listFeedback(opts: { since?: number; limit?: number } = {}): FeedbackRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM alert_feedback WHERE created_at >= ? ORDER BY created_at DESC, id DESC LIMIT ?')
+      .all(opts.since ?? 0, opts.limit ?? -1) as Row[]
+    return rows.map(toFeedback)
+  }
+
+  /** Quantas avaliações de cada tipo e veredito desde `since`. */
+  feedbackCounts(since: number): Array<{ kind: AlertKind; verdict: Verdict; n: number }> {
+    return (
+      this.db
+        .prepare('SELECT kind, verdict, COUNT(*) AS n FROM alert_feedback WHERE created_at >= ? GROUP BY kind, verdict')
+        .all(since) as Row[]
+    ).map((r) => ({ kind: r.kind, verdict: r.verdict, n: r.n }))
   }
 
   /** Resolve (dismiss) o alerta ativo do tipo. `true` se havia um. */

@@ -133,8 +133,8 @@ describe('Conversation: barra de alertas', () => {
     awaitingReply: true, isGroup: false, waitingSince: Date.now() - 50 * H, alerts: ['urgente', 'esperando']
   }
   const alerts: Alert[] = [
-    { jid: JID, kind: 'urgente', detail: 'Precisa decidir até sexta.', msgId: 'R3', createdAt: 1 },
-    { jid: JID, kind: 'esperando', detail: 'Sem resposta há mais de 2 dias.', msgId: null, createdAt: 1 }
+    { id: 1, jid: JID, kind: 'urgente', detail: 'Precisa decidir até sexta.', msgId: 'R3', createdAt: 1, source: 'ai', rating: null },
+    { id: 2, jid: JID, kind: 'esperando', detail: 'Sem resposta há mais de 2 dias.', msgId: null, createdAt: 1, source: 'rule', rating: null }
   ]
 
   it('lista os alertas com detalhe e "Resolver"; clicar no alerta destaca a mensagem', async () => {

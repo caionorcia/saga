@@ -761,6 +761,46 @@ describe('SagaService', () => {
     })
   })
 
+  describe('avaliação dos alertas', () => {
+    const ins = (id: string, ts: number, fromMe = false, text = 'oi') =>
+      repo.insertMessage({ id, jid: JID, fromMe, ts, kind: 'text', text, mediaKeyJson: null, durationSec: null })
+
+    it('👍/👎 e "faltou": avisa a lista, a qualidade conta e o registro só tem veredito e tipo', async () => {
+      const lines: string[] = []
+      await service.stop()
+      service = make({ diag: (k, d) => lines.push(`${k} ${d}`) })
+      repo.upsertContact({ jid: JID, pushName: 'Ana' })
+      ins('c1', NOW - 60_000, false, 'Preciso até amanhã kkk')
+      repo.upsertAlert({ jid: JID, kind: 'urgente', detail: 'Prazo amanhã', msgId: 'c1' })
+      const changed = vi.fn()
+      service.onContactsChanged(changed)
+      const [a] = await service.listAlerts(JID)
+      await service.rateAlert(a.id, 'up')
+      expect((await service.listAlerts(JID))[0].rating).toBe('up')
+      await service.rateAlert(a.id, 'down', { code: 'tipo_errado', correctKind: 'reuniao', text: 'só brincou' })
+      expect((await service.listAlerts(JID)).map((x) => [x.kind, x.source])).toEqual([['reuniao', 'user']])
+      await service.reportMissedAlert(JID, 'desanimo', 'c1', 'Ela está cansada')
+      await vi.waitFor(() => expect(changed).toHaveBeenCalled())
+      const q = await service.alertQuality()
+      expect(q.kinds.find((k) => k.kind === 'urgente')).toEqual({ kind: 'urgente', up: 0, down: 1, missed: 0, correctRate: 0 })
+      expect(q.kinds.find((k) => k.kind === 'desanimo')!.missed).toBe(1)
+      const { csv, rows } = service.alertFeedbackCsv({ anonymize: true })
+      expect(rows).toBe(2)
+      expect(csv).toContain('"Contato 1"')
+      expect(csv).not.toContain('Ana')
+      expect(service.alertFeedbackCsv({ anonymize: false }).csv).toContain('"Ana"')
+      const mine = lines.filter((l) => l.startsWith('alert_feedback'))
+      expect(mine).toEqual([
+        'alert_feedback verdict=up',
+        'alert_feedback verdict=down reason=tipo_errado',
+        'alert_feedback verdict=missed kind=desanimo',
+        'alert_feedback_export rows=2 anonymized=true',
+        'alert_feedback_export rows=2 anonymized=false'
+      ])
+      expect(lines.join('\n')).not.toMatch(/amanhã|brincou|cansada|Ana|5547999998888/)
+    })
+  })
+
   describe('stop()', () => {
     it('prazo por etapa: um cliente do WhatsApp que não para também não segura a saída', async () => {
       await service.start()

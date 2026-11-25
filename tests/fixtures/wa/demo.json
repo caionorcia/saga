@@ -403,5 +403,83 @@
     }
    ]
   }
+ ],
+ "feedback": [
+  {
+   "jid": "5548944443333@s.whatsapp.net",
+   "kind": "urgente",
+   "verdict": "up",
+   "daysAgo": 2
+  },
+  {
+   "jid": "5547999998888@s.whatsapp.net",
+   "kind": "urgente",
+   "verdict": "up",
+   "daysAgo": 3
+  },
+  {
+   "jid": "5511988887777@s.whatsapp.net",
+   "kind": "urgente",
+   "verdict": "up",
+   "daysAgo": 5
+  },
+  {
+   "jid": "5585966665555@s.whatsapp.net",
+   "kind": "urgente",
+   "verdict": "down",
+   "reason": "brincadeira",
+   "daysAgo": 6
+  },
+  {
+   "jid": "5547999998888@s.whatsapp.net",
+   "kind": "reuniao",
+   "verdict": "up",
+   "daysAgo": 1
+  },
+  {
+   "jid": "5521977776666@s.whatsapp.net",
+   "kind": "reuniao",
+   "verdict": "up",
+   "daysAgo": 4
+  },
+  {
+   "jid": "5547955554444@s.whatsapp.net",
+   "kind": "desanimo",
+   "verdict": "up",
+   "daysAgo": 2
+  },
+  {
+   "jid": "5511988887777@s.whatsapp.net",
+   "kind": "desanimo",
+   "verdict": "down",
+   "reason": "exagerado",
+   "daysAgo": 8
+  },
+  {
+   "jid": "5585966665555@s.whatsapp.net",
+   "kind": "desanimo",
+   "verdict": "down",
+   "reason": "tipo_errado",
+   "correctKind": "travado",
+   "daysAgo": 9
+  },
+  {
+   "jid": "120363025555555555@g.us",
+   "kind": "travado",
+   "verdict": "up",
+   "daysAgo": 3
+  },
+  {
+   "jid": "5547955554444@s.whatsapp.net",
+   "kind": "travado",
+   "verdict": "missed",
+   "daysAgo": 7
+  },
+  {
+   "jid": "120363026666666666@g.us",
+   "kind": "reuniao",
+   "verdict": "missed",
+   "daysAgo": 12
+  }
  ]
 }

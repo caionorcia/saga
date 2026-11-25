@@ -1,4 +1,6 @@
-import { clipboard, dialog, ipcMain, type BrowserWindow } from 'electron'
+import { app, clipboard, dialog, ipcMain, type BrowserWindow } from 'electron'
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { SagaService } from '../core/service'
 import { EVENTS, INVOKE_METHODS, invokeChannel, type InvokeMethod, type SagaApi } from '../shared/api'
 import { validateIpcArgs } from './guards'
@@ -31,6 +33,25 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     listMessages: (jid) => service.listMessages(String(jid)),
     listAlerts: (jid) => service.listAlerts(jid === undefined ? undefined : String(jid)),
     dismissAlert: (jid, kind) => service.dismissAlert(String(jid), kind),
+    rateAlert: (id, verdict, reason) => service.rateAlert(Number(id), verdict, reason),
+    reportMissedAlert: (jid, kind, msgId, text) => service.reportMissedAlert(String(jid), kind, msgId ?? null, text ?? null),
+    alertQuality: () => service.alertQuality(),
+    exportAlertFeedback: async (o) => {
+      const { csv, rows } = service.alertFeedbackCsv({ anonymize: o.anonymize === true })
+      if (rows === 0) return { status: 'empty' }
+      const day = new Date().toISOString().slice(0, 10)
+      const w = opts.getWindow()
+      const dlgOpts = {
+        title: 'Exportar avaliações dos alertas',
+        defaultPath: join(app.getPath('documents'), `saga-avaliacoes-alertas-${day}.csv`),
+        filters: [{ name: 'Planilha CSV', extensions: ['csv'] }]
+      }
+      const r = w ? await dialog.showSaveDialog(w, dlgOpts) : await dialog.showSaveDialog(dlgOpts)
+      if (r.canceled || !r.filePath) return { status: 'canceled' }
+      // o caminho vem do diálogo do sistema (escolha do usuário), nunca da interface
+      await writeFile(r.filePath, csv, 'utf8')
+      return { status: 'saved', rows }
+    },
     getAnalysis: (jid) => service.getAnalysis(String(jid)),
     regenerate: (jid) => service.regenerate(String(jid)),
     saveReply: (input) => service.saveReply(input),

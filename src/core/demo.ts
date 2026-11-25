@@ -1,6 +1,7 @@
 import raw from '../../tests/fixtures/wa/demo.json'
 import type { NormalizedMessage } from './types'
 import type { AlertKind, TranscriptStatus } from './db/repo'
+import type { ReasonCode, Verdict } from '../shared/feedback'
 
 /** Dados de demonstração (6 pessoas e 2 grupos, alguns com alertas) usados pelo modo `SAGA_FAKE_WA=1`, pela pré-visualização e pelos testes. */
 export interface DemoMessage extends NormalizedMessage {
@@ -81,5 +82,35 @@ export function loadDemo(now: number): DemoContact[] {
           : {})
       }))
       .sort((a, b) => a.ts - b.ts)
+  }))
+}
+
+/** Avaliações de alertas de demonstração (para "Qualidade dos alertas" na pré-visualização). */
+export interface DemoFeedback {
+  jid: string
+  kind: AlertKind
+  verdict: Verdict
+  reasonCode: ReasonCode | null
+  correctKind: AlertKind | null
+  createdAt: number
+}
+
+interface RawFeedback {
+  jid: string
+  kind: string
+  verdict: string
+  reason?: string
+  correctKind?: string
+  daysAgo: number
+}
+
+export function loadDemoFeedback(now: number): DemoFeedback[] {
+  return ((raw as { feedback?: RawFeedback[] }).feedback ?? []).map((f) => ({
+    jid: f.jid,
+    kind: f.kind as AlertKind,
+    verdict: f.verdict as Verdict,
+    reasonCode: (f.reason ?? null) as ReasonCode | null,
+    correctKind: (f.correctKind ?? null) as AlertKind | null,
+    createdAt: now - f.daysAgo * 86_400_000
   }))
 }

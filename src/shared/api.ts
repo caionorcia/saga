@@ -7,8 +7,10 @@ import { ALERT_KINDS, type AlertKind } from './triage'
 import type { QueueStats } from '../core/queue/queue'
 import type { ConnState } from '../core/wa/client'
 import type { KeyKind, Provider, Settings, SettingsPatch, TranscriberKind } from '../core/settings'
+import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind }
+export type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason }
 export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
@@ -138,6 +140,17 @@ export interface SagaApi {
   listAlerts(jid?: string): Promise<Alert[]>
   /** "Resolver": tira o alerta ativo deste tipo; a lista de contatos é avisada (`onContactsChanged`) */
   dismissAlert(jid: string, kind: AlertKind): Promise<void>
+  /**
+   * 👍 ('up') ou 👎 ('down', com o motivo) num alerta da IA. Uma avaliação por alerta (mudar de ideia atualiza).
+   * O 👎 resolve o alerta e, com `reason.correctKind`, cria esse tipo (marcado como do mentor).
+   */
+  rateAlert(alertId: number, verdict: 'up' | 'down', reason?: RateReason): Promise<void>
+  /** "Faltou um alerta?": registra o exemplo e cria o alerta (opcional: a mensagem e um texto do mentor) */
+  reportMissedAlert(jid: string, kind: AlertKind, msgId?: string | null, text?: string | null): Promise<void>
+  /** contagens de 👍/👎/faltou por tipo, últimos 30 dias */
+  alertQuality(): Promise<AlertQuality>
+  /** abre "Salvar como" e grava o CSV das avaliações (UTF-8 com BOM, ";"); o arquivo traz trechos das mensagens */
+  exportAlertFeedback(opts: ExportFeedbackOptions): Promise<ExportFeedbackResult>
   /** gera se necessário (usa o cache quando a última mensagem não mudou) */
   getAnalysis(jid: string): Promise<AnalysisResult>
   regenerate(jid: string): Promise<AnalysisResult>
@@ -184,6 +197,10 @@ export const INVOKE_METHODS = [
   'listMessages',
   'listAlerts',
   'dismissAlert',
+  'rateAlert',
+  'reportMissedAlert',
+  'alertQuality',
+  'exportAlertFeedback',
   'getAnalysis',
   'regenerate',
   'saveReply',

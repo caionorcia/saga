@@ -3,6 +3,8 @@
  */
 import { posix, win32 } from 'node:path'
 import { ALERT_KINDS, CONTACT_KINDS, type InvokeMethod } from '../shared/api'
+import { REASON_CODES, REASON_TEXT_MAX } from '../shared/feedback'
+import { AI_ALERT_KINDS } from '../shared/triage'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -79,6 +81,18 @@ const nonEmpty = (v: unknown): v is string => isStr(v) && v.trim().length > 0
 const isBool = (v: unknown): v is boolean => typeof v === 'boolean'
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const KEY_KINDS = new Set(['groq', 'claude', 'openai'])
+const isId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
+const isAiKind = (v: unknown) => (AI_ALERT_KINDS as readonly unknown[]).includes(v)
+const optText = (v: unknown) => v === undefined || v === null || (isStr(v) && v.length <= REASON_TEXT_MAX)
+const REASON_FIELDS = new Set(['code', 'correctKind', 'text'])
+
+/** 👎: motivo conhecido; tipo certo só com "tipo_errado" (null = nenhum); texto opcional e curto. */
+function isReason(r: unknown): boolean {
+  if (!isObj(r) || !Object.keys(r).every((k) => REASON_FIELDS.has(k))) return false
+  if (!(REASON_CODES as readonly unknown[]).includes(r.code)) return false
+  if (r.correctKind !== undefined && r.correctKind !== null && !(r.code === 'tipo_errado' && isAiKind(r.correctKind))) return false
+  return optText(r.text)
+}
 
 const SETTINGS_FIELDS: Record<string, (v: unknown) => boolean> = {
   groqKey: isStr,
@@ -98,6 +112,13 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   listMessages: ([j]) => nonEmpty(j),
   listAlerts: (a) => a.length <= 1 && (a[0] === undefined || nonEmpty(a[0])),
   dismissAlert: (a) => a.length === 2 && nonEmpty(a[0]) && (ALERT_KINDS as readonly unknown[]).includes(a[1]),
+  rateAlert: (a) =>
+    isId(a[0]) &&
+    ((a[1] === 'up' && a.length <= 3 && a[2] === undefined) || (a[1] === 'down' && a.length === 3 && isReason(a[2]))),
+  reportMissedAlert: (a) =>
+    a.length >= 2 && a.length <= 4 && nonEmpty(a[0]) && isAiKind(a[1]) && (a[2] === undefined || a[2] === null || nonEmpty(a[2])) && optText(a[3]),
+  alertQuality: (a) => a.length === 0,
+  exportAlertFeedback: (a) => a.length === 1 && isObj(a[0]) && Object.keys(a[0]).every((k) => k === 'anonymize') && isBool(a[0].anonymize),
   getAnalysis: ([j]) => nonEmpty(j),
   regenerate: ([j]) => nonEmpty(j),
   saveReply: ([i]) =>

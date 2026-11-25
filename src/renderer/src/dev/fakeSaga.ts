@@ -2,8 +2,8 @@
  * `window.saga` falso, em memória, com os dados de `tests/fixtures/wa/demo.json`.
  * Usado pelos testes e pela pré-visualização no navegador (`npm run preview:ui`); nunca no app real.
  */
-import { loadDemo, type DemoContact } from '../../../core/demo'
-import { alertSeverity, type AlertKind } from '../../../shared/triage'
+import { loadDemo, loadDemoFeedback, type DemoContact, type DemoFeedback } from '../../../core/demo'
+import { AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../../shared/triage'
 import type {
   Alert,
   AnalysisResult,
@@ -35,6 +35,8 @@ export const DEFAULT_STATE: AppState = {
 export interface FakeControl {
   api: SagaApi
   setState(patch: Partial<AppState>): void
+  /** o que a próxima exportação de avaliações devolve */
+  setExportOutcome(o: 'saved' | 'canceled'): void
   calls: Array<{ method: string; args: unknown[] }>
 }
 
@@ -55,9 +57,28 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   const names = new Map<string, string>()
   const notes = new Map<string, string>(demo.flatMap((c) => (c.notes ? [[c.jid, c.notes] as const] : [])))
   const analyses = new Map(demo.flatMap((c) => (c.analysis ? [[c.jid, c.analysis] as const] : [])))
+  let alertSeq = 0
   const alerts = new Map<string, Alert[]>(
-    demo.map((c) => [c.jid, c.alerts.map((a) => ({ jid: c.jid, ...a, createdAt: now - 10 * 60_000 }))] as const)
+    demo.map(
+      (c) =>
+        [
+          c.jid,
+          c.alerts.map(
+            (a): Alert => ({
+              id: ++alertSeq,
+              jid: c.jid,
+              ...a,
+              createdAt: now - 10 * 60_000,
+              source: a.kind === 'esperando' ? 'rule' : 'ai',
+              rating: null
+            })
+          )
+        ] as const
+    )
   )
+  const feedback: Array<DemoFeedback & { alertId?: number }> = loadDemoFeedback(now)
+  /** a próxima exportação: 'saved' (padrão) ou 'canceled' (o usuário fechou o "Salvar como") */
+  let exportOutcome: 'saved' | 'canceled' = 'saved'
   const activeAlerts = (jid: string): Alert[] =>
     [...(alerts.get(jid) ?? [])].sort((a, b) => alertSeverity(a.kind) - alertSeverity(b.kind))
   const settings: SettingsView = {
@@ -188,6 +209,58 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       contactListeners.forEach((l) => l())
       emitState()
     },
+    rateAlert: async (alertId, verdict, reason) => {
+      record('rateAlert', [alertId, verdict, reason], undefined)
+      for (const [jid, list] of alerts) {
+        const a = list.find((x) => x.id === alertId)
+        if (!a) continue
+        const prev = feedback.findIndex((f) => f.alertId === alertId)
+        if (prev >= 0) feedback.splice(prev, 1)
+        const correctKind = verdict === 'down' && reason?.code === 'tipo_errado' ? (reason.correctKind ?? null) : null
+        feedback.push({ alertId, jid, kind: a.kind, verdict, reasonCode: reason?.code ?? null, correctKind, createdAt: Date.now() })
+        if (verdict === 'up') a.rating = 'up'
+        else {
+          const rest = list.filter((x) => x.id !== alertId)
+          if (correctKind && !rest.some((x) => x.kind === correctKind)) {
+            rest.push({ id: ++alertSeq, jid, kind: correctKind, detail: reason?.text?.trim() || 'Marcado por você', msgId: a.msgId, createdAt: Date.now(), source: 'user', rating: null })
+          }
+          alerts.set(jid, rest)
+        }
+        contactListeners.forEach((l) => l())
+        emitState()
+        return
+      }
+      throw new Error('alerta não encontrado')
+    },
+    reportMissedAlert: async (jid, kind, msgId, text) => {
+      record('reportMissedAlert', [jid, kind, msgId, text], undefined)
+      feedback.push({ jid, kind, verdict: 'missed', reasonCode: null, correctKind: null, createdAt: Date.now() })
+      const list = alerts.get(jid) ?? []
+      if (!list.some((a) => a.kind === kind)) {
+        alerts.set(jid, [...list, { id: ++alertSeq, jid, kind, detail: text?.trim() || 'Marcado por você', msgId: msgId ?? null, createdAt: Date.now(), source: 'user', rating: null }])
+      }
+      contactListeners.forEach((l) => l())
+      emitState()
+    },
+    alertQuality: async () => {
+      const since = Date.now() - 30 * 86_400_000
+      const recent = feedback.filter((f) => f.createdAt >= since)
+      const n = (k: AlertKind, v: string) => recent.filter((f) => f.kind === k && f.verdict === v).length
+      return {
+        since,
+        days: 30,
+        kinds: AI_ALERT_KINDS.map((kind) => {
+          const up = n(kind, 'up')
+          const down = n(kind, 'down')
+          return { kind, up, down, missed: n(kind, 'missed'), correctRate: up + down ? up / (up + down) : null }
+        })
+      }
+    },
+    exportAlertFeedback: async (o) => {
+      record('exportAlertFeedback', [o], undefined)
+      if (feedback.length === 0) return { status: 'empty' }
+      return exportOutcome === 'canceled' ? { status: 'canceled' } : { status: 'saved', rows: feedback.length }
+    },
     getAnalysis: (jid) => analysisFor(jid, false),
     regenerate: (jid) => analysisFor(jid, true),
 
@@ -273,6 +346,9 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     setState(patch) {
       Object.assign(state, patch)
       emitState()
+    },
+    setExportOutcome(o) {
+      exportOutcome = o
     }
   }
 }
