@@ -34,6 +34,8 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     listAlerts: (jid) => service.listAlerts(jid === undefined ? undefined : String(jid)),
     dismissAlert: (jid, kind) => service.dismissAlert(String(jid), kind),
     rateAlert: (id, verdict, reason) => service.rateAlert(Number(id), verdict, reason),
+    setNeedsReply: (jid, needed, reason) => service.setNeedsReply(String(jid), needed === true, reason),
+    confirmNoReply: (jid) => service.confirmNoReply(String(jid)),
     reportMissedAlert: (jid, kind, msgId, text) => service.reportMissedAlert(String(jid), kind, msgId ?? null, text ?? null),
     alertQuality: () => service.alertQuality(),
     exportAlertFeedback: async (o) => {

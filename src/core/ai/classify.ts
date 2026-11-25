@@ -13,6 +13,7 @@ import { LlmRateLimitError, type LlmProvider } from './llm'
 import { InvalidOutputError, extractJson, render } from './prompt'
 import { InvalidKeyError, isNetworkError } from './transcriber'
 import { renderAlertExamples, selectAlertExamples } from './alertFeedback'
+import { REPLY_REASON_MAX, applyReplyRule, renderReplyExamples, ruleSaysNoReply, selectReplyExamples } from './needsReply'
 
 /** no máximo estas mensagens novas do contato por chamada */
 export const CLASSIFY_MAX_NEW = 20
@@ -67,10 +68,16 @@ Leia as mensagens novas e diga se há algum destes sinais, apenas quando forem C
 - "reuniao": pedido de reunião, ligação, chamada, ou de marcar ou remarcar horário.
 - "travado": dúvida ou problema que está impedindo a pessoa de avançar.
 
+Diga também se o mentor precisa responder ("needsReply"), olhando as mensagens do contato depois da última do Mentor:
+- true: pergunta, pedido, problema, dúvida, novidade que pede retorno, ou menção ao mentor.
+- false: só agradecimento, "ok", emoji, risada, despedida, mensagem só informativa que não pede retorno, ou (em grupo) conversa entre participantes que não é com o mentor.
+- Na dúvida, true.
+- "reason": até 100 caracteres, em pt-BR, dizendo por quê (ex.: "Só agradeceu a ajuda", "Pergunta quando é a próxima aula").
+
 Regras:
 - Responda SOMENTE com um objeto JSON, sem texto fora dele, neste formato exato:
-  {"alerts": [{"kind": string, "detail": string, "messageId": number}]}
-- Sem sinal claro, responda {"alerts": []}. Na dúvida, não marque. Conversa comum, agradecimento ou pergunta simples não é alerta.
+  {"alerts": [{"kind": string, "detail": string, "messageId": number}], "needsReply": boolean, "reason": string}
+- Sem sinal claro, use "alerts": []. Na dúvida, não marque. Conversa comum, agradecimento ou pergunta simples não é alerta.
 - No máximo um alerta por tipo.
 - "detail": até 120 caracteres, em português do Brasil (pt-BR), dizendo o quê e por quê (ex.: "Pede para remarcar a reunião para sexta de manhã").
 - "messageId": o número (#) da mensagem nova que mostra o sinal.
@@ -96,9 +103,12 @@ export function buildAlertPrompt(p: {
   newMessages: MessageRow[]
   /** avaliações anteriores do mentor (`renderAlertExamples`), ou vazio */
   examples?: string
+  /** correções do "Para responder" (`renderReplyExamples`), ou vazio */
+  replyExamples?: string
 }): { system: string; user: string } {
   const parts: string[] = [p.isGroup ? `Grupo: ${p.contactName}` : `Mentorado: ${p.contactName}`]
   if (p.examples?.trim()) parts.push(p.examples.trim())
+  if (p.replyExamples?.trim()) parts.push(p.replyExamples.trim())
   parts.push(windowText(p))
   parts.push('Responda agora apenas com o JSON pedido.')
   return { system: p.isGroup ? SYSTEM + SYSTEM_GROUP_EXTRA : SYSTEM, user: parts.join('\n\n') }
@@ -133,6 +143,23 @@ export function parseAlerts(raw: string, newMessages: MessageRow[]): ParsedAlert
   return out
 }
 
+/** "needsReply" e "reason" da resposta da IA; null se faltar ou vier num formato inesperado (na dúvida, precisa). */
+export function parseNeedsReply(raw: string): { needsReply: boolean; reason: string | null } | null {
+  let j: { needsReply?: unknown; reason?: unknown } | null
+  try {
+    j = extractJson(raw) as typeof j
+  } catch {
+    return null
+  }
+  if (!j || typeof j !== 'object') return null
+  const v = j.needsReply
+  const needsReply = v === true || v === 'true' ? true : v === false || v === 'false' ? false : null
+  if (needsReply === null) return null
+  const t = typeof j.reason === 'string' ? j.reason.replace(/\s+/g, ' ').trim() : ''
+  const reason = t ? (t.length > REPLY_REASON_MAX ? `${t.slice(0, REPLY_REASON_MAX - 1).trimEnd()}…` : t) : null
+  return { needsReply, reason }
+}
+
 export interface ClassifyDeps {
   repo: Repo
   clock: Clock
@@ -154,8 +181,9 @@ export interface ClassifyDeps {
 export async function classifyChat(deps: ClassifyDeps, jid: string, signal?: AbortSignal): Promise<void> {
   const { repo, clock } = deps
   const t0 = Date.now()
-  const log = (result: string, alerts = 0, reason?: string): void => {
-    deps.diag('classify', `result=${result}${reason ? ` reason=${reason}` : ''} alerts=${alerts} ms=${Date.now() - t0}`)
+  const log = (result: string, alerts = 0, reason?: string, reply?: boolean): void => {
+    const r = reply === undefined ? '' : ` reply=${reply ? 'yes' : 'no'}`
+    deps.diag('classify', `result=${result}${reason ? ` reason=${reason}` : ''} alerts=${alerts}${r} ms=${Date.now() - t0}`)
   }
 
   const contact = repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)
@@ -170,6 +198,14 @@ export async function classifyChat(deps: ClassifyDeps, jid: string, signal?: Abo
     if (win.last) repo.setAlertCheck(jid, win.last.id, win.last.ts)
     return log('skip', 0, 'nothing_new')
   }
+  // só agradecimento/ok/emoji desde a última resposta do mentor: não precisa responder e não há sinal — sem IA
+  if (ruleSaysNoReply(repo, jid)) {
+    const changed = applyReplyRule(repo, jid)
+    if (win.last) repo.setAlertCheck(jid, win.last.id, win.last.ts)
+    log('skip', 0, 'ack_only', false)
+    if (changed) deps.onChanged(jid)
+    return
+  }
   if (win.newMessages.some((m) => m.kind === 'audio' && m.transcriptStatus === null && m.ts > now - CLASSIFY_AUDIO_WAIT_MS)) {
     log('deferred', 0, 'audio_pending')
     throw new DeferJobError('aguardando a transcrição de um áudio', AUDIO_RETRY_MS)
@@ -180,7 +216,15 @@ export async function classifyChat(deps: ClassifyDeps, jid: string, signal?: Abo
   }
 
   const examples = renderAlertExamples(selectAlertExamples(repo, jid))
-  const prompt = buildAlertPrompt({ contactName: contact.displayName, isGroup: contact.isGroup, prior: win.prior, newMessages: win.newMessages, examples })
+  const replyExamples = renderReplyExamples(selectReplyExamples(repo, jid))
+  const prompt = buildAlertPrompt({
+    contactName: contact.displayName,
+    isGroup: contact.isGroup,
+    prior: win.prior,
+    newMessages: win.newMessages,
+    examples,
+    replyExamples
+  })
   let text: string
   let model: string | null = null
   try {
@@ -221,7 +265,12 @@ export async function classifyChat(deps: ClassifyDeps, jid: string, signal?: Abo
   const contextText = windowText({ isGroup: contact.isGroup, prior: win.prior, newMessages: win.newMessages })
   let changed = false
   for (const a of alerts) changed = repo.upsertAlert({ jid, ...a, source: 'ai', contextText, model }) || changed
+  // precisa responder? vale para a última mensagem da conversa, se for do contato (mensagem nova dele recomeça)
+  const reply = win.last && !win.last.fromMe ? parseNeedsReply(text) : null
+  if (reply && win.last) {
+    changed = repo.setAppReply({ jid, msgId: win.last.id, needs: reply.needsReply, reason: reply.reason, source: 'ai', model }) || changed
+  }
   if (win.last) repo.setAlertCheck(jid, win.last.id, win.last.ts)
-  log('ok', alerts.length)
+  log('ok', alerts.length, undefined, reply?.needsReply)
   if (changed) deps.onChanged(jid)
 }

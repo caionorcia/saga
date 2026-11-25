@@ -62,7 +62,7 @@ describe('ContactList: "Para responder" e "Com alerta"', () => {
     render(<ContactList selected={null} onSelect={() => {}} />)
     await waitFor(() => expect(names()).toContain('Ana Paula Souza'))
     const btn = screen.getByRole('button', { name: /Para responder/ })
-    expect(btn.textContent).toMatch(/7/)
+    expect(btn.textContent).toMatch(/6/)
     fireEvent.click(btn)
     expect(btn.getAttribute('aria-pressed')).toBe('true')
     await waitFor(() =>
@@ -70,7 +70,6 @@ describe('ContactList: "Para responder" e "Com alerta"', () => {
         'Rafael Mendes',
         'Fernanda Costa',
         'Mentoria Turma 3 — Negócios',
-        'Mastermind Vendas 2026',
         'Mariana Lima',
         'Ana Paula Souza',
         'Carlos Eduardo'
@@ -130,7 +129,8 @@ describe('Conversation: barra de alertas', () => {
   const JID = '5548944443333@s.whatsapp.net'
   const contact: Contact = {
     jid: JID, pushName: 'Rafael', customName: null, hidden: false, notes: null, displayName: 'Rafael', lastTs: 1,
-    awaitingReply: true, isGroup: false, waitingSince: Date.now() - 50 * H, alerts: ['urgente', 'esperando']
+    awaitingReply: true, isGroup: false, waitingSince: Date.now() - 50 * H, alerts: ['urgente', 'esperando'],
+    needsReply: true, replyDecision: null
   }
   const alerts: Alert[] = [
     { id: 1, jid: JID, kind: 'urgente', detail: 'Precisa decidir até sexta.', msgId: 'R3', createdAt: 1, source: 'ai', rating: null },
@@ -185,7 +185,7 @@ describe('App: contador da barra seleciona "Para responder"', () => {
     render(<App />)
     await waitFor(() => expect(names()).toContain('João Pedro (Consultório)'))
     fireEvent.click(screen.getByRole('button', { name: 'Configurações' }))
-    const counter = await screen.findByRole('button', { name: /7 para responder · 4 com alerta/ })
+    const counter = await screen.findByRole('button', { name: /6 para responder · 4 com alerta/ })
     fireEvent.click(counter)
     await waitFor(() => expect(names()[0]).toBe('Rafael Mendes'))
     expect(names()).not.toContain('João Pedro (Consultório)')

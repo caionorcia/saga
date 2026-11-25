@@ -199,7 +199,7 @@ function AlertQualitySection() {
     }
   }, [])
 
-  const total = q ? q.kinds.reduce((n, k) => n + k.up + k.down + k.missed, 0) : 0
+  const total = q ? q.kinds.reduce((n, k) => n + k.up + k.down + k.missed, 0) + q.reply.removed + q.reply.restored + q.reply.confirmed : 0
   const exportCsv = async () => {
     setBusy(true)
     setMsg(null)
@@ -218,8 +218,8 @@ function AlertQualitySection() {
     <section aria-labelledby="quality-title">
       <h2 id="quality-title">Qualidade dos alertas</h2>
       <p className="muted small">
-        Suas avaliações (👍 e 👎 nos alertas, e "Faltou um alerta?") dos últimos {q?.days ?? 30} dias. O Saga usa os exemplos
-        para errar menos.
+        Suas avaliações (👍 e 👎 nos alertas, "Faltou um alerta?" e "Não precisa responder") dos últimos {q?.days ?? 30} dias.
+        O Saga usa os exemplos para errar menos.
       </p>
       {q && (
         <table className="quality-table">
@@ -242,6 +242,28 @@ function AlertQualitySection() {
                 <td>{pct(k.correctRate)}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      )}
+      {q && (
+        <table className="quality-table quality-reply">
+          <thead>
+            <tr>
+              <th scope="col">Lista</th>
+              <th scope="col" title="Conversas que você tirou com &quot;Não precisa responder&quot;">Removidos por você</th>
+              <th scope="col" title="Conversas que o Saga tirou e você devolveu com &quot;Precisa sim&quot;">Devolvidos</th>
+              <th scope="col" title="Decisões do Saga que você confirmou com 👍">Confirmados</th>
+              <th scope="col">% de acerto do Saga</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Para responder</th>
+              <td>{q.reply.removed}</td>
+              <td>{q.reply.restored}</td>
+              <td>{q.reply.confirmed}</td>
+              <td>{pct(q.reply.correctRate)}</td>
+            </tr>
           </tbody>
         </table>
       )}

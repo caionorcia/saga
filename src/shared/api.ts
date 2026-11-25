@@ -7,10 +7,10 @@ import { ALERT_KINDS, type AlertKind } from './triage'
 import type { QueueStats } from '../core/queue/queue'
 import type { ConnState } from '../core/wa/client'
 import type { KeyKind, Provider, Settings, SettingsPatch, TranscriberKind } from '../core/settings'
-import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason } from './feedback'
+import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind }
-export type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason }
+export type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason }
 export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
@@ -60,7 +60,7 @@ export interface AppState {
   setupDone: boolean
   provider: Provider
   update: UpdateState
-  /** conversas (fora as escondidas) aguardando resposta e conversas com algum alerta ativo */
+  /** conversas (fora as escondidas) em "Para responder" e conversas com algum alerta ativo */
   triage: { awaiting: number; withAlerts: number }
   /** o início do app falhou (mensagem curta, sem dados sensíveis): mostrar com "Tentar de novo" (`manualReconnect`) */
   startError?: string
@@ -141,10 +141,18 @@ export interface SagaApi {
   /** "Resolver": tira o alerta ativo deste tipo; a lista de contatos é avisada (`onContactsChanged`) */
   dismissAlert(jid: string, kind: AlertKind): Promise<void>
   /**
-   * 👍 ('up') ou 👎 ('down', com o motivo) num alerta da IA. Uma avaliação por alerta (mudar de ideia atualiza).
-   * O 👎 resolve o alerta e, com `reason.correctKind`, cria esse tipo (marcado como do mentor).
+   * 👍 ('up') ou 👎 ('down', com o motivo) num alerta (da IA ou marcado pelo mentor). Uma avaliação por alerta (mudar
+   * de ideia atualiza). O 👎 resolve o alerta e, com `reason.correctKind`, cria esse tipo (marcado como do mentor).
+   * No "esperando", 👍 = precisa responder mesmo; o 👎 dele é `setNeedsReply(jid, false, motivo)`.
    */
   rateAlert(alertId: number, verdict: 'up' | 'down', reason?: RateReason): Promise<void>
+  /**
+   * "Para responder": `false` = "Não precisa responder" (motivo obrigatório; tira da lista e resolve o "esperando");
+   * `true` = "Precisa sim" (devolve à lista). Vale até chegar outra mensagem do contato; vira exemplo para a IA.
+   */
+  setNeedsReply(jid: string, needed: boolean, reason?: ReplyReason): Promise<void>
+  /** 👍 no "O Saga acha que esta conversa não precisa de resposta" */
+  confirmNoReply(jid: string): Promise<void>
   /** "Faltou um alerta?": registra o exemplo e cria o alerta (opcional: a mensagem e um texto do mentor) */
   reportMissedAlert(jid: string, kind: AlertKind, msgId?: string | null, text?: string | null): Promise<void>
   /** contagens de 👍/👎/faltou por tipo, últimos 30 dias */
@@ -199,6 +207,8 @@ export const INVOKE_METHODS = [
   'dismissAlert',
   'rateAlert',
   'reportMissedAlert',
+  'setNeedsReply',
+  'confirmNoReply',
   'alertQuality',
   'exportAlertFeedback',
   'getAnalysis',

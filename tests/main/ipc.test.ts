@@ -34,6 +34,8 @@ describe('IPC das avaliações de alertas', () => {
     service = {
       rateAlert: vi.fn(async () => {}),
       reportMissedAlert: vi.fn(async () => {}),
+      setNeedsReply: vi.fn(async () => {}),
+      confirmNoReply: vi.fn(async () => {}),
       alertQuality: vi.fn(async () => ({ since: 0, days: 30, kinds: [] })),
       alertFeedbackCsv: vi.fn(() => ({ csv: '﻿data;tipo\r\n"2026-11-25 10:00";"Urgente"\r\n', rows: 1 })),
       onState: vi.fn(() => () => {}),
@@ -54,12 +56,14 @@ describe('IPC das avaliações de alertas', () => {
   })
 
   it('recusa quem não é a interface do app, sem chamar o serviço', async () => {
-    for (const m of ['rateAlert', 'reportMissedAlert', 'alertQuality', 'exportAlertFeedback']) {
+    for (const m of ['rateAlert', 'reportMissedAlert', 'alertQuality', 'exportAlertFeedback', 'setNeedsReply', 'confirmNoReply']) {
       await expect(call(m, 'https://evil.example/', 1, 'up')).rejects.toThrow(/origem não confiável/)
       await expect(call(m, null)).rejects.toThrow(/origem não confiável/)
     }
-    expect(refused).toHaveLength(8)
+    expect(refused).toHaveLength(12)
     expect(service.rateAlert).not.toHaveBeenCalled()
+    expect(service.setNeedsReply).not.toHaveBeenCalled()
+    expect(service.confirmNoReply).not.toHaveBeenCalled()
     expect(service.alertFeedbackCsv).not.toHaveBeenCalled()
   })
 
@@ -69,6 +73,13 @@ describe('IPC das avaliações de alertas', () => {
     expect(service.rateAlert).toHaveBeenCalledWith(7, 'down', { code: 'brincadeira' })
     await call('reportMissedAlert', APP, 'j@s.whatsapp.net', 'reuniao')
     expect(service.reportMissedAlert).toHaveBeenCalledWith('j@s.whatsapp.net', 'reuniao', null, null)
+    await expect(call('setNeedsReply', APP, 'j@s.whatsapp.net', false)).rejects.toThrow(/argumentos inválidos/)
+    await call('setNeedsReply', APP, 'j@s.whatsapp.net', false, { code: 'encerrada' })
+    expect(service.setNeedsReply).toHaveBeenCalledWith('j@s.whatsapp.net', false, { code: 'encerrada' })
+    await call('setNeedsReply', APP, 'j@s.whatsapp.net', true)
+    expect(service.setNeedsReply).toHaveBeenLastCalledWith('j@s.whatsapp.net', true, undefined)
+    await call('confirmNoReply', APP, 'j@s.whatsapp.net')
+    expect(service.confirmNoReply).toHaveBeenCalledWith('j@s.whatsapp.net')
   })
 
   it('exportar: o caminho vem do "Salvar como"; grava UTF-8 com BOM; cancelar não grava', async () => {

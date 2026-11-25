@@ -85,7 +85,7 @@ label { font-weight: 600; font-size: 14px; display: block; margin: 12px 0 4px; }
 .chip-warn { background: #faecc8; color: #7a5410; }
 
 /* contatos */
-.contacts { background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+.contacts { position: relative; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
 .contacts-head { padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .brand { font-size: 20px; color: var(--accent-dark); margin-bottom: 8px; letter-spacing: .3px; }
 .kind-filter { display: flex; background: #eef2f3; border: 1px solid var(--border); border-radius: 8px; padding: 2px; margin-bottom: 8px; }
@@ -266,7 +266,19 @@ a { color: var(--accent-dark); }
 
 /* avaliação dos alertas (v0.2.1) */
 .conversation { position: relative; }
+.conv-actions { margin-left: auto; flex: none; display: flex; align-items: center; gap: 14px; }
 .missed-link { margin-left: auto; flex: none; font-size: 13px; color: var(--muted); }
+/* "Para responder": botão do cabeçalho, ação na linha da lista e o aviso "não precisa de resposta" */
+.no-reply-head { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--accent-dark); }
+.no-reply-btn { flex: none; width: 26px; height: 26px; margin-right: -4px; display: inline-grid; place-items: center; color: var(--muted); }
+.reply-chip { font-size: 11px; font-weight: 700; line-height: 1; padding: 3px 7px; border-radius: 99px; white-space: nowrap; background: #eef2f3; color: var(--muted); }
+.no-reply-btn:hover, .no-reply-btn:focus-visible { color: var(--accent-dark); background: var(--accent-soft); }
+.reply-note { display: flex; align-items: center; gap: 10px; padding: 6px 18px; background: #f5f8f8; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 13.5px; }
+.reply-note > svg { flex: none; color: var(--accent); }
+.reply-note p { flex: 1; min-width: 0; margin: 0; }
+.reply-reason { color: var(--text); }
+.reply-note .btn-small { flex: none; }
+.quality-reply { margin-top: 18px; }
 .missed-link:hover { color: var(--accent-dark); }
 .alert-rate { display: inline-flex; gap: 2px; flex: none; }
 .rate-btn { width: 28px; height: 26px; border: 1px solid transparent; background: none; border-radius: 6px; cursor: pointer; font-size: 14px; line-height: 1; filter: grayscale(1); opacity: .8; }

@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Alert, AlertKind, MessageView, RateReason } from '../../../shared/api'
-import { REASON_CODES, REASON_LABELS, REASON_TEXT_MAX, type ReasonCode } from '../../../shared/feedback'
+import {
+  REASON_CODES,
+  REASON_LABELS,
+  REASON_TEXT_MAX,
+  REPLY_REASON_CODES,
+  REPLY_REASON_LABELS,
+  type ReasonCode,
+  type ReplyReason,
+  type ReplyReasonCode
+} from '../../../shared/feedback'
 import { AI_ALERT_KINDS } from '../../../shared/triage'
 import { ALERT_LABELS, formatTime } from '../format'
 
@@ -145,6 +154,52 @@ export function MissedAlertDialog({
       <label htmlFor="fb-missed-text">Explique com suas palavras (opcional)</label>
       <textarea id="fb-missed-text" rows={3} maxLength={REASON_TEXT_MAX} value={text} onChange={(e) => setText(e.target.value)} />
     </Modal>
+  )
+}
+
+/** "Não precisa responder": por quê (motivo rápido obrigatório) e um texto opcional. */
+export function NoReplyDialog({ name, onClose, onSave }: { name?: string; onClose: () => void; onSave: (r: ReplyReason) => void }) {
+  const [code, setCode] = useState<ReplyReasonCode | null>(null)
+  const [text, setText] = useState('')
+  return (
+    <Modal
+      title="Por que esta conversa não precisa de resposta?"
+      onClose={onClose}
+      canSave={code !== null}
+      onSubmit={() => onSave({ code: code!, ...(text.trim() ? { text: text.trim() } : {}) })}
+    >
+      <p className="muted small">
+        {name ? (
+          <>
+            <strong>{name}</strong> sai de "Para responder" até mandar outra mensagem.
+          </>
+        ) : (
+          'A conversa sai de "Para responder" até chegar outra mensagem.'
+        )}{' '}
+        O Saga aprende com o exemplo.
+      </p>
+      <fieldset className="fb-reasons">
+        <legend className="sr-only">Motivo</legend>
+        {REPLY_REASON_CODES.map((c) => (
+          <label key={c} className="check">
+            <input type="radio" name="nr-reason" checked={code === c} onChange={() => setCode(c)} />
+            {REPLY_REASON_LABELS[c]}
+          </label>
+        ))}
+      </fieldset>
+      <label htmlFor="nr-text">Explique com suas palavras (opcional)</label>
+      <textarea id="nr-text" rows={3} maxLength={REASON_TEXT_MAX} value={text} onChange={(e) => setText(e.target.value)} />
+    </Modal>
+  )
+}
+
+/** Ícone "não precisa responder": balão com um tique. */
+export function NoReplyIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.5 3.5h11a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5v-2.5H2.5a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z" />
+      <path d="m5.5 7.6 1.7 1.6 3.3-3.3" />
+    </svg>
   )
 }
 

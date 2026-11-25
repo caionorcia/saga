@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { systemClock, type Clock } from '../clock'
 import type { NormalizedMessage } from '../types'
 import { ALERT_KINDS, AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../shared/triage'
-import type { ReasonCode, Verdict } from '../../shared/feedback'
+import type { ReasonCode, ReplyDecision, ReplyDecisionSource, ReplyReasonCode, ReplyVerdict, Verdict } from '../../shared/feedback'
 
 /** Qualidade da fonte do nome guardado em `push_name` (maior vence; empate: o mais novo). */
 export const NAME_RANK = { push: 1, profile: 2, addressBook: 3 } as const
@@ -71,6 +71,42 @@ export interface ContactRow {
   waitingSince: number | null
   /** tipos de alerta ativos, do mais grave para o menos grave */
   alerts: AlertKind[]
+  /**
+   * entra em "Para responder": aguarda resposta e nem o Saga nem o mentor decidiram que a última mensagem do contato
+   * dispensa resposta (agradecimento, "ok", emoji, conversa de grupo que não é com o mentor…)
+   */
+  needsReply: boolean
+  /** a decisão sobre a última mensagem do contato (null = ninguém decidiu, ou o mentor falou por último) */
+  replyDecision: ReplyDecision | null
+}
+
+/** A decisão guardada para a última mensagem do contato (`reply_checks`). */
+export interface ReplyCheckRow {
+  jid: string
+  msgId: string
+  appNeeds: boolean | null
+  appReason: string | null
+  appSource: 'rule' | 'ai' | null
+  model: string | null
+  userNeeds: boolean | null
+}
+
+/** Uma avaliação do "Para responder" (um exemplo rotulado: as últimas mensagens do contato e o veredito). */
+export interface ReplyFeedbackRow {
+  id: number
+  jid: string
+  msgId: string
+  alertId: number | null
+  verdict: ReplyVerdict
+  /** o que o Saga achava na hora: true/false, ou null (não tinha decidido: deixava na lista) */
+  appNeeds: boolean | null
+  appReason: string | null
+  appSource: string | null
+  reasonCode: ReplyReasonCode | null
+  reasonText: string | null
+  contextText: string
+  model: string | null
+  createdAt: number
 }
 
 export interface MessageRow {
@@ -199,7 +235,50 @@ function toFeedback(r: Row): FeedbackRow {
   }
 }
 
-const RATING_SQL = '(SELECT f.verdict FROM alert_feedback f WHERE f.alert_id = a.id) AS rating'
+/** 👍/👎 do alerta; no "esperando", a avaliação fica em `reply_feedback` (precisa / não precisa responder). */
+const RATING_SQL = `COALESCE((SELECT f.verdict FROM alert_feedback f WHERE f.alert_id = a.id),
+  (SELECT CASE r.verdict WHEN 'reply_not_needed' THEN 'down' ELSE 'up' END FROM reply_feedback r WHERE r.alert_id = a.id)) AS rating`
+
+const bit = (v: unknown): boolean | null => (v === 1 ? true : v === 0 ? false : null)
+
+function toReplyCheck(r: Row): ReplyCheckRow {
+  return {
+    jid: r.jid,
+    msgId: r.msg_id,
+    appNeeds: bit(r.app_needs),
+    appReason: r.app_reason ?? null,
+    appSource: r.app_source ?? null,
+    model: r.model ?? null,
+    userNeeds: bit(r.user_needs)
+  }
+}
+
+function toReplyFeedback(r: Row): ReplyFeedbackRow {
+  return {
+    id: r.id,
+    jid: r.jid,
+    msgId: r.msg_id,
+    alertId: r.alert_id ?? null,
+    verdict: r.verdict,
+    appNeeds: bit(r.app_needs),
+    appReason: r.app_reason ?? null,
+    appSource: r.app_source ?? null,
+    reasonCode: r.reason_code ?? null,
+    reasonText: r.reason_text ?? null,
+    contextText: r.context_text,
+    model: r.model ?? null,
+    createdAt: r.created_at
+  }
+}
+
+/** Decisão vigente: a do mentor vence a do Saga; sem nenhuma, null. */
+function decisionOf(r: Row): ReplyDecision | null {
+  const user = bit(r.rc_user_needs)
+  if (user !== null) return { needed: user, by: 'user', reason: null }
+  const app = bit(r.rc_app_needs)
+  if (app === null) return null
+  return { needed: app, by: (r.rc_app_source ?? 'ai') as ReplyDecisionSource, reason: r.rc_app_reason ?? null }
+}
 
 function toApproved(r: Row): ApprovedRow {
   return {
@@ -317,38 +396,47 @@ export class Repo {
                    WHERE w.jid = c.jid AND w.from_me = 0
                      AND w.ts > COALESCE((SELECT MAX(me.ts) FROM messages me WHERE me.jid = c.jid AND me.from_me = 1), -1)
                 ) END AS waiting_since,
-                (SELECT group_concat(a.kind) FROM alerts a WHERE a.jid = c.jid AND a.dismissed_at IS NULL) AS alert_kinds
+                (SELECT group_concat(a.kind) FROM alerts a WHERE a.jid = c.jid AND a.dismissed_at IS NULL) AS alert_kinds,
+                rc.user_needs AS rc_user_needs, rc.app_needs AS rc_app_needs, rc.app_source AS rc_app_source,
+                rc.app_reason AS rc_app_reason
            FROM contacts c
            LEFT JOIN messages l ON l.id = (
              SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
+           LEFT JOIN reply_checks rc ON rc.jid = c.jid AND rc.msg_id = l.id AND l.from_me = 0
           WHERE (?1 = 1 OR c.hidden = 0)
             AND (?2 = 'all' OR (?2 = 'group') = (c.is_group = 1))
           ORDER BY l.ts IS NULL, l.ts DESC, c.jid`
       )
       .all(opts.includeHidden ? 1 : 0, kind) as Row[]
-    return rows.map((r) => ({
-      jid: r.jid,
-      pushName: r.push_name,
-      customName: r.custom_name,
-      hidden: r.hidden === 1,
-      notes: r.notes,
-      displayName: r.custom_name ?? r.push_name ?? (r.is_group === 1 ? UNNAMED_GROUP : formatPhone(r.jid)),
-      lastTs: r.last_ts,
-      awaitingReply: r.last_from_me === 0,
-      isGroup: r.is_group === 1,
-      waitingSince: typeof r.waiting_since === 'number' ? r.waiting_since : null,
-      alerts: sortKinds(r.alert_kinds)
-    }))
+    return rows.map((r) => {
+      const replyDecision = r.last_from_me === 0 ? decisionOf(r) : null
+      return {
+        jid: r.jid,
+        pushName: r.push_name,
+        customName: r.custom_name,
+        hidden: r.hidden === 1,
+        notes: r.notes,
+        displayName: r.custom_name ?? r.push_name ?? (r.is_group === 1 ? UNNAMED_GROUP : formatPhone(r.jid)),
+        lastTs: r.last_ts,
+        awaitingReply: r.last_from_me === 0,
+        isGroup: r.is_group === 1,
+        waitingSince: typeof r.waiting_since === 'number' ? r.waiting_since : null,
+        alerts: sortKinds(r.alert_kinds),
+        needsReply: r.last_from_me === 0 && (replyDecision?.needed ?? true),
+        replyDecision
+      }
+    })
   }
 
-  /** Conversas (fora as escondidas) aguardando resposta e conversas com algum alerta ativo. */
+  /** Conversas (fora as escondidas) em "Para responder" e conversas com algum alerta ativo. */
   triageCounts(): { awaiting: number; withAlerts: number } {
     const r = this.db
       .prepare(
         `SELECT
            (SELECT COUNT(*) FROM contacts c
-             WHERE c.hidden = 0
-               AND (SELECT from_me FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1) = 0) AS awaiting,
+              JOIN messages l ON l.id = (SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
+              LEFT JOIN reply_checks rc ON rc.jid = c.jid AND rc.msg_id = l.id
+             WHERE c.hidden = 0 AND l.from_me = 0 AND COALESCE(rc.user_needs, rc.app_needs, 1) = 1) AS awaiting,
            (SELECT COUNT(DISTINCT a.jid) FROM alerts a JOIN contacts c ON c.jid = a.jid
              WHERE a.dismissed_at IS NULL AND c.hidden = 0) AS with_alerts`
       )
@@ -463,11 +551,14 @@ export class Repo {
     return rows.map(toFeedback)
   }
 
-  /** Quantas avaliações de cada tipo e veredito desde `since`. */
+  /** Quantas avaliações de cada tipo e veredito desde `since` (fora as dos alertas marcados pelo próprio mentor). */
   feedbackCounts(since: number): Array<{ kind: AlertKind; verdict: Verdict; n: number }> {
     return (
       this.db
-        .prepare('SELECT kind, verdict, COUNT(*) AS n FROM alert_feedback WHERE created_at >= ? GROUP BY kind, verdict')
+        .prepare(
+          `SELECT f.kind, f.verdict, COUNT(*) AS n FROM alert_feedback f LEFT JOIN alerts a ON a.id = f.alert_id
+            WHERE f.created_at >= ? AND COALESCE(a.source, 'ai') <> 'user' GROUP BY f.kind, f.verdict`
+        )
         .all(since) as Row[]
     ).map((r) => ({ kind: r.kind, verdict: r.verdict, n: r.n }))
   }
@@ -520,6 +611,115 @@ export class Repo {
          ON CONFLICT(jid) DO UPDATE SET last_msg_id = ?2, last_ts = ?3, checked_at = ?4`
       )
       .run(jid, lastMsgId, lastTs, this.clock.now())
+  }
+
+  // --- "Para responder" ---
+
+  getReplyCheck(jid: string): ReplyCheckRow | null {
+    const r = this.db.prepare('SELECT * FROM reply_checks WHERE jid = ?').get(jid) as Row | undefined
+    return r ? toReplyCheck(r) : null
+  }
+
+  /**
+   * A decisão do Saga (regra ou IA) para a última mensagem do contato `msgId`. Mensagem diferente da guardada:
+   * a linha recomeça (a decisão do mentor, que era sobre a mensagem antiga, sai). `true` se algo mudou.
+   */
+  setAppReply(a: { jid: string; msgId: string; needs: boolean; reason: string | null; source: 'rule' | 'ai'; model?: string | null }): boolean {
+    const cur = this.getReplyCheck(a.jid)
+    if (cur && cur.msgId === a.msgId && cur.appNeeds === a.needs && cur.appReason === a.reason && cur.appSource === a.source) return false
+    this.db
+      .prepare(
+        `INSERT INTO reply_checks(jid, msg_id, app_needs, app_reason, app_source, model, user_needs, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)
+         ON CONFLICT(jid) DO UPDATE SET
+           user_needs = CASE WHEN msg_id = excluded.msg_id THEN user_needs END,
+           msg_id = excluded.msg_id, app_needs = excluded.app_needs, app_reason = excluded.app_reason,
+           app_source = excluded.app_source, model = excluded.model, updated_at = excluded.updated_at`
+      )
+      .run(a.jid, a.msgId, a.needs ? 1 : 0, a.reason, a.source, a.model ?? null, this.clock.now())
+    return true
+  }
+
+  /** A decisão do mentor para a última mensagem do contato `msgId` (vence a do Saga). `true` se algo mudou. */
+  setUserReply(jid: string, msgId: string, needs: boolean): boolean {
+    const cur = this.getReplyCheck(jid)
+    if (cur && cur.msgId === msgId && cur.userNeeds === needs) return false
+    this.db
+      .prepare(
+        `INSERT INTO reply_checks(jid, msg_id, user_needs, updated_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(jid) DO UPDATE SET
+           app_needs = CASE WHEN msg_id = excluded.msg_id THEN app_needs END,
+           app_reason = CASE WHEN msg_id = excluded.msg_id THEN app_reason END,
+           app_source = CASE WHEN msg_id = excluded.msg_id THEN app_source END,
+           model = CASE WHEN msg_id = excluded.msg_id THEN model END,
+           msg_id = excluded.msg_id, user_needs = excluded.user_needs, updated_at = excluded.updated_at`
+      )
+      .run(jid, msgId, needs ? 1 : 0, this.clock.now())
+    return true
+  }
+
+  /** A mensagem mais nova da conversa, ou null. */
+  lastMessage(jid: string): MessageRow | null {
+    const r = this.db
+      .prepare(
+        `SELECT m.*, ${SENDER_COLS} FROM messages m LEFT JOIN contacts sc ON sc.jid = m.sender_jid
+          WHERE m.jid = ? ORDER BY m.ts DESC, m.rowid DESC LIMIT 1`
+      )
+      .get(jid) as Row | undefined
+    return r ? toMessage(r) : null
+  }
+
+  /**
+   * As mensagens do contato depois da última do mentor (as que esperam resposta), as `limit` mais novas em ordem
+   * cronológica; `more` diz se havia outras antes delas.
+   */
+  latestContactRun(jid: string, limit: number): { messages: MessageRow[]; more: boolean } {
+    const rows = this.db
+      .prepare(
+        `SELECT m.*, ${SENDER_COLS} FROM messages m LEFT JOIN contacts sc ON sc.jid = m.sender_jid
+          WHERE m.jid = ?1 AND m.from_me = 0
+            AND m.ts > COALESCE((SELECT MAX(me.ts) FROM messages me WHERE me.jid = ?1 AND me.from_me = 1), -1)
+          ORDER BY m.ts DESC, m.rowid DESC LIMIT ?2`
+      )
+      .all(jid, limit + 1) as Row[]
+    return { messages: rows.slice(0, limit).map(toMessage).reverse(), more: rows.length > limit }
+  }
+
+  /** Grava a avaliação; uma por conversa e mensagem (mudar de ideia atualiza a mesma linha). Devolve o id. */
+  saveReplyFeedback(f: Omit<ReplyFeedbackRow, 'id' | 'createdAt'>): number {
+    const r = this.db
+      .prepare(
+        `INSERT INTO reply_feedback(jid, msg_id, alert_id, verdict, app_needs, app_reason, app_source, reason_code, reason_text,
+                                    context_text, model, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         ON CONFLICT(jid, msg_id) DO UPDATE SET
+           alert_id = COALESCE(excluded.alert_id, alert_id), verdict = excluded.verdict, reason_code = excluded.reason_code,
+           reason_text = excluded.reason_text, context_text = excluded.context_text, created_at = excluded.created_at
+         RETURNING id`
+      )
+      .get(
+        f.jid,
+        f.msgId,
+        f.alertId,
+        f.verdict,
+        f.appNeeds === null ? null : f.appNeeds ? 1 : 0,
+        f.appReason,
+        f.appSource,
+        f.reasonCode,
+        f.reasonText,
+        f.contextText,
+        f.model,
+        this.clock.now()
+      ) as Row
+    return r.id
+  }
+
+  /** Avaliações do "Para responder", mais novas primeiro (desde `since`, se dado). */
+  listReplyFeedback(opts: { since?: number; limit?: number } = {}): ReplyFeedbackRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM reply_feedback WHERE created_at >= ? ORDER BY created_at DESC, id DESC LIMIT ?')
+      .all(opts.since ?? 0, opts.limit ?? -1) as Row[]
+    return rows.map(toReplyFeedback)
   }
 
   // --- mensagens ---

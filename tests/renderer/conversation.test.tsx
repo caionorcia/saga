@@ -5,7 +5,7 @@ import { Conversation } from '../../src/renderer/src/components/Conversation'
 import type { Analysis, Contact, SagaApi } from '../../src/shared/api'
 
 const JID = '5547999998888@s.whatsapp.net'
-const contact: Contact = { jid: JID, pushName: 'Ana', customName: null, hidden: false, notes: null, displayName: 'Ana', lastTs: 1, awaitingReply: true, isGroup: false, waitingSince: 1, alerts: [] }
+const contact: Contact = { jid: JID, pushName: 'Ana', customName: null, hidden: false, notes: null, displayName: 'Ana', lastTs: 1, awaitingReply: true, isGroup: false, waitingSince: 1, alerts: [], needsReply: true, replyDecision: null }
 const base: Analysis = { jid: JID, lastMsgId: 'M1', provider: 'groq', summary: 'Quer adiar.', suggestions: ['a', 'b'], createdAt: 1, transcriptFp: '', pendingAudios: 0 }
 
 beforeEach(() => {

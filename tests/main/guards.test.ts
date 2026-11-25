@@ -227,6 +227,28 @@ describe('alertas', () => {
     bad('reportMissedAlert', 'j@s.whatsapp.net', 'urgente', 'M1', 'x', 'extra')
   })
 
+  it('setNeedsReply: jid; "Precisa sim" sem motivo; "Não precisa" com motivo conhecido e texto curto', () => {
+    ok('setNeedsReply', 'j@s.whatsapp.net', true)
+    ok('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'agradecimento' })
+    ok('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'outro', text: 'liguei' })
+    ok('setNeedsReply', '1203@g.us', false, { code: 'grupo_nao_comigo' })
+    bad('setNeedsReply', 'j@s.whatsapp.net', false)
+    bad('setNeedsReply', 'j@s.whatsapp.net', true, { code: 'outro' })
+    bad('setNeedsReply', 'j@s.whatsapp.net', 'false', { code: 'outro' })
+    bad('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'brincadeira' })
+    bad('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'outro', text: 'x'.repeat(1001) })
+    bad('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'outro', extra: 1 })
+    bad('setNeedsReply', '', true)
+    bad('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'outro' }, 'extra')
+  })
+
+  it('confirmNoReply: só o jid', () => {
+    ok('confirmNoReply', 'j@s.whatsapp.net')
+    bad('confirmNoReply')
+    bad('confirmNoReply', '')
+    bad('confirmNoReply', 'j@s.whatsapp.net', true)
+  })
+
   it('alertQuality sem argumentos; exportAlertFeedback só com { anonymize: boolean }', () => {
     ok('alertQuality')
     bad('alertQuality', 1)

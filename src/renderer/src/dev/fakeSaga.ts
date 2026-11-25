@@ -2,7 +2,8 @@
  * `window.saga` falso, em memória, com os dados de `tests/fixtures/wa/demo.json`.
  * Usado pelos testes e pela pré-visualização no navegador (`npm run preview:ui`); nunca no app real.
  */
-import { loadDemo, loadDemoFeedback, type DemoContact, type DemoFeedback } from '../../../core/demo'
+import { loadDemo, loadDemoFeedback, loadDemoReplyFeedback, type DemoContact, type DemoFeedback, type DemoReplyFeedback } from '../../../core/demo'
+import type { ReplyDecision } from '../../../shared/feedback'
 import { AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../../shared/triage'
 import type {
   Alert,
@@ -77,6 +78,28 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     )
   )
   const feedback: Array<DemoFeedback & { alertId?: number }> = loadDemoFeedback(now)
+  const replyFeedback: Array<DemoReplyFeedback & { msgId?: string; alertId?: number }> = loadDemoReplyFeedback(now)
+  /** "Para responder": a decisão vale para a última mensagem do contato (`msgId`) */
+  const replies = new Map<string, { msgId: string; decision: ReplyDecision }>(
+    demo.flatMap((c) => {
+      const last = c.messages[c.messages.length - 1]
+      return c.reply && last && !last.fromMe ? [[c.jid, { msgId: last.id, decision: c.reply }] as const] : []
+    })
+  )
+  const lastOf = (c: DemoContact) => c.messages[c.messages.length - 1]
+  /** a decisão vigente (null = ninguém decidiu, ou o mentor falou por último) */
+  const decisionOf = (c: DemoContact): ReplyDecision | null => {
+    const last = lastOf(c)
+    const r = replies.get(c.jid)
+    return last && !last.fromMe && r && r.msgId === last.id ? r.decision : null
+  }
+  const needsReplyOf = (c: DemoContact): boolean => !!lastOf(c) && !lastOf(c).fromMe && (decisionOf(c)?.needed ?? true)
+  const saveReplyFeedback = (jid: string, f: Omit<DemoReplyFeedback, 'jid' | 'createdAt'> & { alertId?: number }) => {
+    const msgId = lastOf(find(jid)!).id
+    const prev = replyFeedback.findIndex((x) => x.jid === jid && x.msgId === msgId)
+    if (prev >= 0) replyFeedback.splice(prev, 1)
+    replyFeedback.push({ jid, msgId, createdAt: Date.now(), ...f })
+  }
   /** a próxima exportação: 'saved' (padrão) ou 'canceled' (o usuário fechou o "Salvar como") */
   let exportOutcome: 'saved' | 'canceled' = 'saved'
   const activeAlerts = (jid: string): Alert[] =>
@@ -99,7 +122,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
 
   const snapshot = (): AppState => {
     const visible = demo.filter((c) => !hidden.has(c.jid))
-    const awaiting = visible.filter((c) => !c.messages[c.messages.length - 1]?.fromMe).length
+    const awaiting = visible.filter(needsReplyOf).length
     const withAlerts = visible.filter((c) => activeAlerts(c.jid).length > 0).length
     return { ...state, triage: { awaiting, withAlerts } }
   }
@@ -123,7 +146,9 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       awaitingReply: !!last && !last.fromMe,
       isGroup: c.isGroup,
       waitingSince: waitingSince(c),
-      alerts: activeAlerts(c.jid).map((a) => a.kind)
+      alerts: activeAlerts(c.jid).map((a) => a.kind),
+      needsReply: needsReplyOf(c),
+      replyDecision: decisionOf(c)
     }
   }
   /** primeira mensagem do contato depois da última do mentor */
@@ -214,6 +239,17 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       for (const [jid, list] of alerts) {
         const a = list.find((x) => x.id === alertId)
         if (!a) continue
+        if (a.kind === 'esperando') {
+          // 👍 = precisa responder mesmo; o 👎 do "esperando" é setNeedsReply(jid, false, motivo)
+          if (verdict === 'down') throw new Error('use "Não precisa responder" para o alerta "esperando"')
+          const app = decisionOf(find(jid)!)
+          saveReplyFeedback(jid, { verdict: 'reply_needed', appNeeds: app && app.by !== 'user' ? app.needed : null, reasonCode: null, alertId })
+          replies.set(jid, { msgId: lastOf(find(jid)!).id, decision: { needed: true, by: 'user', reason: null } })
+          a.rating = 'up'
+          contactListeners.forEach((l) => l())
+          emitState()
+          return
+        }
         const prev = feedback.findIndex((f) => f.alertId === alertId)
         if (prev >= 0) feedback.splice(prev, 1)
         const correctKind = verdict === 'down' && reason?.code === 'tipo_errado' ? (reason.correctKind ?? null) : null
@@ -242,9 +278,42 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       contactListeners.forEach((l) => l())
       emitState()
     },
+    setNeedsReply: async (jid, needed, reason) => {
+      record('setNeedsReply', [jid, needed, reason], undefined)
+      const c = find(jid)
+      if (!c || !lastOf(c) || lastOf(c).fromMe) throw new Error('a conversa não está esperando resposta')
+      if (!needed && !reason) throw new Error('falta o motivo')
+      const app = decisionOf(c)
+      const appNeeds = app && app.by !== 'user' ? app.needed : null
+      const waiting = (alerts.get(jid) ?? []).find((a) => a.kind === 'esperando')
+      saveReplyFeedback(jid, {
+        verdict: needed ? 'reply_needed' : 'reply_not_needed',
+        appNeeds,
+        reasonCode: needed ? null : reason!.code,
+        ...(waiting && !needed ? { alertId: waiting.id } : {})
+      })
+      replies.set(jid, { msgId: lastOf(c).id, decision: { needed, by: 'user', reason: null } })
+      if (!needed) alerts.set(jid, (alerts.get(jid) ?? []).filter((a) => a.kind !== 'esperando'))
+      contactListeners.forEach((l) => l())
+      emitState()
+    },
+    confirmNoReply: async (jid) => {
+      record('confirmNoReply', [jid], undefined)
+      const c = find(jid)
+      const app = c ? decisionOf(c) : null
+      if (!c || !app || app.by === 'user' || app.needed) throw new Error('o Saga não decidiu que esta conversa dispensa resposta')
+      saveReplyFeedback(jid, { verdict: 'reply_ok', appNeeds: false, reasonCode: null })
+      replies.set(jid, { msgId: lastOf(c).id, decision: { needed: false, by: 'user', reason: null } })
+      contactListeners.forEach((l) => l())
+      emitState()
+    },
     alertQuality: async () => {
       const since = Date.now() - 30 * 86_400_000
       const recent = feedback.filter((f) => f.createdAt >= since)
+      const replyRecent = replyFeedback.filter((f) => f.createdAt >= since)
+      const right = replyRecent.filter((f) =>
+        f.verdict === 'reply_ok' ? true : f.verdict === 'reply_needed' ? f.appNeeds !== false : f.appNeeds === false
+      ).length
       const n = (k: AlertKind, v: string) => recent.filter((f) => f.kind === k && f.verdict === v).length
       return {
         since,
@@ -253,13 +322,20 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
           const up = n(kind, 'up')
           const down = n(kind, 'down')
           return { kind, up, down, missed: n(kind, 'missed'), correctRate: up + down ? up / (up + down) : null }
-        })
+        }),
+        reply: {
+          removed: replyRecent.filter((f) => f.verdict === 'reply_not_needed').length,
+          restored: replyRecent.filter((f) => f.verdict === 'reply_needed' && f.appNeeds === false).length,
+          confirmed: replyRecent.filter((f) => f.verdict === 'reply_ok' || (f.verdict === 'reply_needed' && f.appNeeds !== false)).length,
+          correctRate: replyRecent.length ? right / replyRecent.length : null
+        }
       }
     },
     exportAlertFeedback: async (o) => {
       record('exportAlertFeedback', [o], undefined)
-      if (feedback.length === 0) return { status: 'empty' }
-      return exportOutcome === 'canceled' ? { status: 'canceled' } : { status: 'saved', rows: feedback.length }
+      const rows = feedback.length + replyFeedback.length
+      if (rows === 0) return { status: 'empty' }
+      return exportOutcome === 'canceled' ? { status: 'canceled' } : { status: 'saved', rows }
     },
     getAnalysis: (jid) => analysisFor(jid, false),
     regenerate: (jid) => analysisFor(jid, true),

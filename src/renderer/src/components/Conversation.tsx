@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Alert, AlertKind, Analysis, Contact, MessageView } from '../../../shared/api'
+import type { Alert, AlertKind, Analysis, Contact, MessageView, ReplyDecision, ReplyReason } from '../../../shared/api'
 import { alertChipLabel, formatDayHeading, formatDuration, formatTime, initials, sameDay } from '../format'
 import { AlertIcon } from './Alerts'
-import { MissedAlertDialog, RateDownDialog, THANKS, Toast } from './AlertFeedback'
+import { MissedAlertDialog, NoReplyDialog, NoReplyIcon, RateDownDialog, THANKS, Toast } from './AlertFeedback'
 import { GroupIcon } from './GroupIcon'
 
 interface Props {
@@ -23,6 +23,10 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert }:
   const [rated, setRated] = useState<Map<number, 'up' | 'down'>>(new Map())
   const [downFor, setDownFor] = useState<Alert | null>(null)
   const [missedOpen, setMissedOpen] = useState(false)
+  /** "Não precisa responder" aberto (do cabeçalho, ou do 👎 no "esperando": o id do alerta) */
+  const [noReplyOpen, setNoReplyOpen] = useState<{ alertId: number | null } | null>(null)
+  /** decisão do "Para responder" feita agora (antes de a lista voltar do processo principal); undefined = a do contato */
+  const [replyLocal, setReplyLocal] = useState<ReplyDecision | null | undefined>(undefined)
   const [toast, setToast] = useState<{ text: string; seq: number } | null>(null)
   const threadRef = useRef<HTMLDivElement>(null)
   /** o mentor está lendo o fim da conversa: acompanhar mensagens novas e mudanças de altura */
@@ -89,6 +93,43 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert }:
       failed()
     })
   }
+  // a lista voltou do processo principal: vale a decisão de lá
+  const decisionKey = JSON.stringify([contact.lastTs, contact.replyDecision])
+  useEffect(() => setReplyLocal(undefined), [decisionKey])
+  const decision = replyLocal !== undefined ? replyLocal : contact.replyDecision
+  const needsReply = contact.awaitingReply && (decision?.needed ?? true)
+
+  const saveNoReply = (reason: ReplyReason, alertId: number | null) => {
+    setNoReplyOpen(null)
+    const prev = replyLocal
+    setReplyLocal({ needed: false, by: 'user', reason: null })
+    if (alertId !== null) mark(alertId, 'down')
+    thank()
+    window.saga.setNeedsReply(jid, false, reason).catch(() => {
+      setReplyLocal(prev)
+      if (alertId !== null) mark(alertId, null)
+      failed()
+    })
+  }
+  const restoreReply = () => {
+    const prev = replyLocal
+    setReplyLocal({ needed: true, by: 'user', reason: null })
+    thank()
+    window.saga.setNeedsReply(jid, true).catch(() => {
+      setReplyLocal(prev)
+      failed()
+    })
+  }
+  const confirmNoReply = () => {
+    const prev = replyLocal
+    setReplyLocal({ needed: false, by: 'user', reason: null })
+    thank()
+    window.saga.confirmNoReply(jid).catch(() => {
+      setReplyLocal(prev)
+      failed()
+    })
+  }
+
   const shownAlerts = alerts
     .filter((a) => rated.get(a.id) !== 'down')
     .map((a) => (rated.has(a.id) ? { ...a, rating: rated.get(a.id)! } : a))
@@ -110,15 +151,32 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert }:
           {contact.isGroup && <p className="muted small">Grupo</p>}
           {contact.notes && <p className="muted small conv-notes">{contact.notes}</p>}
         </div>
-        <button
-          type="button"
-          className="link-btn missed-link"
-          title="Avise o Saga de um sinal que ele deixou passar"
-          onClick={() => setMissedOpen(true)}
-        >
-          Faltou um alerta?
-        </button>
+        <div className="conv-actions">
+          {needsReply && !contact.hidden && (
+            <button
+              type="button"
+              className="btn btn-small no-reply-head"
+              title="Tira a conversa de &quot;Para responder&quot; até chegar outra mensagem"
+              onClick={() => setNoReplyOpen({ alertId: null })}
+            >
+              <NoReplyIcon />
+              Não precisa responder
+            </button>
+          )}
+          <button
+            type="button"
+            className="link-btn missed-link"
+            title="Avise o Saga de um sinal que ele deixou passar"
+            onClick={() => setMissedOpen(true)}
+          >
+            Faltou um alerta?
+          </button>
+        </div>
       </header>
+
+      {contact.awaitingReply && decision?.needed === false && (
+        <ReplyNote decision={decision} onRestore={restoreReply} onConfirm={confirmNoReply} />
+      )}
 
       {shownAlerts.length > 0 && (
         <AlertBar
@@ -128,7 +186,7 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert }:
           onShow={showMessage}
           onDismiss={onDismissAlert}
           onRateUp={rateUp}
-          onRateDown={setDownFor}
+          onRateDown={(a) => (a.kind === 'esperando' ? setNoReplyOpen({ alertId: a.id }) : setDownFor(a))}
         />
       )}
       {toast && <Toast text={toast.text} seq={toast.seq} onDone={() => setToast(null)} />}
@@ -147,6 +205,9 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert }:
             })
           }}
         />
+      )}
+      {noReplyOpen && (
+        <NoReplyDialog onClose={() => setNoReplyOpen(null)} onSave={(r) => saveNoReply(r, noReplyOpen.alertId)} />
       )}
       {missedOpen && (
         <MissedAlertDialog
@@ -271,29 +332,27 @@ function AlertBar({
               ) : (
                 <span className="alert-main">{body}</span>
               )}
-              {a.source === 'ai' && (
-                <span className="alert-rate" role="group" aria-label={`Avaliar o alerta ${label}`}>
-                  <button
-                    type="button"
-                    className={`rate-btn${a.rating === 'up' ? ' is-on' : ''}`}
-                    aria-label="Alerta correto"
-                    aria-pressed={a.rating === 'up'}
-                    title="O alerta está certo"
-                    onClick={() => a.rating !== 'up' && onRateUp(a)}
-                  >
-                    <span aria-hidden="true">👍</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="rate-btn"
-                    aria-label="Alerta errado"
-                    title="O alerta está errado: conte o porquê"
-                    onClick={() => onRateDown(a)}
-                  >
-                    <span aria-hidden="true">👎</span>
-                  </button>
-                </span>
-              )}
+              <span className="alert-rate" role="group" aria-label={`Avaliar o alerta ${label}`}>
+                <button
+                  type="button"
+                  className={`rate-btn${a.rating === 'up' ? ' is-on' : ''}`}
+                  aria-label="Alerta correto"
+                  aria-pressed={a.rating === 'up'}
+                  title={a.kind === 'esperando' ? 'Certo: precisa mesmo de resposta' : 'O alerta está certo'}
+                  onClick={() => a.rating !== 'up' && onRateUp(a)}
+                >
+                  <span aria-hidden="true">👍</span>
+                </button>
+                <button
+                  type="button"
+                  className="rate-btn"
+                  aria-label="Alerta errado"
+                  title={a.kind === 'esperando' ? 'Errado: esta conversa não precisa de resposta' : 'O alerta está errado: conte o porquê'}
+                  onClick={() => onRateDown(a)}
+                >
+                  <span aria-hidden="true">👎</span>
+                </button>
+              </span>
               {a.source === 'user' && <span className="alert-by-you muted small">marcado por você</span>}
               {onDismiss && (
                 <button
@@ -310,6 +369,34 @@ function AlertBar({
           )
         })}
       </ul>
+    </section>
+  )
+}
+
+/** Aviso discreto quando a conversa saiu de "Para responder": por quê, 👍 (o Saga acertou) e "Precisa sim". */
+function ReplyNote({ decision, onRestore, onConfirm }: { decision: ReplyDecision; onRestore: () => void; onConfirm: () => void }) {
+  const bySaga = decision.by !== 'user'
+  return (
+    <section className="reply-note" aria-label="Para responder">
+      <NoReplyIcon />
+      <p>
+        {bySaga ? (
+          <>
+            O Saga acha que esta conversa não precisa de resposta{decision.reason ? ': ' : '.'}
+            {decision.reason && <span className="reply-reason">{decision.reason}</span>}
+          </>
+        ) : (
+          'Você marcou que esta conversa não precisa de resposta.'
+        )}
+      </p>
+      {bySaga && (
+        <button type="button" className="rate-btn" aria-label="O Saga acertou" title="Certo: não precisa de resposta" onClick={onConfirm}>
+          <span aria-hidden="true">👍</span>
+        </button>
+      )}
+      <button type="button" className="btn btn-small" title="Volta para &quot;Para responder&quot;" onClick={onRestore}>
+        Precisa sim
+      </button>
     </section>
   )
 }

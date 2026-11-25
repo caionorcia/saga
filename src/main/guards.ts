@@ -3,7 +3,7 @@
  */
 import { posix, win32 } from 'node:path'
 import { ALERT_KINDS, CONTACT_KINDS, type InvokeMethod } from '../shared/api'
-import { REASON_CODES, REASON_TEXT_MAX } from '../shared/feedback'
+import { REASON_CODES, REASON_TEXT_MAX, REPLY_REASON_CODES } from '../shared/feedback'
 import { AI_ALERT_KINDS } from '../shared/triage'
 
 export interface AppOrigin {
@@ -94,6 +94,12 @@ function isReason(r: unknown): boolean {
   return optText(r.text)
 }
 
+/** "Não precisa responder": motivo conhecido e texto opcional e curto. */
+function isReplyReason(r: unknown): boolean {
+  if (!isObj(r) || !Object.keys(r).every((k) => k === 'code' || k === 'text')) return false
+  return (REPLY_REASON_CODES as readonly unknown[]).includes(r.code) && optText(r.text)
+}
+
 const SETTINGS_FIELDS: Record<string, (v: unknown) => boolean> = {
   groqKey: isStr,
   claudeKey: isStr,
@@ -117,6 +123,10 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
     ((a[1] === 'up' && a.length <= 3 && a[2] === undefined) || (a[1] === 'down' && a.length === 3 && isReason(a[2]))),
   reportMissedAlert: (a) =>
     a.length >= 2 && a.length <= 4 && nonEmpty(a[0]) && isAiKind(a[1]) && (a[2] === undefined || a[2] === null || nonEmpty(a[2])) && optText(a[3]),
+  setNeedsReply: (a) =>
+    nonEmpty(a[0]) &&
+    ((a[1] === true && a.length <= 3 && a[2] === undefined) || (a[1] === false && a.length === 3 && isReplyReason(a[2]))),
+  confirmNoReply: (a) => a.length === 1 && nonEmpty(a[0]),
   alertQuality: (a) => a.length === 0,
   exportAlertFeedback: (a) => a.length === 1 && isObj(a[0]) && Object.keys(a[0]).every((k) => k === 'anonymize') && isBool(a[0].anonymize),
   getAnalysis: ([j]) => nonEmpty(j),

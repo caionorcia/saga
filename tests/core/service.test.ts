@@ -761,6 +761,67 @@ describe('SagaService', () => {
     })
   })
 
+  describe('"Para responder" (needsReply)', () => {
+    const H = 3_600_000
+    const ins = (id: string, ts: number, fromMe = false, text = 'oi') =>
+      repo.insertMessage({ id, jid: JID, fromMe, ts, kind: 'text', text, mediaKeyJson: null, durationSec: null })
+    const classifyJobs = () => repo.listJobs('pending').filter((j) => j.type === 'classify')
+
+    it('"obrigado" que chega pelo WhatsApp sai da lista na hora, sem IA (mesmo sem chave) e sem job de alertas', async () => {
+      await service.start()
+      settings.save({ groqKey: GROQ_KEY })
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'me1', fromMe: true, ts: NOW - 120_000, text: 'Te mandei o link' })] })
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'c1', ts: NOW - 60_000, text: 'Obrigado!! 🙏' })] })
+      const [c] = await service.listContacts(false)
+      expect(c).toMatchObject({ awaitingReply: true, needsReply: false, replyDecision: { by: 'rule' } })
+      expect(service.state().triage.awaiting).toBe(0)
+      expect(classifyJobs()).toHaveLength(0)
+      // pergunta nova: volta e vai para a IA
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'c2', ts: NOW - 30_000, text: 'Ah, e a aula de quinta?' })] })
+      expect((await service.listContacts(false))[0].needsReply).toBe(true)
+      expect(classifyJobs()).toHaveLength(1)
+    })
+
+    it('"Não precisa responder" resolve o "esperando" e ele não volta; "Precisa sim" devolve; registro sem texto', async () => {
+      const lines: string[] = []
+      await service.stop()
+      service = make({ diag: (k, d) => lines.push(`${k} ${d}`) })
+      repo.upsertContact({ jid: JID, pushName: 'Ana' })
+      ins('m0', NOW - 60 * H, true)
+      ins('c1', NOW - 50 * H, false, 'Segue o relatório da semana')
+      expect((await service.listContacts(false))[0].alerts).toEqual(['esperando'])
+      const changed = vi.fn()
+      service.onContactsChanged(changed)
+      await service.setNeedsReply(JID, false, { code: 'outro_meio', text: 'liguei pra Ana' })
+      await vi.waitFor(() => expect(changed).toHaveBeenCalled())
+      let [c] = await service.listContacts(false)
+      expect(c).toMatchObject({ needsReply: false, alerts: [] })
+      clock.advance(H)
+      expect((await service.listAlerts(JID))).toEqual([])
+      expect(service.state().triage).toEqual({ awaiting: 0, withAlerts: 0 })
+      await service.setNeedsReply(JID, true)
+      ;[c] = await service.listContacts(false)
+      expect(c.needsReply).toBe(true)
+      expect((await service.alertQuality()).reply).toEqual({ removed: 0, restored: 0, confirmed: 1, correctRate: 1 })
+      expect(service.alertFeedbackCsv({ anonymize: true }).rows).toBe(1)
+      expect(lines.filter((l) => l.startsWith('reply_feedback'))).toEqual([
+        'reply_feedback verdict=reply_not_needed reason=outro_meio',
+        'reply_feedback verdict=reply_needed'
+      ])
+      expect(lines.join('\n')).not.toMatch(/relatório|liguei|Ana|5547999998888/)
+    })
+
+    it('decisão da IA "não precisa": sem "esperando" e o ativo some; confirmNoReply (👍) grava reply_ok', async () => {
+      repo.upsertContact({ jid: JID, pushName: 'Ana' })
+      ins('c1', NOW - 50 * H, false, 'Segue o comprovante')
+      expect((await service.listContacts(false))[0].alerts).toEqual(['esperando'])
+      repo.setAppReply({ jid: JID, msgId: 'c1', needs: false, reason: 'Só informou', source: 'ai' })
+      expect((await service.listContacts(false))[0]).toMatchObject({ needsReply: false, alerts: [] })
+      await service.confirmNoReply(JID)
+      expect(repo.listReplyFeedback()[0].verdict).toBe('reply_ok')
+    })
+  })
+
   describe('avaliação dos alertas', () => {
     const ins = (id: string, ts: number, fromMe = false, text = 'oi') =>
       repo.insertMessage({ id, jid: JID, fromMe, ts, kind: 'text', text, mediaKeyJson: null, durationSec: null })

@@ -94,7 +94,9 @@ describe('Conversation em grupo', () => {
     awaitingReply: true,
     isGroup: true,
     waitingSince: 1,
-    alerts: []
+    alerts: [],
+    needsReply: true,
+    replyDecision: null
   }
   const analysis: Analysis = { jid: GRP, lastMsgId: 'G8', provider: 'groq', summary: 'Bruno te marcou.', suggestions: ['a', 'b'], createdAt: 1, transcriptFp: '', pendingAudios: 0 }
 

@@ -3,6 +3,7 @@ import type { Contact, ContactKind } from '../../../shared/api'
 import { alertSeverity } from '../../../shared/triage'
 import { formatListTime, initials } from '../format'
 import { AlertChips, WaitBadge } from './Alerts'
+import { NoReplyDialog, NoReplyIcon, THANKS, Toast } from './AlertFeedback'
 import { GroupIcon } from './GroupIcon'
 
 /** Recorte da lista: todas, só as que esperam resposta ("Para responder") ou só as com alerta. */
@@ -66,9 +67,14 @@ function writeView(view: ContactView): void {
 
 const byWait = (a: Contact, b: Contact) => (a.waitingSince ?? Infinity) - (b.waitingSince ?? Infinity)
 
+/** Entra em "Para responder": espera resposta e nem o Saga nem o mentor disseram que não precisa. */
+const inAwaiting = (c: Contact) => c.needsReply && c.waitingSince !== null
+/** A última mensagem é do contato, mas o Saga ou o mentor decidiram que não precisa de resposta. */
+const noReply = (c: Contact) => c.awaitingReply && !c.needsReply && !c.hidden
+
 /** Aplica o recorte e a ordem: "Para responder" = quem espera há mais tempo primeiro; "Com alerta" = mais grave primeiro. */
 export function applyView(list: Contact[], view: ContactView): Contact[] {
-  if (view === 'awaiting') return list.filter((c) => c.awaitingReply && c.waitingSince !== null).sort(byWait)
+  if (view === 'awaiting') return list.filter(inAwaiting).sort(byWait)
   if (view === 'alerts') {
     return list
       .filter((c) => c.alerts.length > 0)
@@ -107,13 +113,22 @@ export function ContactList({ selected, onSelect, request }: Props) {
   const [query, setQuery] = useState('')
   const [menuJid, setMenuJid] = useState<string | null>(null)
   const [editing, setEditing] = useState<Editing>(null)
+  /** "Não precisa responder" aberto para esta conversa */
+  const [noReplyFor, setNoReplyFor] = useState<Contact | null>(null)
+  /** tiradas da lista agora (antes de a lista voltar do processo principal) */
+  const [removed, setRemoved] = useState<Set<string>>(new Set())
+  const [toast, setToast] = useState<{ text: string; seq: number } | null>(null)
 
   useEffect(() => {
     let alive = true
     const load = () =>
       window.saga
         .listContacts(showHidden, kind)
-        .then((c) => alive && setContacts(c))
+        .then((c) => {
+          if (!alive) return
+          setContacts(c)
+          setRemoved(new Set())
+        })
         .catch(() => alive && setContacts((old) => old ?? []))
     void load()
     const off = window.saga.onContactsChanged(() => void load())
@@ -148,16 +163,30 @@ export function ContactList({ selected, onSelect, request }: Props) {
   const counts = useMemo(() => {
     const list = (contacts ?? []).filter((c) => !c.hidden)
     return {
-      awaiting: list.filter((c) => c.awaitingReply && c.waitingSince !== null).length,
+      awaiting: list.filter((c) => inAwaiting(c) && !removed.has(c.jid)).length,
       alerts: list.filter((c) => c.alerts.length > 0).length
     }
-  }, [contacts])
+  }, [contacts, removed])
 
   const visible = useMemo(() => {
     const q = norm(query.trim())
     const found = (contacts ?? []).filter((c) => !q || norm(c.displayName).includes(q) || c.jid.includes(q))
-    return applyView(found, view)
-  }, [contacts, query, view])
+    return applyView(found, view).filter((c) => view !== 'awaiting' || !removed.has(c.jid))
+  }, [contacts, query, view, removed])
+
+  const saveNoReply = (c: Contact, reason: Parameters<typeof window.saga.setNeedsReply>[2]) => {
+    setNoReplyFor(null)
+    setRemoved((r) => new Set(r).add(c.jid))
+    setToast((t) => ({ text: THANKS, seq: (t?.seq ?? 0) + 1 }))
+    window.saga.setNeedsReply(c.jid, false, reason).catch(() => {
+      setRemoved((r) => {
+        const n = new Set(r)
+        n.delete(c.jid)
+        return n
+      })
+      setToast((t) => ({ text: 'Não foi possível salvar. Tente de novo.', seq: (t?.seq ?? 0) + 1 }))
+    })
+  }
 
   useEffect(() => {
     if (!menuJid) return
@@ -257,26 +286,44 @@ export function ContactList({ selected, onSelect, request }: Props) {
                 <span className="contact-sub">
                   {c.hidden
                     ? 'Escondido'
-                    : c.awaitingReply
-                      ? c.waitingSince !== null
-                        ? 'Aguardando'
-                        : 'Aguardando resposta'
-                      : 'Você respondeu'}
+                    : c.awaitingReply && !c.needsReply
+                      ? 'Sem pendência'
+                      : c.awaitingReply
+                        ? c.waitingSince !== null
+                          ? 'Aguardando'
+                          : 'Aguardando resposta'
+                        : 'Você respondeu'}
                 </span>
               </span>
               <span className="contact-meta">
                 {c.lastTs !== null && <time>{formatListTime(c.lastTs)}</time>}
-                {c.awaitingReply && c.waitingSince === null && (
+                {c.needsReply && c.waitingSince === null && (
                   <span className="await-dot" role="img" aria-label="Aguardando resposta" />
                 )}
               </span>
-              {((c.awaitingReply && c.waitingSince !== null) || c.alerts.length > 0) && (
+              {(inAwaiting(c) || noReply(c) || c.alerts.length > 0) && (
                 <span className="contact-badges">
-                  {c.awaitingReply && c.waitingSince !== null && <WaitBadge since={c.waitingSince} now={now} />}
+                  {inAwaiting(c) && <WaitBadge since={c.waitingSince!} now={now} />}
+                  {noReply(c) && (
+                    <span className="reply-chip" title={c.replyDecision?.reason ?? 'Você marcou que não precisa responder'}>
+                      Não precisa responder
+                    </span>
+                  )}
                   <AlertChips kinds={c.alerts} waitingSince={c.waitingSince} now={now} />
                 </span>
               )}
             </button>
+            {view === 'awaiting' && !c.hidden && (
+              <button
+                type="button"
+                className="icon-btn no-reply-btn"
+                aria-label={`Não precisa responder: ${c.displayName}`}
+                title="Não precisa responder (tira da lista)"
+                onClick={() => setNoReplyFor(c)}
+              >
+                <NoReplyIcon />
+              </button>
+            )}
             <div className="contact-menu-wrap">
               <button
                 type="button"
@@ -315,6 +362,11 @@ export function ContactList({ selected, onSelect, request }: Props) {
           </li>
         ))}
       </ul>
+
+      {noReplyFor && (
+        <NoReplyDialog name={noReplyFor.displayName} onClose={() => setNoReplyFor(null)} onSave={(r) => saveNoReply(noReplyFor, r)} />
+      )}
+      {toast && <Toast text={toast.text} seq={toast.seq} onDone={() => setToast(null)} />}
 
       {editing && editingContact && (
         <EditDialog

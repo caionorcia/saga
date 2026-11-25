@@ -23,11 +23,35 @@ const bar = () => screen.getByRole('region', { name: 'Alertas desta conversa' })
 const itemOf = (text: RegExp) => within(bar()).getByText(text).closest('li')!
 
 describe('Conversation: 👍/👎 nos alertas', () => {
-  it('só os alertas da IA têm 👍/👎 ("esperando" é regra)', async () => {
+  it('todos os alertas têm 👍/👎, inclusive o "esperando"', async () => {
     await setup()
-    expect(within(bar()).getAllByRole('button', { name: 'Alerta correto' })).toHaveLength(2)
-    expect(within(bar()).getAllByRole('button', { name: 'Alerta errado' })).toHaveLength(2)
-    expect(within(itemOf(/Esperando/)).queryByRole('button', { name: 'Alerta correto' })).toBeNull()
+    expect(within(bar()).getAllByRole('button', { name: 'Alerta correto' })).toHaveLength(3)
+    expect(within(bar()).getAllByRole('button', { name: 'Alerta errado' })).toHaveLength(3)
+    expect(within(itemOf(/Esperando/)).getByRole('button', { name: 'Alerta correto' })).toBeTruthy()
+  })
+
+  it('"esperando" 👍: registra que precisa mesmo responder e fica marcado', async () => {
+    const { ctl, rerender } = await setup()
+    fireEvent.click(within(itemOf(/Esperando/)).getByRole('button', { name: 'Alerta correto' }))
+    expect(screen.getByRole('status').textContent).toMatch(/aprender/)
+    const id = (await ctl.api.listAlerts(JID)).find((a) => a.kind === 'esperando')!.id
+    expect(ctl.calls.find((c) => c.method === 'rateAlert')!.args.slice(0, 2)).toEqual([id, 'up'])
+    await rerender()
+    expect(within(itemOf(/Esperando/)).getByRole('button', { name: 'Alerta correto' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('"esperando" 👎: abre "Por que esta conversa não precisa de resposta?" e registra setNeedsReply; o alerta some', async () => {
+    const { ctl, rerender } = await setup()
+    fireEvent.click(within(itemOf(/Esperando/)).getByRole('button', { name: 'Alerta errado' }))
+    const dlg = screen.getByRole('dialog', { name: 'Por que esta conversa não precisa de resposta?' })
+    expect(screen.queryByRole('dialog', { name: 'O que está errado neste alerta?' })).toBeNull()
+    fireEvent.click(within(dlg).getByRole('radio', { name: 'Já respondi por outro meio (ligação, pessoalmente…)' }))
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Salvar' }))
+    expect(ctl.calls.find((c) => c.method === 'setNeedsReply')!.args).toEqual([JID, false, { code: 'outro_meio' }])
+    expect(ctl.calls.some((c) => c.method === 'rateAlert')).toBe(false)
+    expect(within(bar()).queryByText(/Esperando/)).toBeNull()
+    await rerender()
+    expect((await ctl.api.listAlerts(JID)).map((a) => a.kind)).not.toContain('esperando')
   })
 
   it('👍 registra "up", fica marcado e agradece; o alerta continua', async () => {
@@ -72,7 +96,8 @@ describe('Conversation: 👍/👎 nos alertas', () => {
     await rerender()
     const made = itemOf(/Quer marcar uma conversa/)
     expect(within(made).getByText('marcado por você')).toBeTruthy()
-    expect(within(made).queryByRole('button', { name: 'Alerta errado' })).toBeNull()
+    // os marcados por você também têm 👍/👎
+    expect(within(made).getByRole('button', { name: 'Alerta errado' })).toBeTruthy()
   })
 
   it('Cancelar (ou Esc) fecha sem registrar', async () => {
@@ -126,7 +151,10 @@ describe('Configurações: "Qualidade dos alertas"', () => {
     const anon = within(sec).getByRole('checkbox', { name: 'Anonimizar nomes' }) as HTMLInputElement
     expect(anon.checked).toBe(true)
     fireEvent.click(within(sec).getByRole('button', { name: 'Exportar avaliações (CSV)' }))
-    await within(sec).findByText(/Arquivo salvo com 12 avaliações/)
+    const reply = within(sec).getByRole('row', { name: /Para responder/ })
+    // removidos, devolvidos, confirmados, % de acerto do Saga
+    expect([...reply.querySelectorAll('td')].map((td) => td.textContent)).toEqual(['2', '1', '3', '50%'])
+    await within(sec).findByText(/Arquivo salvo com 18 avaliações/)
     fireEvent.click(anon)
     ctl.setExportOutcome('canceled')
     fireEvent.click(within(sec).getByRole('button', { name: 'Exportar avaliações (CSV)' }))

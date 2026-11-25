@@ -56,6 +56,8 @@ export interface AlertQuality {
   since: number
   days: number
   kinds: AlertQualityRow[]
+  /** "Para responder": quantas vezes o mentor corrigiu ou confirmou o Saga */
+  reply: ReplyQuality
 }
 
 export interface ExportFeedbackOptions {
@@ -64,3 +66,56 @@ export interface ExportFeedbackOptions {
 }
 
 export type ExportFeedbackResult = { status: 'saved'; rows: number } | { status: 'canceled' } | { status: 'empty' }
+
+// --- "Para responder" (v0.2.2): o mentor corrige quando o Saga erra se a conversa precisa de resposta ---
+
+/** O que o mentor disse: tirou da lista, devolveu à lista (ou confirmou o "esperando"), ou 👍 no "não precisa" do Saga. */
+export const REPLY_VERDICTS = ['reply_not_needed', 'reply_needed', 'reply_ok'] as const
+export type ReplyVerdict = (typeof REPLY_VERDICTS)[number]
+
+/** Motivos rápidos de "Não precisa responder", na ordem do diálogo. */
+export const REPLY_REASON_CODES = ['agradecimento', 'outro_meio', 'grupo_nao_comigo', 'encerrada', 'outro'] as const
+export type ReplyReasonCode = (typeof REPLY_REASON_CODES)[number]
+
+export const REPLY_REASON_LABELS: Record<ReplyReasonCode, string> = {
+  agradecimento: 'Era só agradecimento / ok / emoji',
+  outro_meio: 'Já respondi por outro meio (ligação, pessoalmente…)',
+  grupo_nao_comigo: 'Mensagem de grupo que não é comigo',
+  encerrada: 'Conversa encerrada',
+  outro: 'Outro'
+}
+
+export const REPLY_VERDICT_LABELS: Record<ReplyVerdict, string> = {
+  reply_not_needed: 'Não precisa responder',
+  reply_needed: 'Precisa responder',
+  reply_ok: 'Correto'
+}
+
+/** "Não precisa responder": o motivo (obrigatório) e o texto livre. */
+export interface ReplyReason {
+  code: ReplyReasonCode
+  text?: string
+}
+
+/** Quem decidiu se a conversa precisa de resposta: a regra (agradecimento/emoji), a IA ou o mentor. */
+export type ReplyDecisionSource = 'rule' | 'ai' | 'user'
+
+/** A decisão atual para a última mensagem do contato (some quando chega outra mensagem dele). */
+export interface ReplyDecision {
+  needed: boolean
+  by: ReplyDecisionSource
+  /** por quê, em pt-BR (até 100 caracteres); null quando o mentor decidiu */
+  reason: string | null
+}
+
+/** "Para responder" nos últimos 30 dias. */
+export interface ReplyQuality {
+  /** o mentor tirou da lista ("Não precisa responder") */
+  removed: number
+  /** o Saga tinha tirado e o mentor devolveu ("Precisa sim") */
+  restored: number
+  /** o mentor confirmou a decisão do Saga (👍 no "esperando" ou no "não precisa") */
+  confirmed: number
+  /** decisões do Saga que o mentor confirmou / todas as avaliadas; null sem avaliações */
+  correctRate: number | null
+}

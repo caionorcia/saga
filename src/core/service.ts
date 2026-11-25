@@ -5,8 +5,9 @@ import { systemClock, type Clock } from './clock'
 import type { AlertKind, AlertRow, ContactKind, ContactRow, MessageRow, Repo } from './db/repo'
 import { CLASSIFY_MAX_AGE_MS, RESOLVED_BY_REPLY, classifyChat } from './ai/classify'
 import { WAIT_RED_MS } from '../shared/triage'
-import type { AlertQuality, RateReason } from '../shared/feedback'
+import type { AlertQuality, RateReason, ReplyReason } from '../shared/feedback'
 import { alertQuality, feedbackCsv, rateAlert, reportMissedAlert } from './ai/alertFeedback'
+import { applyReplyRule, confirmNoReply, ruleSaysNoReply, setNeedsReply } from './ai/needsReply'
 import { hasFreeSpace as defaultHasFreeSpace } from './disk'
 import { BudgetExceededError, CostTracker } from './ai/budget'
 import {
@@ -337,7 +338,11 @@ export class SagaService extends EventEmitter {
       try {
         // o mentor respondeu: os alertas de antes se resolvem (o desânimo fica até o mentor resolver)
         if (m.fromMe) repo.dismissAlertsUpTo(m.jid, RESOLVED_BY_REPLY, m.ts)
-        else this.maybeClassify(m.jid, m.ts)
+        else {
+          // só "obrigado", "ok" ou emoji: sai de "Para responder" na hora, sem IA (e mesmo sem chave da Groq)
+          applyReplyRule(repo, m.jid)
+          this.maybeClassify(m.jid, m.ts)
+        }
       } catch (e) {
         repo.logEvent('alerts_error', e instanceof Error ? e.message : String(e))
       }
@@ -562,6 +567,23 @@ export class SagaService extends EventEmitter {
     if (changed) this.markContacts()
   }
 
+  /**
+   * "Não precisa responder" (`needed` false, com o motivo) ou "Precisa sim" (true): vale até chegar outra mensagem do
+   * contato e vira um exemplo para a IA. O registro de diagnóstico só leva o veredito e o código do motivo.
+   */
+  async setNeedsReply(jid: string, needed: boolean, reason?: ReplyReason): Promise<void> {
+    const changed = setNeedsReply(this.repo, jid, needed, reason)
+    this.diag('reply_feedback', `verdict=${needed ? 'reply_needed' : 'reply_not_needed'}${reason ? ` reason=${reason.code}` : ''}`)
+    if (changed) this.markContacts()
+  }
+
+  /** 👍 no "O Saga acha que esta conversa não precisa de resposta". */
+  async confirmNoReply(jid: string): Promise<void> {
+    const changed = confirmNoReply(this.repo, jid)
+    this.diag('reply_feedback', 'verdict=reply_ok')
+    if (changed) this.markContacts()
+  }
+
   /** "Faltou um alerta?": grava o exemplo e cria o alerta, marcado como do mentor. */
   async reportMissedAlert(jid: string, kind: AlertKind, msgId?: string | null, text?: string | null): Promise<void> {
     const changed = reportMissedAlert(this.repo, jid, kind, msgId ?? null, text ?? null)
@@ -577,10 +599,12 @@ export class SagaService extends EventEmitter {
   /** O CSV de todas as avaliações (o processo principal grava no arquivo escolhido). */
   alertFeedbackCsv(opts: { anonymize: boolean }): { csv: string; rows: number } {
     const rows = this.repo.listFeedback()
+    const replyRows = this.repo.listReplyFeedback()
     const names = new Map(this.repo.listContacts({ includeHidden: true }).map((c) => [c.jid, c.displayName]))
-    const csv = feedbackCsv(rows, (jid) => names.get(jid) ?? 'Conversa removida', opts.anonymize)
-    this.diag('alert_feedback_export', `rows=${rows.length} anonymized=${opts.anonymize}`)
-    return { csv, rows: rows.length }
+    const csv = feedbackCsv(rows, (jid) => names.get(jid) ?? 'Conversa removida', opts.anonymize, replyRows)
+    const n = rows.length + replyRows.length
+    this.diag('alert_feedback_export', `rows=${n} anonymized=${opts.anonymize}`)
+    return { csv, rows: n }
   }
 
   /**
@@ -593,27 +617,30 @@ export class SagaService extends EventEmitter {
     if (check && ts <= check.lastTs) return
     if (this.repo.isHidden(jid)) return
     if (!this.settings.getKey('groq')) return
+    // só agradecimento/ok/emoji desde a resposta do mentor: a regra já decidiu, não gasta uma chamada da IA
+    if (ruleSaysNoReply(this.repo, jid)) return
     this.classifyWanted.set(jid, Math.max(ts, this.classifyWanted.get(jid) ?? -Infinity))
     this.queue.requeue('classify', `classify:${jid}`, { jid, ts }, CLASSIFY_PRIORITY)
   }
 
   /**
-   * Regra "esperando" (sem IA): conversa aguardando resposta há mais de 48 h ganha o alerta; resolvido à mão,
-   * não volta na mesma espera. Em grupo, só se alguém mencionou o mentor nessa espera. `true` se mudou algo.
+   * Regra "esperando" (sem IA): conversa em "Para responder" há mais de 48 h ganha o alerta; resolvido à mão,
+   * não volta na mesma espera. Em grupo, só se alguém mencionou o mentor nessa espera. Conversa que não precisa de
+   * resposta (agradecimento, decisão da IA ou do mentor) não tem "esperando". `true` se mudou algo.
    */
   private refreshWaitingAlerts(): boolean {
     const now = this.clock.now()
     let changed = false
     for (const c of this.repo.listContacts({ includeHidden: false })) {
       const active = c.alerts.includes('esperando')
-      const late = c.waitingSince !== null && now - c.waitingSince > WAIT_RED_MS
+      const late = c.needsReply && c.waitingSince !== null && now - c.waitingSince > WAIT_RED_MS
       if (late && !active) {
         if (c.isGroup && !this.repo.hasMentionSince(c.jid, c.waitingSince!)) continue
         const msgId = this.repo.waitingMessageId(c.jid, c.waitingSince!)
         const last = this.repo.lastAlert(c.jid, 'esperando')
         if (last && last.msgId === msgId) continue
         changed = this.repo.upsertAlert({ jid: c.jid, kind: 'esperando', detail: WAITING_DETAIL, msgId }) || changed
-      } else if (active && c.waitingSince === null) {
+      } else if (active && (c.waitingSince === null || !c.needsReply)) {
         changed = this.repo.dismissAlert(c.jid, 'esperando') || changed
       }
     }

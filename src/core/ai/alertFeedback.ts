@@ -5,18 +5,21 @@
  * - um 👎 impede a IA de recriar o mesmo tipo de alerta para a mesma mensagem;
  * - as contagens aparecem em "Qualidade dos alertas" e tudo pode ser exportado em CSV.
  */
-import type { AlertKind, FeedbackRow, MessageRow, Repo } from '../db/repo'
+import type { AlertKind, FeedbackRow, MessageRow, Repo, ReplyFeedbackRow } from '../db/repo'
 import { AI_ALERT_KINDS } from '../../shared/triage'
 import {
   KIND_LABELS,
   REASON_LABELS,
   REASON_TEXT_MAX,
+  REPLY_REASON_LABELS,
+  REPLY_VERDICT_LABELS,
   VERDICT_LABELS,
   type AlertQuality,
   type RateReason,
   type Verdict
 } from '../../shared/feedback'
 import { render } from './prompt'
+import { replyCsvDetail, replyQuality, setNeedsReply } from './needsReply'
 
 /** exemplos no prompt do classify */
 export const EXAMPLES_MAX = 6
@@ -69,6 +72,11 @@ export class FeedbackError extends Error {
 export function rateAlert(repo: Repo, alertId: number, verdict: 'up' | 'down', reason?: RateReason): boolean {
   const a = repo.getAlert(alertId)
   if (!a) throw new FeedbackError('alerta não encontrado')
+  if (a.kind === 'esperando') {
+    // "esperando" é a regra do "Para responder": 👍 = precisa mesmo responder; o 👎 é "Não precisa responder" (setNeedsReply)
+    if (verdict === 'down') throw new FeedbackError('use "Não precisa responder" para o alerta "esperando"')
+    return setNeedsReply(repo, a.jid, true, undefined, a.id)
+  }
   if (verdict === 'down' && !reason) throw new FeedbackError('falta o motivo')
   const correctKind = verdict === 'down' && reason?.code === 'tipo_errado' && reason.correctKind && reason.correctKind !== a.kind ? reason.correctKind : null
   repo.saveFeedback({
@@ -123,7 +131,8 @@ export function reportMissedAlert(repo: Repo, jid: string, kind: AlertKind, msgI
 }
 
 /** Serve de exemplo? "Já foi resolvido" não diz nada sobre a mensagem (o mentor resolveu por outro caminho). */
-const teaches = (f: FeedbackRow): boolean => f.contextText.trim() !== '' && !(f.verdict === 'down' && f.reasonCode === 'resolvido')
+const teaches = (f: FeedbackRow): boolean =>
+  f.kind !== 'esperando' && f.contextText.trim() !== '' && !(f.verdict === 'down' && f.reasonCode === 'resolvido')
 
 /**
  * Até 6 avaliações recentes para o prompt: primeiro as da mesma conversa, depois as outras alternando os tipos
@@ -183,7 +192,8 @@ export function alertQuality(repo: Repo, now: number): AlertQuality {
       const up = n(kind, 'up')
       const down = n(kind, 'down')
       return { kind, up, down, missed: n(kind, 'missed'), correctRate: up + down > 0 ? up / (up + down) : null }
-    })
+    }),
+    reply: replyQuality(repo, now)
   }
 }
 
@@ -204,35 +214,70 @@ export function csvDate(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/** `tipo` das linhas do "Para responder" no CSV. */
+export const CSV_REPLY_KIND = 'para_responder'
+
 /**
- * CSV das avaliações (UTF-8 com BOM e ";" como separador, como o Excel em português espera).
+ * CSV das avaliações (UTF-8 com BOM e ";" como separador, como o Excel em português espera), com as do
+ * "Para responder" (`tipo` = "para_responder"), em ordem de data.
  * `anonymize`: o nome da conversa vira "Contato 1", "Contato 2"… (o mesmo número para a mesma conversa).
  */
-export function feedbackCsv(rows: FeedbackRow[], nameOf: (jid: string) => string, anonymize: boolean): string {
+export function feedbackCsv(
+  rows: FeedbackRow[],
+  nameOf: (jid: string) => string,
+  anonymize: boolean,
+  replyRows: ReplyFeedbackRow[] = []
+): string {
   const pseudo = new Map<string, string>()
   const who = (jid: string): string => {
     if (!anonymize) return nameOf(jid)
     if (!pseudo.has(jid)) pseudo.set(jid, `Contato ${pseudo.size + 1}`)
     return pseudo.get(jid)!
   }
-  const lines = [CSV_COLUMNS.join(';')]
-  for (const f of [...rows].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id)) {
-    lines.push(
-      [
+  // o nome (ou "Contato N") é resolvido depois de ordenar: "Contato 1" é a conversa da avaliação mais antiga
+  type Line = { at: number; order: number; id: number; cells: (name: string) => string[]; jid: string }
+  const all: Line[] = []
+  for (const f of rows) {
+    all.push({
+      at: f.createdAt,
+      order: 0,
+      id: f.id,
+      jid: f.jid,
+      cells: (name) => [
         csvDate(f.createdAt),
         KIND_LABELS[f.kind],
         VERDICT_LABELS[f.verdict],
         f.reasonCode ? REASON_LABELS[f.reasonCode] : '',
         f.reasonText ?? '',
         f.reasonCode === 'tipo_errado' ? (f.correctKind ? KIND_LABELS[f.correctKind] : 'Nenhum') : '',
-        who(f.jid),
+        name,
         f.contextText,
         f.detail,
         f.model ?? ''
       ]
-        .map(csvCell)
-        .join(';')
-    )
+    })
   }
+  for (const f of replyRows) {
+    all.push({
+      at: f.createdAt,
+      order: 1,
+      id: f.id,
+      jid: f.jid,
+      cells: (name) => [
+        csvDate(f.createdAt),
+        CSV_REPLY_KIND,
+        REPLY_VERDICT_LABELS[f.verdict],
+        f.reasonCode ? REPLY_REASON_LABELS[f.reasonCode] : '',
+        f.reasonText ?? '',
+        '',
+        name,
+        f.contextText,
+        replyCsvDetail(f),
+        f.model ?? ''
+      ]
+    })
+  }
+  const lines = [CSV_COLUMNS.join(';')]
+  for (const l of all.sort((a, b) => a.at - b.at || a.order - b.order || a.id - b.id)) lines.push(l.cells(who(l.jid)).map(csvCell).join(';'))
   return `﻿${lines.join('\r\n')}\r\n`
 }
