@@ -2,6 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Alert, AlertKind, Analysis, Contact, MessageView } from '../../../shared/api'
 import { alertChipLabel, formatDayHeading, formatDuration, formatTime, initials, sameDay } from '../format'
 import { AlertIcon } from './Alerts'
+import { MissedAlertDialog, RateDownDialog, THANKS, Toast } from './AlertFeedback'
 import { GroupIcon } from './GroupIcon'
 
 interface Props {
@@ -18,6 +19,11 @@ const HIGHLIGHT_MS = 2_500
 export function Conversation({ contact, analysis, alerts = [], onDismissAlert }: Props) {
   const [messages, setMessages] = useState<MessageView[] | null>(null)
   const [highlight, setHighlight] = useState<string | null>(null)
+  /** avaliações feitas agora (antes de a lista de alertas voltar do processo principal) */
+  const [rated, setRated] = useState<Map<number, 'up' | 'down'>>(new Map())
+  const [downFor, setDownFor] = useState<Alert | null>(null)
+  const [missedOpen, setMissedOpen] = useState(false)
+  const [toast, setToast] = useState<{ text: string; seq: number } | null>(null)
   const threadRef = useRef<HTMLDivElement>(null)
   /** o mentor está lendo o fim da conversa: acompanhar mensagens novas e mudanças de altura */
   const pinned = useRef(true)
@@ -66,6 +72,27 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert }:
     setHighlight(id)
   }
 
+  const thank = (text = THANKS) => setToast((t) => ({ text, seq: (t?.seq ?? 0) + 1 }))
+  const failed = () => thank('Não foi possível salvar a avaliação. Tente de novo.')
+  const mark = (id: number, v: 'up' | 'down' | null) =>
+    setRated((m) => {
+      const n = new Map(m)
+      if (v) n.set(id, v)
+      else n.delete(id)
+      return n
+    })
+  const rateUp = (a: Alert) => {
+    mark(a.id, 'up')
+    thank()
+    window.saga.rateAlert(a.id, 'up').catch(() => {
+      mark(a.id, null)
+      failed()
+    })
+  }
+  const shownAlerts = alerts
+    .filter((a) => rated.get(a.id) !== 'down')
+    .map((a) => (rated.has(a.id) ? { ...a, rating: rated.get(a.id)! } : a))
+
   return (
     <section className="conversation" aria-label={`${contact.isGroup ? 'Grupo' : 'Conversa com'} ${contact.displayName}`}>
       <header className="conv-head">
@@ -83,15 +110,53 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert }:
           {contact.isGroup && <p className="muted small">Grupo</p>}
           {contact.notes && <p className="muted small conv-notes">{contact.notes}</p>}
         </div>
+        <button
+          type="button"
+          className="link-btn missed-link"
+          title="Avise o Saga de um sinal que ele deixou passar"
+          onClick={() => setMissedOpen(true)}
+        >
+          Faltou um alerta?
+        </button>
       </header>
 
-      {alerts.length > 0 && (
+      {shownAlerts.length > 0 && (
         <AlertBar
-          alerts={alerts}
+          alerts={shownAlerts}
           waitingSince={contact.waitingSince}
           canShow={(id) => !!messages?.some((m) => m.id === id)}
           onShow={showMessage}
           onDismiss={onDismissAlert}
+          onRateUp={rateUp}
+          onRateDown={setDownFor}
+        />
+      )}
+      {toast && <Toast text={toast.text} seq={toast.seq} onDone={() => setToast(null)} />}
+      {downFor && (
+        <RateDownDialog
+          alert={downFor}
+          onClose={() => setDownFor(null)}
+          onSave={(reason) => {
+            const a = downFor
+            setDownFor(null)
+            mark(a.id, 'down')
+            thank()
+            window.saga.rateAlert(a.id, 'down', reason).catch(() => {
+              mark(a.id, null)
+              failed()
+            })
+          }}
+        />
+      )}
+      {missedOpen && (
+        <MissedAlertDialog
+          messages={messages ?? []}
+          onClose={() => setMissedOpen(false)}
+          onSave={(kind, msgId, text) => {
+            setMissedOpen(false)
+            thank()
+            window.saga.reportMissedAlert(jid, kind, msgId, text).catch(failed)
+          }}
         />
       )}
 
@@ -162,13 +227,17 @@ function AlertBar({
   waitingSince,
   canShow,
   onShow,
-  onDismiss
+  onDismiss,
+  onRateUp,
+  onRateDown
 }: {
   alerts: Alert[]
   waitingSince: number | null
   canShow: (id: string) => boolean
   onShow: (id: string) => void
   onDismiss?: (kind: AlertKind) => void
+  onRateUp: (a: Alert) => void
+  onRateDown: (a: Alert) => void
 }) {
   const now = Date.now()
   return (
@@ -188,7 +257,7 @@ function AlertBar({
             </>
           )
           return (
-            <li key={a.kind} className="alert-item">
+            <li key={a.id} className="alert-item">
               {linkable ? (
                 <button
                   type="button"
@@ -202,6 +271,30 @@ function AlertBar({
               ) : (
                 <span className="alert-main">{body}</span>
               )}
+              {a.source === 'ai' && (
+                <span className="alert-rate" role="group" aria-label={`Avaliar o alerta ${label}`}>
+                  <button
+                    type="button"
+                    className={`rate-btn${a.rating === 'up' ? ' is-on' : ''}`}
+                    aria-label="Alerta correto"
+                    aria-pressed={a.rating === 'up'}
+                    title="O alerta está certo"
+                    onClick={() => a.rating !== 'up' && onRateUp(a)}
+                  >
+                    <span aria-hidden="true">👍</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="rate-btn"
+                    aria-label="Alerta errado"
+                    title="O alerta está errado: conte o porquê"
+                    onClick={() => onRateDown(a)}
+                  >
+                    <span aria-hidden="true">👎</span>
+                  </button>
+                </span>
+              )}
+              {a.source === 'user' && <span className="alert-by-you muted small">marcado por você</span>}
               {onDismiss && (
                 <button
                   type="button"

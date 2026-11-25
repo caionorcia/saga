@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { KeyKind, RecentEvent, SaveSettingsInput, SettingsView } from '../../../shared/api'
-import { eventLabel, formatDay, formatTime } from '../format'
+import type { AlertQuality, KeyKind, RecentEvent, SaveSettingsInput, SettingsView } from '../../../shared/api'
+import { ALERT_LABELS, eventLabel, formatDay, formatTime } from '../format'
 import { DiagnosticsActions } from './Diagnostics'
 
 const KEY_LABEL: Record<KeyKind, string> = { groq: 'Groq', claude: 'Claude', openai: 'OpenAI' }
@@ -138,6 +138,8 @@ export function Settings() {
           </p>
         </section>
 
+        <AlertQualitySection />
+
         <section>
           <h2>Diagnóstico</h2>
           <p className="muted small">
@@ -174,6 +176,95 @@ export function Settings() {
         </section>
       </div>
     </main>
+  )
+}
+
+const pct = (r: number | null) => (r === null ? '—' : `${Math.round(r * 100)}%`)
+
+/** "Qualidade dos alertas": quanto os alertas da IA acertam (👍/👎 do mentor) e a exportação em CSV. */
+function AlertQualitySection() {
+  const [q, setQ] = useState<AlertQuality | null>(null)
+  const [anon, setAnon] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ text: string; bad: boolean } | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    window.saga
+      .alertQuality()
+      .then((v) => alive && setQ(v))
+      .catch(() => alive && setMsg({ text: 'Não foi possível carregar as avaliações.', bad: true }))
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const total = q ? q.kinds.reduce((n, k) => n + k.up + k.down + k.missed, 0) : 0
+  const exportCsv = async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const r = await window.saga.exportAlertFeedback({ anonymize: anon })
+      if (r.status === 'saved') setMsg({ text: `Arquivo salvo com ${r.rows === 1 ? '1 avaliação' : `${r.rows} avaliações`} ✓`, bad: false })
+      else if (r.status === 'empty') setMsg({ text: 'Ainda não há avaliações para exportar.', bad: false })
+    } catch {
+      setMsg({ text: 'Não foi possível salvar o arquivo. Tente de novo.', bad: true })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section aria-labelledby="quality-title">
+      <h2 id="quality-title">Qualidade dos alertas</h2>
+      <p className="muted small">
+        Suas avaliações (👍 e 👎 nos alertas, e "Faltou um alerta?") dos últimos {q?.days ?? 30} dias. O Saga usa os exemplos
+        para errar menos.
+      </p>
+      {q && (
+        <table className="quality-table">
+          <thead>
+            <tr>
+              <th scope="col">Tipo</th>
+              <th scope="col">👍 Certos</th>
+              <th scope="col">👎 Errados</th>
+              <th scope="col">Faltou</th>
+              <th scope="col">% de acerto</th>
+            </tr>
+          </thead>
+          <tbody>
+            {q.kinds.map((k) => (
+              <tr key={k.kind}>
+                <th scope="row">{ALERT_LABELS[k.kind]}</th>
+                <td>{k.up}</td>
+                <td>{k.down}</td>
+                <td>{k.missed}</td>
+                <td>{pct(k.correctRate)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {q && total === 0 && <p className="muted small">Nenhuma avaliação ainda. Use 👍 e 👎 na faixa de alertas da conversa.</p>}
+      <div className="export-row">
+        <button type="button" className="btn" disabled={busy} onClick={() => void exportCsv()}>
+          {busy ? 'Exportando…' : 'Exportar avaliações (CSV)'}
+        </button>
+        <label className="check">
+          <input type="checkbox" checked={anon} onChange={(e) => setAnon(e.target.checked)} />
+          Anonimizar nomes
+        </label>
+      </div>
+      <p className="notice export-warn">
+        <strong>Atenção:</strong> o arquivo traz trechos das mensagens das conversas. Guarde e compartilhe com cuidado. "Anonimizar nomes"
+        troca o nome da conversa por "Contato 1", "Contato 2"…, mas nomes citados dentro das mensagens continuam lá.
+      </p>
+      {msg && (
+        <p className={msg.bad ? 'field-error' : 'ok-text'} role="status">
+          {msg.text}
+        </p>
+      )}
+    </section>
   )
 }
 

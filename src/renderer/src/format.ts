@@ -1,5 +1,6 @@
 import type { AppState } from '../../shared/api'
 import { WAIT_AMBER_MS, WAIT_RED_MS, type AlertKind } from '../../shared/triage'
+import { KIND_LABELS } from '../../shared/feedback'
 
 const timeFmt = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' })
 const dayFmt = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -210,13 +211,7 @@ export function waitTone(since: number, now = Date.now()): WaitTone {
   return 'neutral'
 }
 
-export const ALERT_LABELS: Record<AlertKind, string> = {
-  urgente: 'Urgente',
-  desanimo: 'Desânimo',
-  reuniao: 'Reunião',
-  travado: 'Travado',
-  esperando: 'Esperando'
-}
+export const ALERT_LABELS: Record<AlertKind, string> = KIND_LABELS
 
 /** Rótulo curto do selo; "esperando" diz há quantos dias ("Esperando 2 dias"). */
 export function alertChipLabel(kind: AlertKind, waitingSince: number | null, now = Date.now()): string {

@@ -104,6 +104,36 @@ Objetivo: nenhum mentorado fica sem resposta e o mentor age cedo nos sinais.
   escondidas); o clique abre "Para responder".
 - **Registro de diagnóstico:** uma linha por job (`classify result=… alerts=N ms=…`), sem jid nem texto.
 
+### Avaliação dos alertas (v0.2.1, a pedido do mentor)
+
+Objetivo: o classificador aprende com o mentor e as avaliações viram dados para análise.
+
+- **Dados:** `alerts` ganha `source` (`ai` | `rule` = "esperando" | `user` = marcado pelo mentor), `context_text` (a
+  janela exata que a IA viu: "Conversa anterior" + "Mensagens novas" numeradas) e `model`. Tabela
+  `alert_feedback(alert_id, jid, kind, msg_id, verdict 'up'|'down'|'missed', reason_code, reason_text, correct_kind,
+  context_text, detail, model, created_at)`: cada linha é um exemplo rotulado completo. Uma avaliação por alerta (mudar
+  de ideia atualiza a mesma linha). Alerta antigo sem janela guardada, e "faltou": as 8 mensagens até a escolhida (ou
+  as últimas).
+- **Conversa:** 👍/👎 (rótulos "Alerta correto"/"Alerta errado") só nos alertas da IA — "esperando" é regra e os
+  "marcados por você" são do próprio mentor. 👍 grava `up` e o alerta fica. 👎 abre "O que está errado neste alerta?":
+  motivo obrigatório (Não é esse tipo de alerta → "Qual seria o certo?" com os outros tipos + Nenhum; Era
+  brincadeira/ironia; Já foi resolvido; Não era comigo; Exagerado; Outro) e texto opcional; salvar resolve o alerta e,
+  com o tipo certo, cria esse (`source=user`). "Faltou um alerta?" no cabeçalho: tipo, mensagem opcional (as 10 últimas
+  do contato) e texto → `missed` + o alerta. Aviso discreto "Obrigado — o Saga vai aprender com isso".
+- **Aprendizado:** o prompt do `classify` leva até 6 avaliações recentes (primeiro da mesma conversa; depois das outras,
+  alternando os tipos; no máximo 2 👍), cada uma numa linha com o fim do trecho (≤ 400 caracteres): "Exemplo: mensagens
+  "…" → alerta X estava ERRADO porque: …" / "→ deveria ter alertado Y" / "→ … estava CERTO". "Já foi resolvido" não
+  vira exemplo (não diz nada sobre a mensagem). Depois de um 👎, a IA nunca recria o mesmo tipo para a mesma mensagem, e
+  não reescreve um alerta marcado pelo mentor.
+- **Configurações → Qualidade dos alertas:** por tipo, 👍/👎/faltou dos últimos 30 dias e % de acerto 👍/(👍+👎).
+  "Exportar avaliações (CSV)": o "Salvar como" é do processo principal (o caminho nunca vem da interface); UTF-8 com
+  BOM e ";" (o Excel em português usa ";"), colunas `data; tipo; avaliação; motivo; motivo_texto; tipo_correto;
+  conversa; trecho; detalhe; modelo`; células que começam com = + - @ ganham ' (sem fórmulas). "Anonimizar nomes"
+  (ligado por padrão) troca a conversa por "Contato N"; o aviso diz que o arquivo traz trechos das mensagens e que
+  nomes citados nelas continuam.
+- **Registro de diagnóstico:** `alert_feedback verdict=… reason=…|kind=…` e `alert_feedback_export rows=N`, sem texto
+  nem jid.
+
 ## Não-objetivos (v1)
 
 - Enviar mensagens pelo app (fica para a v2).

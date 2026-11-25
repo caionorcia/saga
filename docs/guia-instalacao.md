@@ -84,6 +84,14 @@ Para ninguém ficar sem resposta:
 
 Os alertas são procurados aos poucos, em segundo plano, pela IA **gratuita** da Groq (a mesma chave da transcrição), uma conversa de cada vez e só quando chega mensagem nova. O Saga **nunca** usa o Claude (pago) para isso. Sem a chave da Groq, só o alerta "Esperando" funciona. Contatos escondidos não são analisados.
 
+### Ensinar o Saga: 👍 e 👎 nos alertas (versão 0.2.1)
+
+- Cada alerta da IA tem dois botões na faixa da conversa: **👍** (o alerta está certo) e **👎** (está errado). O 👍 não tira o alerta: ele continua até você resolver.
+- O **👎** abre a janela "**O que está errado neste alerta?**". Escolha o motivo (por exemplo "Era brincadeira/ironia" ou "Não era comigo"); em "**Não é esse tipo de alerta**", diga qual seria o certo — o Saga troca o alerta por esse, marcado como "marcado por você". Se quiser, explique com suas palavras. Ao salvar, o alerta errado sai da lista.
+- O Saga deixou passar algo? Clique em "**Faltou um alerta?**", no canto do cabeçalho da conversa, escolha o tipo e, se quiser, a mensagem e um comentário. O alerta é criado na hora.
+- Cada avaliação vira um exemplo para a IA: as próximas análises levam alguns desses exemplos e o Saga não repete um alerta que você marcou como errado na mesma mensagem.
+- Em **Configurações → Qualidade dos alertas** você vê, por tipo, quantos 👍, 👎 e "faltou" houve nos últimos 30 dias e a % de acerto. O botão **Exportar avaliações (CSV)** salva uma planilha que abre no Excel. Com "**Anonimizar nomes**" (ligado por padrão), o nome de cada conversa vira "Contato 1", "Contato 2"… **Atenção:** a planilha traz trechos das mensagens; guarde e compartilhe com cuidado.
+
 Fechar a janela (no X) **não** encerra o Saga: ele continua na bandeja, perto do relógio. Para sair de verdade, clique com o botão direito no ícone e escolha **Sair**.
 
 ## 5. O que significa a faixa de cima

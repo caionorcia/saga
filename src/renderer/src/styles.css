@@ -263,3 +263,30 @@ a { color: var(--accent-dark); }
 .qr-details .events code { display: inline; }
 .diag-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .diag-actions p { flex-basis: 100%; margin: 0; }
+
+/* avaliação dos alertas (v0.2.1) */
+.conversation { position: relative; }
+.missed-link { margin-left: auto; flex: none; font-size: 13px; color: var(--muted); }
+.missed-link:hover { color: var(--accent-dark); }
+.alert-rate { display: inline-flex; gap: 2px; flex: none; }
+.rate-btn { width: 28px; height: 26px; border: 1px solid transparent; background: none; border-radius: 6px; cursor: pointer; font-size: 14px; line-height: 1; filter: grayscale(1); opacity: .8; }
+.rate-btn:hover, .rate-btn:focus-visible { background: #f1f5f5; border-color: var(--border); filter: none; opacity: 1; }
+.rate-btn.is-on { filter: none; opacity: 1; background: var(--accent-soft); border-color: #b9dcd8; }
+.alert-by-you { flex: none; font-style: italic; }
+.feedback-dialog { width: min(480px, 92vw); max-height: calc(100vh - 32px); overflow-y: auto; }
+.feedback-dialog fieldset { border: 0; margin: 10px 0 0; padding: 0; }
+.feedback-dialog legend { font-weight: 600; font-size: 14px; padding: 0; margin-bottom: 2px; }
+.feedback-dialog .check { margin: 4px 0; }
+.fb-sub { margin: 0 0 6px 26px; }
+.fb-sub label { margin-top: 2px; font-weight: 500; font-size: 13px; }
+select { font: inherit; color: inherit; width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 7px 8px; background: #fff; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 5; background: #24343a; color: #fff; font-size: 13.5px; padding: 8px 16px; border-radius: 99px; box-shadow: 0 4px 14px rgba(0,0,0,.2); white-space: nowrap; pointer-events: none; }
+/* qualidade dos alertas (configurações) */
+.quality-table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 8px 0 4px; }
+.quality-table th, .quality-table td { text-align: right; padding: 6px 8px; border-top: 1px solid #edf1f2; }
+.quality-table th:first-child, .quality-table td:first-child { text-align: left; }
+.quality-table thead th { border-top: 0; color: var(--muted); font-weight: 600; font-size: 13px; }
+.export-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; }
+.export-row .check { margin: 0; }
+.export-warn { margin-top: 12px; padding: 8px 12px; font-size: 13px; }
+.export-warn strong { color: #7a5410; }
