@@ -6,9 +6,11 @@ interface Props {
   state: AppState
   onOpenSettings: () => void
   settingsOpen: boolean
+  /** clique no contador "N para responder · M com alerta": mostrar a lista "Para responder" */
+  onShowAwaiting?: () => void
 }
 
-export function StatusBar({ state, onOpenSettings, settingsOpen }: Props) {
+export function StatusBar({ state, onOpenSettings, settingsOpen, onShowAwaiting }: Props) {
   const [busy, setBusy] = useState(false)
   const { conn, paused, diskLow, queue } = state
   const [now, setNow] = useState(() => Date.now())
@@ -44,6 +46,16 @@ export function StatusBar({ state, onOpenSettings, settingsOpen }: Props) {
       </div>
 
       <div className="status-info">
+        {(state.triage.awaiting > 0 || state.triage.withAlerts > 0) && (
+          <button
+            type="button"
+            className="triage-counter"
+            title="Ver as conversas esperando a sua resposta"
+            onClick={() => onShowAwaiting?.()}
+          >
+            <strong>{state.triage.awaiting}</strong> para responder · <strong>{state.triage.withAlerts}</strong> com alerta
+          </button>
+        )}
         {downloads && <span>{downloads}</span>}
         {queue.failed > 0 && (
           <span className="status-failed">

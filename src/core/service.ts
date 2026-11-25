@@ -252,6 +252,16 @@ export class SagaService extends EventEmitter {
       )
     })
     this.queue.onJobFailed((job) => {
+      if (job.type === 'classify') {
+        // alertas são um extra: um job que estourou o prazo 3 vezes não vira "áudios com falha" na barra de status
+        try {
+          repo.markJobDone(job.id)
+        } catch {
+          // banco fechado
+        }
+        this.markState()
+        return
+      }
       if (job.type === 'download_audio') {
         const c = repo.jobCounts('download_audio')
         if (c.pending + c.running === 0) this.downloadsDone = 0

@@ -68,9 +68,21 @@ O Saga traz os últimos 30 dias de conversas e baixa os áudios aos poucos, de p
 
 ![Tela principal](img/05-tela-principal.png)
 
-- **Esquerda:** as conversas, pessoas e grupos. A bolinha verde indica que alguém está aguardando a sua resposta (num grupo: a última mensagem não é sua). No topo, escolha **Todos**, **Individuais** ou **Grupos**; o Saga lembra a escolha. A busca procura pessoas e grupos.
+- **Esquerda:** as conversas, pessoas e grupos. O selo "há 3 h" indica que alguém está aguardando a sua resposta e há quanto tempo (num grupo: a última mensagem não é sua). No topo, escolha **Todos**, **Individuais** ou **Grupos**; o Saga lembra a escolha. A busca procura pessoas e grupos.
 - **Meio:** a conversa, com os áudios já transcritos e o resumo "O que a pessoa quer". Nos grupos, cada mensagem mostra o nome de quem mandou, as que mencionam você aparecem marcadas, e o resumo se chama "O que pedem a você": perguntas e pedidos para você, não um resumo do grupo inteiro.
 - **Direita:** sugestões de resposta (num grupo, mensagens para você postar no grupo). Edite como quiser, clique em **Copiar** e cole no WhatsApp. **Salvar** guarda a sua versão final para o Saga aprender o seu jeito. **Gerar novas** pede outras sugestões.
+
+### Fila do dia e alertas (versão 0.2.0)
+
+Para ninguém ficar sem resposta:
+
+- **Para responder**: o botão no alto da lista mostra só quem está esperando a sua resposta, **quem espera há mais tempo primeiro**. O número no botão diz quantas conversas são. O selo de cada conversa diz há quanto tempo a pessoa espera: cinza até 1 dia, **amarelo** de 1 a 2 dias e **vermelho** depois de 2 dias. Clique de novo no botão para voltar a ver todas.
+- **Com alerta**: mostra as conversas que pedem atenção, as mais graves primeiro. Os alertas aparecem como etiquetas coloridas na conversa: **Urgente** (pressa ou prazo), **Desânimo** (frustração, vontade de desistir, reclamação), **Travado** (uma dúvida impedindo de avançar), **Reunião** (pedido de reunião, ligação ou horário) e **Esperando 2 dias** (sem resposta há mais de 2 dias).
+- Ao abrir a conversa, uma faixa logo abaixo do nome explica cada alerta. Clique no texto do alerta para ir até a mensagem; clique em **Resolver** para tirá-lo da lista.
+- Quando você responde pelo WhatsApp, os alertas de Urgente, Travado, Reunião e Esperando somem sozinhos. O de **Desânimo** fica até você clicar em **Resolver**, para você lembrar de acompanhar a pessoa.
+- Na faixa de cima, "**5 para responder · 2 com alerta**" mostra o resumo do dia; clique nele para abrir a lista **Para responder**.
+
+Os alertas são procurados aos poucos, em segundo plano, pela IA **gratuita** da Groq (a mesma chave da transcrição), uma conversa de cada vez e só quando chega mensagem nova. O Saga **nunca** usa o Claude (pago) para isso. Sem a chave da Groq, só o alerta "Esperando" funciona. Contatos escondidos não são analisados.
 
 Fechar a janela (no X) **não** encerra o Saga: ele continua na bandeja, perto do relógio. Para sair de verdade, clique com o botão direito no ícone e escolha **Sair**.
 

@@ -1,4 +1,5 @@
 import type { AppState } from '../../shared/api'
+import { WAIT_AMBER_MS, WAIT_RED_MS, type AlertKind } from '../../shared/triage'
 
 const timeFmt = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' })
 const dayFmt = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -184,3 +185,42 @@ const EVENT_LABELS: Record<string, string> = {
 }
 
 export const eventLabel = (kind: string): string => EVENT_LABELS[kind] ?? 'Evento interno'
+
+// --- fila do dia e alertas ---
+
+export type WaitTone = 'neutral' | 'amber' | 'red'
+
+/** "agora", "há 15 min", "há 3 h", "há 1 dia", "há 2 dias" */
+export function formatWait(since: number, now = Date.now()): string {
+  const ms = Math.max(0, now - since)
+  const min = Math.floor(ms / 60_000)
+  if (min < 1) return 'agora'
+  if (min < 60) return `há ${min} min`
+  const h = Math.floor(min / 60)
+  if (h < 24) return `há ${h} h`
+  const d = Math.floor(h / 24)
+  return d === 1 ? 'há 1 dia' : `há ${d} dias`
+}
+
+/** Cor do selo da espera: neutra até 24 h, âmbar até 48 h, vermelha depois. */
+export function waitTone(since: number, now = Date.now()): WaitTone {
+  const ms = now - since
+  if (ms > WAIT_RED_MS) return 'red'
+  if (ms >= WAIT_AMBER_MS) return 'amber'
+  return 'neutral'
+}
+
+export const ALERT_LABELS: Record<AlertKind, string> = {
+  urgente: 'Urgente',
+  desanimo: 'Desânimo',
+  reuniao: 'Reunião',
+  travado: 'Travado',
+  esperando: 'Esperando'
+}
+
+/** Rótulo curto do selo; "esperando" diz há quantos dias ("Esperando 2 dias"). */
+export function alertChipLabel(kind: AlertKind, waitingSince: number | null, now = Date.now()): string {
+  if (kind !== 'esperando' || waitingSince === null) return ALERT_LABELS[kind]
+  const d = Math.max(2, Math.floor((now - waitingSince) / 86_400_000))
+  return `Esperando ${d} dias`
+}

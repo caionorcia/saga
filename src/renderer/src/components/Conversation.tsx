@@ -1,15 +1,23 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Analysis, Contact, MessageView } from '../../../shared/api'
-import { formatDayHeading, formatDuration, formatTime, initials, sameDay } from '../format'
+import type { Alert, AlertKind, Analysis, Contact, MessageView } from '../../../shared/api'
+import { alertChipLabel, formatDayHeading, formatDuration, formatTime, initials, sameDay } from '../format'
+import { AlertIcon } from './Alerts'
 import { GroupIcon } from './GroupIcon'
 
 interface Props {
   contact: Contact
   analysis: Analysis | null
+  /** alertas ativos desta conversa (mais graves primeiro) */
+  alerts?: Alert[]
+  /** "Resolver" */
+  onDismissAlert?: (kind: AlertKind) => void
 }
 
-export function Conversation({ contact, analysis }: Props) {
+const HIGHLIGHT_MS = 2_500
+
+export function Conversation({ contact, analysis, alerts = [], onDismissAlert }: Props) {
   const [messages, setMessages] = useState<MessageView[] | null>(null)
+  const [highlight, setHighlight] = useState<string | null>(null)
   const threadRef = useRef<HTMLDivElement>(null)
   /** o mentor está lendo o fim da conversa: acompanhar mensagens novas e mudanças de altura */
   const pinned = useRef(true)
@@ -45,6 +53,19 @@ export function Conversation({ contact, analysis }: Props) {
     return () => ro.disconnect()
   }, [])
 
+  // clicar num alerta: rola até a mensagem que o motivou e destaca por alguns segundos
+  useEffect(() => {
+    if (!highlight) return
+    const t = setTimeout(() => setHighlight(null), HIGHLIGHT_MS)
+    return () => clearTimeout(t)
+  }, [highlight])
+  const showMessage = (id: string) => {
+    const el = [...(threadRef.current?.querySelectorAll<HTMLElement>('[data-msg-id]') ?? [])].find((e) => e.dataset.msgId === id)
+    pinned.current = false
+    el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    setHighlight(id)
+  }
+
   return (
     <section className="conversation" aria-label={`${contact.isGroup ? 'Grupo' : 'Conversa com'} ${contact.displayName}`}>
       <header className="conv-head">
@@ -63,6 +84,16 @@ export function Conversation({ contact, analysis }: Props) {
           {contact.notes && <p className="muted small conv-notes">{contact.notes}</p>}
         </div>
       </header>
+
+      {alerts.length > 0 && (
+        <AlertBar
+          alerts={alerts}
+          waitingSince={contact.waitingSince}
+          canShow={(id) => !!messages?.some((m) => m.id === id)}
+          onShow={showMessage}
+          onDismiss={onDismissAlert}
+        />
+      )}
 
       <div className="summary-card" aria-live="polite">
         <h3>{contact.isGroup ? 'O que pedem a você' : 'O que a pessoa quer'}</h3>
@@ -100,7 +131,12 @@ export function Conversation({ contact, analysis }: Props) {
                   <span>{formatDayHeading(m.ts)}</span>
                 </div>
               )}
-              <Bubble m={m} sender={showSender ? (m.senderName ?? 'Participante') : null} group={contact.isGroup} />
+              <Bubble
+                m={m}
+                sender={showSender ? (m.senderName ?? 'Participante') : null}
+                group={contact.isGroup}
+                highlighted={highlight === m.id}
+              />
             </Fragment>
           )
         })}
@@ -120,9 +156,77 @@ function senderColor(key: string): string {
   return SENDER_COLORS[h % SENDER_COLORS.length]
 }
 
-function Bubble({ m, sender, group }: { m: MessageView; sender: string | null; group: boolean }) {
+/** Faixa fina sob o cabeçalho: cada alerta com o detalhe, "Ver mensagem" (quando há) e "Resolver". */
+function AlertBar({
+  alerts,
+  waitingSince,
+  canShow,
+  onShow,
+  onDismiss
+}: {
+  alerts: Alert[]
+  waitingSince: number | null
+  canShow: (id: string) => boolean
+  onShow: (id: string) => void
+  onDismiss?: (kind: AlertKind) => void
+}) {
+  const now = Date.now()
   return (
-    <div className={`bubble ${m.fromMe ? 'bubble-me' : 'bubble-them'}${group && !m.fromMe && !sender ? ' bubble-cont' : ''}`}>
+    <section className="alert-bar" aria-label="Alertas desta conversa">
+      <ul>
+        {alerts.map((a) => {
+          const label = alertChipLabel(a.kind, waitingSince, now)
+          const detail = a.kind === 'esperando' ? 'Responda no WhatsApp e o alerta some sozinho.' : a.detail
+          const linkable = a.msgId !== null && canShow(a.msgId)
+          const body = (
+            <>
+              <span className={`alert-chip alert-${a.kind}`}>
+                <AlertIcon kind={a.kind} />
+                {label}
+              </span>
+              <span className="alert-detail">{detail}</span>
+            </>
+          )
+          return (
+            <li key={a.kind} className="alert-item">
+              {linkable ? (
+                <button
+                  type="button"
+                  className="alert-main"
+                  aria-label={`Ver mensagem: ${label} — ${detail}`}
+                  title="Ver a mensagem na conversa"
+                  onClick={() => onShow(a.msgId!)}
+                >
+                  {body}
+                </button>
+              ) : (
+                <span className="alert-main">{body}</span>
+              )}
+              {onDismiss && (
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  aria-label={`Resolver alerta ${label}`}
+                  title="Tirar este alerta da lista"
+                  onClick={() => onDismiss(a.kind)}
+                >
+                  Resolver
+                </button>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
+}
+
+function Bubble({ m, sender, group, highlighted }: { m: MessageView; sender: string | null; group: boolean; highlighted?: boolean }) {
+  return (
+    <div
+      data-msg-id={m.id}
+      className={`bubble ${m.fromMe ? 'bubble-me' : 'bubble-them'}${group && !m.fromMe && !sender ? ' bubble-cont' : ''}${highlighted ? ' bubble-highlight' : ''}`}
+    >
       {sender && (
         <p className="bubble-sender" style={{ color: senderColor(senderKey(m)) }}>
           {sender}

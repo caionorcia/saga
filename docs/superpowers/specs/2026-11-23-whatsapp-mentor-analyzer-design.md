@@ -74,6 +74,36 @@ grupos ou só individuais.
   últimas 40 (para controlar o custo); contexto anterior: 20. A memória
   funciona igual (o "mesmo contato" é o grupo).
 
+## Fila do dia e alertas (v0.2.0, a pedido do mentor)
+
+Objetivo: nenhum mentorado fica sem resposta e o mentor age cedo nos sinais.
+
+- **Espera:** `waitingSince` = horário da primeira mensagem do contato depois da última do mentor (null se o
+  mentor falou por último). Selo na lista: "há 15 min", "há 3 h", "há 2 dias"; neutro até 24 h, âmbar de 24 a
+  48 h, vermelho depois de 48 h (constantes em `src/shared/triage.ts`).
+- **Lista:** dois botões de liga/desliga acima do filtro "Todos | Individuais | Grupos": **Para responder (N)**
+  (só quem espera, quem espera há mais tempo primeiro) e **Com alerta (M)** (gravidade: urgente > desânimo >
+  travado > reunião > esperando, depois a espera). Ficam separados do filtro de tipo porque combinam com ele
+  (ex.: "Para responder" + "Grupos") e cinco botões numa linha não cabem na coluna; o número no botão mostra o
+  tamanho da fila sem precisar clicar. A escolha fica guardada neste computador.
+- **Alertas:** tabela `alerts(jid, kind, detail, msg_id, created_at, dismissed_at)`, um ativo por conversa e
+  tipo. Tipos da IA: `urgente`, `desanimo`, `reuniao`, `travado`. Por regra (sem IA): `esperando`, mais de 48 h
+  sem resposta (em grupo, só se alguém mencionou o mentor nessa espera); resolvido à mão, não volta na mesma
+  espera. Resposta do mentor resolve urgente/travado/reunião/esperando; desânimo fica até o mentor resolver.
+- **Detecção pela IA, em segundo plano:** job `classify` (um por conversa) na fila única, com limitador próprio
+  (20–40 s entre chamadas, 60/h, 400/dia), aquecimento e um intervalo inteiro antes do primeiro job ao abrir
+  (sem rajada). Só a **Groq gratuita**, seja qual for o provedor das sugestões; sem chave da Groq, não há
+  alertas da IA (nunca gasta com o Claude em segundo plano). Respeita o teto diário e a escolha automática de
+  modelo. Só conversas não escondidas, com mensagem nova do contato nos últimos 7 dias; até 20 mensagens novas
+  + 6 de contexto, áudios como transcrição (espera até 30 min por um áudio ainda sendo transcrito), nome de
+  quem mandou nos grupos (e só sinais dirigidos ao mentor). `alert_checks` guarda até qual mensagem já se olhou:
+  a mesma janela nunca é analisada duas vezes. Saída JSON `{alerts:[{kind, detail ≤120, messageId}]}` lida com
+  cuidado; inválida → nenhum alerta, registrado. Erros da IA não viram "falha" na barra de status.
+- **Conversa:** faixa fina sob o cabeçalho com cada alerta, o detalhe, "Resolver" e, quando há, o clique que
+  rola até a mensagem e a destaca. **Barra de status:** "N para responder · M com alerta" (conversas, fora as
+  escondidas); o clique abre "Para responder".
+- **Registro de diagnóstico:** uma linha por job (`classify result=… alerts=N ms=…`), sem jid nem texto.
+
 ## Não-objetivos (v1)
 
 - Enviar mensagens pelo app (fica para a v2).

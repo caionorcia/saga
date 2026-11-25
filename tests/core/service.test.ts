@@ -737,6 +737,18 @@ describe('SagaService', () => {
       expect(service.state().triage).toEqual({ awaiting: 0, withAlerts: 0 })
     })
 
+    it('job de alertas que falha de vez não aparece como falha na barra de status', async () => {
+      repo.upsertContact({ jid: JID })
+      repo.insertJobIgnore('classify', `classify:${JID}`, { jid: JID, ts: NOW }, -1)
+      repo.markJobRunning(repo.listJobs('pending')[0].id)
+      const [job] = repo.listJobs('running')
+      repo.markJobFailed(job.id, 2, 'x', 0)
+      repo.markJobRunning(job.id)
+      service.queue.recoverAfterCrash()
+      expect(service.state().queue.failed).toBe(0)
+      expect(repo.listJobs('done').map((j) => j.type)).toEqual(['classify'])
+    })
+
     it('grupo: "esperando" só quando alguém mencionou o mentor na espera', async () => {
       const GRP = '120363025555555555@g.us'
       repo.upsertContact({ jid: GRP, isGroup: true })

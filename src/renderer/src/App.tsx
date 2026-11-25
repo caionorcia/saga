@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Analysis, AppState, Contact } from '../../shared/api'
-import { ContactList } from './components/ContactList'
+import type { Alert, Analysis, AppState, Contact } from '../../shared/api'
+import { ContactList, type ContactView } from './components/ContactList'
 import { Conversation } from './components/Conversation'
 import { QrCode } from './components/QrCode'
 import { Settings } from './components/Settings'
@@ -15,6 +15,8 @@ export function App() {
   const [wizard, setWizard] = useState<boolean | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
+  /** pedido da barra de status para a lista mostrar "Para responder" */
+  const [viewRequest, setViewRequest] = useState<{ view: ContactView; seq: number } | undefined>(undefined)
 
   useEffect(() => {
     let alive = true
@@ -42,7 +44,15 @@ export function App() {
     : connAlert(state.conn)
   return (
     <div className="app">
-      <StatusBar state={state} settingsOpen={settingsOpen} onOpenSettings={() => setSettingsOpen((o) => !o)} />
+      <StatusBar
+        state={state}
+        settingsOpen={settingsOpen}
+        onOpenSettings={() => setSettingsOpen((o) => !o)}
+        onShowAwaiting={() => {
+          setSettingsOpen(false)
+          setViewRequest((r) => ({ view: 'awaiting', seq: (r?.seq ?? 0) + 1 }))
+        }}
+      />
       {alert && (
         <div className="conn-alert" role="alert">
           {alert}
@@ -50,7 +60,13 @@ export function App() {
       )}
       <RelinkPanel state={state} />
       {/* a tela de conversas continua montada (escondida) para não perder rascunhos nem a posição */}
-      <Main hidden={settingsOpen} selected={selected} onSelect={setSelected} onOpenSettings={() => setSettingsOpen(true)} />
+      <Main
+        hidden={settingsOpen}
+        selected={selected}
+        onSelect={setSelected}
+        onOpenSettings={() => setSettingsOpen(true)}
+        viewRequest={viewRequest}
+      />
       {settingsOpen && <Settings />}
     </div>
   )
@@ -86,16 +102,19 @@ function Main({
   hidden,
   selected,
   onSelect,
-  onOpenSettings
+  onOpenSettings,
+  viewRequest
 }: {
   hidden: boolean
   selected: string | null
   onSelect: (jid: string | null) => void
   onOpenSettings: () => void
+  viewRequest?: { view: ContactView; seq: number }
 }) {
   const drafts = useRef<DraftStore>(new Map())
   const [contact, setContact] = useState<Contact | null>(null)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
+  const [alerts, setAlerts] = useState<Alert[]>([])
 
   // mantém o cabeçalho da conversa em dia (renomear, notas)
   useEffect(() => {
@@ -104,11 +123,17 @@ function Main({
       return
     }
     let alive = true
-    const load = () =>
+    const load = () => {
       window.saga
         .listContacts(true)
         .then((l) => alive && setContact(l.find((c) => c.jid === selected) ?? null))
         .catch(() => {})
+      window.saga
+        .listAlerts(selected)
+        .then((a) => alive && setAlerts(a))
+        .catch(() => {})
+    }
+    setAlerts([])
     void load()
     const off = window.saga.onContactsChanged(() => void load())
     return () => {
@@ -122,10 +147,19 @@ function Main({
 
   return (
     <div className="columns" hidden={hidden} style={cols.style}>
-      <ContactList selected={selected} onSelect={onSelect} />
+      <ContactList selected={selected} onSelect={onSelect} request={viewRequest} />
       <ColumnDivider {...cols.divider('left')} />
       {contact ? (
-        <Conversation key={contact.jid} contact={contact} analysis={analysis} />
+        <Conversation
+          key={contact.jid}
+          contact={contact}
+          analysis={analysis}
+          alerts={alerts.filter((a) => a.jid === contact.jid)}
+          onDismissAlert={(kind) => {
+            setAlerts((l) => l.filter((a) => a.kind !== kind))
+            void window.saga.dismissAlert(contact.jid, kind).catch(() => {})
+          }}
+        />
       ) : (
         <section className="conversation conversation-empty">
           <p>Escolha uma conversa na lista para ver as mensagens.</p>
