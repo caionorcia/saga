@@ -94,6 +94,15 @@ Os alertas são procurados aos poucos, em segundo plano, pela IA **gratuita** da
 
 Fechar a janela (no X) **não** encerra o Saga: ele continua na bandeja, perto do relógio. Para sair de verdade, clique com o botão direito no ícone e escolha **Sair**.
 
+### "Para responder" mais certeiro (versão 0.2.2)
+
+- Nem toda mensagem pede resposta. Quando a pessoa só manda "**obrigado**", "**ok**", "**valeu**", um **emoji** (👍 🙏) ou uma figurinha depois da sua resposta, o Saga tira a conversa de **Para responder** sozinho. A IA gratuita também avisa quando a mensagem é só informativa ou, num grupo, quando a conversa é entre os participantes e não com você. Na dúvida, a conversa fica na lista.
+- Essas conversas continuam em **Todos**, com a etiqueta cinza "**Não precisa responder**". Ao abrir, aparece "O Saga acha que esta conversa não precisa de resposta" e o motivo. Se ele errou, clique em **Precisa sim** e a conversa volta para a lista. Se ele acertou, clique em 👍.
+- O Saga deixou alguém na lista sem precisar? Clique em **Não precisa responder** (no alto da conversa, ou no ícone 💬✓ ao lado do nome, na lista **Para responder**) e escolha o motivo: "Era só agradecimento / ok / emoji", "Já respondi por outro meio (ligação, pessoalmente…)", "Mensagem de grupo que não é comigo", "Conversa encerrada" ou "Outro". A conversa sai da lista e o alerta "Esperando" some.
+- Isso vale até a pessoa mandar outra mensagem: aí a conversa volta para a lista e o Saga olha de novo.
+- O alerta **Esperando** e os alertas "marcados por você" agora também têm 👍 e 👎. No Esperando, o 👍 diz "precisa mesmo responder" e o 👎 abre a mesma janela "Por que esta conversa não precisa de resposta?".
+- Tudo isso ensina o Saga. Em **Configurações → Qualidade dos alertas**, a linha **Para responder** mostra quantas conversas você tirou, quantas devolveu e a % de acerto do Saga; essas avaliações também vão na planilha exportada (tipo "para_responder").
+
 ## 5. O que significa a faixa de cima
 
 A faixa no topo mostra como o Saga está.

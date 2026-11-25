@@ -114,8 +114,7 @@ Objetivo: o classificador aprende com o mentor e as avaliações viram dados par
   context_text, detail, model, created_at)`: cada linha é um exemplo rotulado completo. Uma avaliação por alerta (mudar
   de ideia atualiza a mesma linha). Alerta antigo sem janela guardada, e "faltou": as 8 mensagens até a escolhida (ou
   as últimas).
-- **Conversa:** 👍/👎 (rótulos "Alerta correto"/"Alerta errado") só nos alertas da IA — "esperando" é regra e os
-  "marcados por você" são do próprio mentor. 👍 grava `up` e o alerta fica. 👎 abre "O que está errado neste alerta?":
+- **Conversa:** 👍/👎 (rótulos "Alerta correto"/"Alerta errado") nos alertas da IA (na v0.2.2, em todos — ver abaixo). 👍 grava `up` e o alerta fica. 👎 abre "O que está errado neste alerta?":
   motivo obrigatório (Não é esse tipo de alerta → "Qual seria o certo?" com os outros tipos + Nenhum; Era
   brincadeira/ironia; Já foi resolvido; Não era comigo; Exagerado; Outro) e texto opcional; salvar resolve o alerta e,
   com o tipo certo, cria esse (`source=user`). "Faltou um alerta?" no cabeçalho: tipo, mensagem opcional (as 10 últimas
@@ -133,6 +132,54 @@ Objetivo: o classificador aprende com o mentor e as avaliações viram dados par
   nomes citados nelas continuam.
 - **Registro de diagnóstico:** `alert_feedback verdict=… reason=…|kind=…` e `alert_feedback_export rows=N`, sem texto
   nem jid.
+
+### "Para responder" mais certeiro e 👍/👎 em todos os alertas (v0.2.2, a pedido do mentor)
+
+Pedido do mentor: "Na lista de Para responder temos vários casos equivocados" (último recado era só "obrigado", "ok",
+emoji, figurinha, despedida, conversa de grupo que não era com ele, ou ele já tinha respondido por ligação) e "Por que
+somente uma conversa veio com positivo e negativo?" (o "esperando" e os alertas marcados por ele não tinham 👍/👎).
+
+- **Decisão por conversa:** tabela `reply_checks(jid, msg_id, app_needs, app_reason, app_source 'rule'|'ai', model,
+  user_needs, updated_at)`, uma linha por conversa, sobre a **última mensagem do contato** (`msg_id`). Vale a do mentor
+  (`user_needs`), senão a do Saga (`app_needs`), senão "precisa". Mensagem nova do contato = `msg_id` diferente = a
+  decisão não vale mais (volta para a lista até ser classificada de novo). `ContactRow` ganha `needsReply` (aguarda
+  resposta e ninguém decidiu que não precisa) e `replyDecision {needed, by, reason}`. "Para responder", o contador da
+  barra (`triage.awaiting`) e o selo de espera usam `needsReply`; a conversa que não precisa aparece em "Todos" com
+  "Sem pendência" e a etiqueta "Não precisa responder" (o motivo no `title`).
+- **Regra sem IA (antes da IA):** as mensagens do contato depois da última do mentor (até 6) são todas agradecimento/ok/
+  emoji/figurinha/risada/despedida curta: lista pt-BR sem acento nem maiúsculas ("ok", "obrigado(a)", "valeu", "show",
+  "top", "beleza", "combinado", "tchau", "kkk", 👍, 🙏…), até 4 palavras, sem "?"; emojis de tristeza/dúvida (😢 ❓)
+  não contam. Roda quando a mensagem chega (mesmo sem chave da Groq) e não agenda o `classify` (não gasta chamada).
+  Reações do WhatsApp nem viram mensagem (já eram descartadas na ingestão). Na dúvida, precisa.
+- **IA (o mesmo job `classify`, Groq, mesmo limitador):** a saída ganha `needsReply: boolean` e `reason` (≤ 100,
+  pt-BR) para as mensagens do contato depois da última do mentor. Prompt: agradecimento, ok, emoji, risada, despedida,
+  informativo sem pedido e (grupo) conversa entre participantes → false; pergunta, pedido, problema, menção ao mentor →
+  true; na dúvida, true. Sem o campo (ou formato estranho), nada é decidido. Não reescreve a decisão do mentor para a
+  mesma mensagem. Registro: `classify … reply=yes|no` (nunca texto).
+- **"esperando":** só nasce para conversa com `needsReply`; se a decisão virar "não precisa", o ativo é resolvido.
+- **Correções do mentor:** "Não precisa responder" no cabeçalho da conversa e, em "Para responder", um ícone em cada
+  linha → diálogo "Por que esta conversa não precisa de resposta?" (Era só agradecimento / ok / emoji; Já respondi por
+  outro meio (ligação, pessoalmente…); Mensagem de grupo que não é comigo; Conversa encerrada; Outro — obrigatório) +
+  texto opcional. Salvar: `user_needs = 0` para a última mensagem, sai da lista, "esperando" resolvido. Quando o Saga
+  decidiu, a conversa mostra "O Saga acha que esta conversa não precisa de resposta: <motivo>" com 👍 ("O Saga acertou")
+  e "Precisa sim" (devolve). Quando o mentor decidiu: "Você marcou que…" + "Precisa sim".
+- **Dados:** `reply_feedback(jid, msg_id, alert_id, verdict 'reply_not_needed'|'reply_needed'|'reply_ok', app_needs,
+  app_reason, app_source, reason_code, reason_text, context_text, model, created_at)`, uma por conversa e mensagem (mudar
+  de ideia atualiza). `context_text` = as últimas mensagens do contato (até 8), como a IA as lê. `app_needs` guarda o que
+  o Saga achava na hora (NULL = deixava na lista), para medir o acerto.
+- **Aprendizado:** o prompt do `classify` leva até 4 correções recentes (primeiro da mesma conversa): "Exemplo: mensagens
+  "…" → o mentor NÃO precisava responder: <motivo>" / "→ o mentor PRECISAVA responder". "Já respondi por outro meio" não
+  ensina (não diz nada sobre as mensagens).
+- **👍/👎 em todos os alertas:** também nos "marcados por você" (funcionam como os da IA, mas não entram no % de acerto da
+  IA) e no "esperando": 👍 grava `reply_needed` (com `alert_id`; o alerta fica marcado), 👎 abre o diálogo "não precisa
+  responder" (`setNeedsReply`). `rateAlert(…, 'down')` num "esperando" é recusado.
+- **Qualidade dos alertas:** linha "Para responder" (30 dias): removidos por você, devolvidos (o Saga tirou e você
+  devolveu), confirmados (👍) e % de acerto do Saga (o que ele achava × o que você disse; sem decisão = "precisa"). O CSV
+  traz essas linhas com `tipo = para_responder`, `avaliação` (Não precisa responder / Precisa responder / Correto),
+  motivo e, em `detalhe`, o que o Saga achava.
+- **API:** `setNeedsReply(jid, needed, reason?)` (motivo obrigatório quando `false`) e `confirmNoReply(jid)`, com
+  validação dos argumentos e checagem do remetente como as outras. Registro: `reply_feedback verdict=… reason=…`, sem
+  texto nem jid.
 
 ## Não-objetivos (v1)
 
