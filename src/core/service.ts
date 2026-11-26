@@ -36,11 +36,12 @@ import { KbImportError, importArchive, importFolder, importPastedText, importSin
 import { KB_LIMITS, type KbChunkView, type KbFilePatch, type KbImportResult, type KbPackageView } from '../shared/kb'
 import { audioUrlFor } from './media'
 import { runSearch } from './search/search'
+import { BackupManager } from './backup/manager'
 import { summarizeHits } from './ai/searchSummary'
 import type { SearchFilters, SearchResult, SearchSummaryResult } from '../shared/search'
 import { LIMITS, RateLimiter, type LimiterName } from './queue/limiter'
 import { JobQueue, type JobType } from './queue/queue'
-import { EncryptionUnavailableError, SettingsStore, testKey, type KeyKind, type Provider, type SettingsPatch } from './settings'
+import { EncryptionUnavailableError, SettingsStore, testKey, type Cipher, type KeyKind, type Provider, type SettingsPatch } from './settings'
 import type { NormalizedMessage } from './types'
 import { WhatsAppClient, type ConnState, type WhatsAppClientDeps } from './wa/client'
 import type { WaVersionFetcher } from './wa/version'
@@ -94,6 +95,19 @@ export interface SagaServiceOpts {
   fetchWaVersion?: WaVersionFetcher
   /** registro de diagnóstico (arquivo de log no processo principal) */
   diag?: (kind: string, detail: string) => void
+  /** cópia de segurança: a versão do app (vai no arquivo) e a cifra do sistema (senha das cópias automáticas) */
+  appVersion?: string
+  cipher?: Cipher
+}
+
+const NO_CIPHER: Cipher = {
+  isAvailable: () => false,
+  encrypt: () => {
+    throw new Error('criptografia indisponível')
+  },
+  decrypt: () => {
+    throw new Error('criptografia indisponível')
+  }
 }
 
 const EVER_CONNECTED = 'wa.everConnected'
@@ -171,6 +185,8 @@ const AI_MESSAGES: Record<AiErrorCode, string> = {
 export class SagaService extends EventEmitter {
   readonly queue: JobQueue
   readonly limiters: Record<LimiterName, RateLimiter>
+  /** cópia de segurança (v0.3.1) */
+  readonly backup: BackupManager
   private readonly wa: WaClientLike
   private readonly repo: Repo
   private readonly settings: SettingsStore
@@ -225,6 +241,18 @@ export class SagaService extends EventEmitter {
     this.llmFactory = opts.llmFactory ?? ((kind, key, o) => createLlm(kind, key, o))
     this.transcriberFactory = opts.transcriberFactory ?? ((kind, key, o) => createTranscriber(kind, key, fetch, o))
     this.cost = new CostTracker(repo, clock)
+    this.backup = new BackupManager({
+      repo,
+      settings: opts.settings,
+      cipher: opts.cipher ?? NO_CIPHER,
+      clock,
+      appVersion: opts.appVersion ?? '0.0.0',
+      diag: (k, d) => this.diag(k, d),
+      onRestored: () => {
+        this.markContacts()
+        this.markState()
+      }
+    })
 
     const lim = (name: LimiterName) => new RateLimiter(LIMITS[name], clock, rng, { repo, key: `limiter:${name}` })
     this.limiters = {

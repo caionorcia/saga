@@ -9,12 +9,22 @@ import type { ConnState } from '../core/wa/client'
 import type { KeyKind, Provider, Settings, SettingsPatch, ThemePref, TranscriberKind } from '../core/settings'
 import type { KbChunkView, KbFilePatch, KbImportResult, KbPackageView, KbRole, KbSource } from './kb'
 import type { SearchFilters, SearchResult, SearchSummaryResult } from './search'
+import type {
+  AutoBackupPatch,
+  BackupExportOptions,
+  BackupExportResult,
+  BackupOpenResult,
+  BackupRestoreMode,
+  BackupRestoreResult,
+  BackupStatus
+} from './backup'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind, ThemePref }
 export type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason }
 export type { KbChunkView, KbFilePatch, KbImportResult, KbPackageView, KbRole, KbSource }
 export type { SearchFilters, SearchResult, SearchSummaryResult }
+export type { AutoBackupPatch, BackupExportOptions, BackupExportResult, BackupOpenResult, BackupRestoreMode, BackupRestoreResult, BackupStatus }
 export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
@@ -265,6 +275,20 @@ export interface SagaApi {
   searchMessages(query: string, filters?: SearchFilters): Promise<SearchResult>
   /** "Resumir com IA": só quando o mentor clica; manda no máximo 30 trechos à IA das sugestões (dentro do teto diário) */
   summarizeSearch(query: string, filters?: SearchFilters): Promise<SearchSummaryResult>
+
+  // --- cópia de segurança (v0.3.1, Configurações › Cópia de segurança) ---
+  /** última cópia e a cópia automática */
+  backupStatus(): Promise<BackupStatus>
+  /** "Exportar cópia": abre "Salvar como" (`Saga-copia-AAAA-MM-DD.sagabackup`) e grava */
+  exportBackup(opts: BackupExportOptions): Promise<BackupExportResult>
+  /** "Restaurar cópia": abre o diálogo, lê o arquivo e mostra as contagens (ou pede a senha) */
+  restoreOpen(): Promise<BackupOpenResult>
+  restoreUnlock(token: string, password: string): Promise<BackupOpenResult>
+  /** aplica a cópia aberta: `merge` junta com o que existe; `replace` troca (a interface confirma antes) */
+  restoreApply(token: string, mode: BackupRestoreMode): Promise<BackupRestoreResult>
+  /** escolhe a pasta da cópia automática (diálogo do sistema) */
+  chooseBackupFolder(): Promise<BackupStatus>
+  setAutoBackup(patch: AutoBackupPatch): Promise<BackupStatus>
 }
 
 /** Métodos chamados por `ipcRenderer.invoke('saga:<nome>')`. */
@@ -309,7 +333,14 @@ export const INVOKE_METHODS = [
   'kbRemovePackage',
   'kbGetChunk',
   'searchMessages',
-  'summarizeSearch'
+  'summarizeSearch',
+  'backupStatus',
+  'exportBackup',
+  'restoreOpen',
+  'restoreUnlock',
+  'restoreApply',
+  'chooseBackupFolder',
+  'setAutoBackup'
 ] as const satisfies ReadonlyArray<keyof SagaApi>
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]

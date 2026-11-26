@@ -164,3 +164,35 @@ describe('IPC da busca geral', () => {
     expect(service.summarizeSearch).toHaveBeenCalledWith('preço', {})
   })
 })
+
+describe('IPC da cópia de segurança', () => {
+  let off: () => void
+  afterEach(() => {
+    off()
+    showSaveDialog.mockReset()
+  })
+
+  it('exportar: o caminho vem do "Salvar como" com o nome Saga-copia-AAAA-MM-DD.sagabackup; cancelar não grava', async () => {
+    const exportTo = vi.fn(() => ({ counts: { approvedReplies: 1 }, bytes: 10 }))
+    const saved = vi.fn()
+    const service = {
+      backup: { exportTo, status: vi.fn(() => ({})), restore: vi.fn(() => ({ status: 'restored' })) },
+      onState: vi.fn(() => () => {}),
+      onContactsChanged: vi.fn(() => () => {}),
+      on: vi.fn(),
+      off: vi.fn()
+    }
+    off = registerIpc(service as never, { getWindow: () => null, isTrustedSender: (u) => u === APP, onSettingsSaved: saved })
+    await expect(call('exportBackup', 'https://evil.example/', { includeMessages: false })).rejects.toThrow(/origem não confiável/)
+    showSaveDialog.mockResolvedValueOnce({ canceled: true, filePath: '' })
+    expect(await call('exportBackup', APP, { includeMessages: false })).toEqual({ status: 'canceled' })
+    expect(exportTo).not.toHaveBeenCalled()
+    expect(showSaveDialog.mock.calls[0][0]).toMatchObject({ defaultPath: expect.stringMatching(/Saga-copia-\d{4}-\d{2}-\d{2}\.sagabackup$/) })
+    showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: '/tmp/escolhido.sagabackup' })
+    expect(await call('exportBackup', APP, { includeMessages: true, password: 'segredo' })).toMatchObject({ status: 'saved', encrypted: true })
+    expect(exportTo).toHaveBeenCalledWith('/tmp/escolhido.sagabackup', { includeMessages: true, password: 'segredo', uiPrefs: undefined })
+    // restaurar aplica as configurações restauradas na hora
+    await call('restoreApply', APP, '0b6f2d4e-8a1c-4c3e-9f00-1234567890ab', 'merge')
+    expect(saved).toHaveBeenCalledTimes(1)
+  })
+})

@@ -3,6 +3,7 @@ import type { AlertQuality, AppState, KeyKind, ThemePref, RecentEvent, SaveSetti
 import { ALERT_LABELS, eventLabel, formatDay, formatTime, updateCheckText } from '../format'
 import { DiagnosticsActions } from './Diagnostics'
 import { KnowledgeBaseSection } from './KnowledgeBase'
+import { BackupSection } from './Backup'
 import { UpdateNotice } from './UpdateNotice'
 import { THEME_LABELS, setThemePref, useTheme } from '../theme'
 
@@ -128,6 +129,8 @@ export function Settings() {
           </div>
           <p className="muted small">Ao chegar nesse valor, o Saga para de usar IA paga até o dia seguinte.</p>
         </section>
+
+        <BackupSection />
 
         <ThemeSection />
 

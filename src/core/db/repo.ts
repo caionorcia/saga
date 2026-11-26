@@ -4,6 +4,7 @@ import type { NormalizedMessage } from '../types'
 import { ALERT_KINDS, AI_ALERT_KINDS, GROUP_ANSWER_MAX_MEMBERS, alertSeverity, type AlertKind } from '../../shared/triage'
 import type { KbSource } from '../../shared/kb'
 import { KbRepo } from './kbRepo'
+import { BackupRepo } from './backupRepo'
 import type { GroupAnswer, ReasonCode, ReplyDecision, ReplyDecisionSource, ReplyReasonCode, ReplyVerdict, Verdict } from '../../shared/feedback'
 
 /** Qualidade da fonte do nome guardado em `push_name` (maior vence; empate: o mais novo). */
@@ -422,12 +423,15 @@ const searchWhere = `AND (?2 = 'all' OR (?2 = 'group') = (c.is_group = 1))
 export class Repo {
   /** base de conhecimento (v0.3.0) */
   readonly kb: KbRepo
+  /** cópia de segurança (v0.3.1) */
+  readonly backup: BackupRepo
 
   constructor(
     private readonly db: DatabaseSync,
     private readonly clock: Clock = systemClock
   ) {
     this.kb = new KbRepo(db, clock)
+    this.backup = new BackupRepo(db)
   }
 
   // --- contatos ---

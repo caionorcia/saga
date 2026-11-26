@@ -7,6 +7,7 @@ import { REASON_CODES, REASON_TEXT_MAX, REPLY_REASON_CODES } from '../shared/fee
 import { AI_ALERT_KINDS } from '../shared/triage'
 import { KB_LIMITS, KB_ROLES } from '../shared/kb'
 import { SEARCH_KINDS, SEARCH_LIMITS, SEARCH_PERIODS } from '../shared/search'
+import { BACKUP_PASSWORD_MAX, BACKUP_PASSWORD_MIN } from '../shared/backup'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -137,6 +138,25 @@ function isSearch(a: unknown[]): boolean {
   return isObj(f) && Object.entries(f).every(([k, v]) => v === undefined || (SEARCH_FIELDS[k]?.(v) ?? false))
 }
 
+const isPassword = (v: unknown): v is string => isStr(v) && v.length >= BACKUP_PASSWORD_MIN && v.length <= BACKUP_PASSWORD_MAX
+const isToken = (v: unknown) => isStr(v) && /^[0-9a-f-]{36}$/.test(v)
+
+/** "Exportar cópia": senha opcional (6 a 200 caracteres), mensagens sim/não e as preferências da tela (curtas). */
+function isBackupExport(o: unknown): boolean {
+  if (!isObj(o) || !Object.keys(o).every((k) => k === 'password' || k === 'includeMessages' || k === 'uiPrefs')) return false
+  if (!isBool(o.includeMessages)) return false
+  if (o.password !== undefined && o.password !== '' && !isPassword(o.password)) return false
+  if (o.uiPrefs === undefined) return true
+  if (!isObj(o.uiPrefs)) return false
+  const e = Object.entries(o.uiPrefs)
+  return e.length <= 20 && e.every(([k, v]) => k.startsWith('saga.') && k.length <= 64 && isStr(v) && v.length <= 64)
+}
+
+function isAutoBackupPatch(p: unknown): boolean {
+  if (!isObj(p) || Object.keys(p).length === 0 || !Object.keys(p).every((k) => k === 'enabled' || k === 'password')) return false
+  return (p.enabled === undefined || isBool(p.enabled)) && (p.password === undefined || p.password === '' || isPassword(p.password))
+}
+
 const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   getState: () => true,
   listContacts: ([h, k]) => isBool(h) && (k === undefined || (CONTACT_KINDS as readonly unknown[]).includes(k)),
@@ -194,7 +214,14 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   kbRemovePackage: (a) => a.length === 1 && isId(a[0]),
   kbGetChunk: (a) => a.length === 1 && isId(a[0]),
   searchMessages: isSearch,
-  summarizeSearch: isSearch
+  summarizeSearch: isSearch,
+  backupStatus: (a) => a.length === 0,
+  exportBackup: (a) => a.length === 1 && isBackupExport(a[0]),
+  restoreOpen: (a) => a.length === 0,
+  restoreUnlock: (a) => a.length === 2 && isToken(a[0]) && isStr(a[1]) && a[1].length > 0 && a[1].length <= BACKUP_PASSWORD_MAX,
+  restoreApply: (a) => a.length === 2 && isToken(a[0]) && (a[1] === 'merge' || a[1] === 'replace'),
+  chooseBackupFolder: (a) => a.length === 0,
+  setAutoBackup: (a) => a.length === 1 && isAutoBackupPatch(a[0])
 }
 
 /** Lança `InvalidIpcArgsError` se os argumentos vindos da interface não tiverem o formato esperado. */

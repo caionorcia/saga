@@ -512,3 +512,21 @@ select { font: inherit; color: inherit; width: 100%; border: 1px solid var(--bor
 .contacts-list[hidden] { display: none; }
 .sug-not-needed p { margin: 0; }
 .sug-not-needed p:first-child { color: var(--text); font-weight: 600; }
+
+/* v0.3.1: cópia de segurança (configurações) */
+.backup-last { font-weight: 600; margin: 6px 0 10px; }
+.backup-box { border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); padding: 12px 14px; margin-top: 10px; }
+.backup-box h3 { margin: 0 0 6px; font-size: 15px; }
+.backup-box > .btn { margin-top: 8px; }
+.backup-pw { max-width: 340px; margin: 0 0 6px 26px; }
+.backup-pw label, .backup-unlock label, .backup-auto-pw label { font-size: 13px; margin: 8px 0 3px; }
+.backup-pw p { margin: 6px 0 0; }
+.backup-unlock { max-width: 360px; }
+.backup-preview ul { margin: 6px 0 10px; padding-left: 20px; }
+.backup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.backup-confirm { border: 1px solid var(--error-border); background: var(--error-bg); border-radius: 8px; padding: 10px 12px; }
+.backup-confirm p { margin: 0 0 8px; }
+.backup-folder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0; }
+.backup-folder code { font-size: 12px; overflow-wrap: anywhere; }
+.backup-auto-pw .inline-field { gap: 8px; max-width: 460px; }
+.backup-section > .ok-text, .backup-section > .field-error { min-height: 20px; margin-top: 8px; }

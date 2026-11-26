@@ -7,6 +7,7 @@ import type { GroupAnswer, ReplyDecision } from '../../../shared/feedback'
 import { GROUP_ANSWER_MAX_MEMBERS } from '../../../shared/triage'
 import { createFakeKb } from './fakeKb'
 import { buildSnippet, isEmptyQuery, matchedPieces, parseQuery } from '../../../core/search/query'
+import type { BackupCounts, BackupStatus } from '../../../shared/backup'
 import { SEARCH_LIMITS, SEARCH_PERIOD_DAYS, type SearchFilters, type SearchGroup, type SearchResult } from '../../../shared/search'
 import { AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../../shared/triage'
 import type {
@@ -293,6 +294,22 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     return { mode, terms: [...p.terms, ...p.phrases.map((x) => x.join(' '))], total: ranked.length, groups, tookMs: 3, ranked }
   }
 
+  /** cópia de segurança de demonstração (nada é gravado) */
+  const backup: BackupStatus = { lastAt: now - 3 * 86_400_000, auto: { enabled: true, folder: 'C:\\Users\\Mentor\\Google Drive\\Saga', hasPassword: true, lastAt: now - 3 * 86_400_000, lastError: null } }
+  const backupCounts = (withMessages: boolean): BackupCounts => ({
+    approvedReplies: 42,
+    contacts: 9,
+    alertFeedback: 17,
+    replyFeedback: 11,
+    kbPackages: 2,
+    kbFiles: 9,
+    settings: 5,
+    messages: withMessages ? demo.reduce((n, c) => n + c.messages.length, 0) : 0
+  })
+  /** a cópia "aberta" para restaurar: o token, se tem senha (a senha certa é "senha123") */
+  const opened = new Map<string, { encrypted: boolean; unlocked: boolean }>()
+  let backupSeq = 0
+
   const api: SagaApi = {
     get initialTheme() {
       return settings.theme
@@ -543,6 +560,46 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     searchMessages: async (query, filters) => {
       const { ranked: _, ...r } = searchDemo(query, filters)
       return record('searchMessages', [query, filters], r)
+    },
+    backupStatus: async () => structuredClone(backup),
+    exportBackup: async (o) => {
+      record('exportBackup', [o], undefined)
+      if (exportOutcome === 'canceled') return { status: 'canceled' }
+      backup.lastAt = Date.now()
+      return { status: 'saved', counts: backupCounts(o.includeMessages), bytes: o.includeMessages ? 2_400_000 : 380_000, encrypted: !!o.password }
+    },
+    restoreOpen: async () => {
+      record('restoreOpen', [], undefined)
+      if (exportOutcome === 'canceled') return { status: 'canceled' }
+      const token = `00000000-0000-4000-8000-${String(++backupSeq).padStart(12, '0')}`
+      opened.set(token, { encrypted: true, unlocked: false })
+      return { status: 'needs_password', token, createdAt: now - 2 * 86_400_000 }
+    },
+    restoreUnlock: async (token, password) => {
+      const o = opened.get(token)
+      if (!o) return { status: 'error', code: 'expired', message: 'Escolha o arquivo da cópia de novo.' }
+      if (password !== 'senha123') return { status: 'error', code: 'wrong_password', message: 'Senha incorreta. Confira e tente de novo.' }
+      o.unlocked = true
+      return { status: 'preview', token, preview: { createdAt: now - 2 * 86_400_000, appVersion: '0.3.1', encrypted: true, counts: backupCounts(false) } }
+    },
+    restoreApply: async (token, mode) => {
+      record('restoreApply', [token, mode], undefined)
+      const o = opened.get(token)
+      if (!o || (o.encrypted && !o.unlocked)) return { status: 'error', code: 'expired', message: 'Escolha o arquivo da cópia de novo.' }
+      opened.delete(token)
+      const c = backupCounts(false)
+      return { status: 'restored', mode, counts: mode === 'merge' ? { ...c, approvedReplies: 12, alertFeedback: 4, replyFeedback: 2, kbFiles: 3 } : c, uiPrefs: {} }
+    },
+    chooseBackupFolder: async () => {
+      record('chooseBackupFolder', [], undefined)
+      backup.auto.folder = 'C:\\Users\\Mentor\\OneDrive\\Saga'
+      return structuredClone(backup)
+    },
+    setAutoBackup: async (patch) => {
+      record('setAutoBackup', [patch], undefined)
+      if (patch.enabled !== undefined) backup.auto.enabled = patch.enabled
+      if (patch.password !== undefined) backup.auto.hasPassword = !!patch.password
+      return structuredClone(backup)
     },
     summarizeSearch: async (query, filters) => {
       record('summarizeSearch', [query, filters], undefined)

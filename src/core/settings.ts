@@ -66,6 +66,9 @@ const K = {
   theme: 'settings.theme'
 } as const
 
+/** Configurações que vão na cópia de segurança (nada de chaves nem do que só vale neste computador). */
+const BACKUP_FIELDS = ['provider', 'transcriber', 'dailyCapUsd', 'claudeModel', 'groqModel', 'theme'] as const
+
 const KEY_FIELDS: Record<KeyKind, 'groqKey' | 'claudeKey' | 'openaiKey'> = {
   groq: 'groqKey',
   claude: 'claudeKey',
@@ -116,6 +119,37 @@ export class SettingsStore {
     } catch {
       return null
     }
+  }
+
+  /** Para a cópia de segurança: só as configurações sem segredo que o mentor escolheu (chave da cópia → valor). */
+  exportable(): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const f of BACKUP_FIELDS) {
+      const v = this.repo.getSetting(K[f])
+      if (v !== null) out[f] = v
+    }
+    return out
+  }
+
+  /**
+   * Restaura as configurações da cópia (validadas como num `save`; o que for inválido é ignorado). `onlyMissing`:
+   * só as que ainda não foram escolhidas neste computador. Devolve quantas mudaram.
+   */
+  restore(values: Record<string, string>, opts: { onlyMissing: boolean }): number {
+    let n = 0
+    for (const f of BACKUP_FIELDS) {
+      const raw = values[f]
+      if (typeof raw !== 'string') continue
+      if (opts.onlyMissing && this.repo.getSetting(K[f]) !== null) continue
+      const patch: SettingsPatch = f === 'dailyCapUsd' ? { dailyCapUsd: Number(raw) } : ({ [f]: raw } as SettingsPatch)
+      try {
+        this.save(patch)
+        n++
+      } catch {
+        // valor inválido na cópia: fica o atual
+      }
+    }
+    return n
   }
 
   /** Valida tudo antes de gravar: ou o pedido inteiro é salvo, ou nada. */

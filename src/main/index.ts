@@ -11,7 +11,7 @@ import { createDiagLog, diagnosticsText, type DiagLog } from './diagLog'
 import { isAppUrl, isExternalHttpUrl, type AppOrigin } from './guards'
 import { registerIpc } from './ipc'
 import { THEME_ARG, type ThemePref } from '../shared/api'
-import { createSettingsStore } from './settings'
+import { createSettingsStore, safeStorageCipher } from './settings'
 import { startUpdater, updatesEnabled, type Updater } from './updater'
 import { initialUpdaterModel } from './updaterState'
 import { MIN_SIZE, WINDOW_STATE_KEY, parseWindowState, serializeWindowState, windowCreateOptions } from './windowState'
@@ -215,7 +215,9 @@ function main(): void {
       settings,
       paths: { authDir: join(data, 'auth'), backupDir: join(data, 'auth-backup'), mediaDir },
       waClientFactory: FakeWa ? () => new FakeWa(repo) : undefined,
-      diag: (kind, detail) => diagLog.write(kind, detail)
+      diag: (kind, detail) => diagLog.write(kind, detail),
+      appVersion: app.getVersion(),
+      cipher: safeStorageCipher
     })
     service = svc
 
@@ -243,7 +245,24 @@ function main(): void {
           if (fake) rmSync(data, { recursive: true, force: true })
         }))
 
+    // cópia automática semanal (Configurações › Cópia de segurança): confere de vez em quando e só roda com o
+    // computador parado há uns minutos ou a janela escondida, para não pesar enquanto o mentor usa
+    const AUTO_BACKUP_CHECK_MS = 30 * 60_000
+    const tryAutoBackup = () => {
+      if (quitting || stopped) return
+      const idle = powerMonitor.getSystemIdleTime() >= 120 || !win || !win.isVisible()
+      if (!idle) return
+      try {
+        svc.backup.runAutoIfDue()
+      } catch (err) {
+        diagLog.write('auto_backup', `erro ${err instanceof Error ? err.name : 'desconhecido'}`)
+      }
+    }
+    setTimeout(tryAutoBackup, 3 * 60_000).unref?.()
+    setInterval(tryAutoBackup, AUTO_BACKUP_CHECK_MS).unref?.()
+
     registerIpc(svc, {
+      onAutoBackupChanged: () => setTimeout(tryAutoBackup, 5_000),
       onDownloadUpdate: async () => updater?.download(),
       onCheckForUpdates: async () => (updater ? updater.checkNow() : svc.state().updateCheck),
       onInstallUpdate: async () => {

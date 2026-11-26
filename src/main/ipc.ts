@@ -1,10 +1,15 @@
 import { app, clipboard, dialog, ipcMain, type BrowserWindow } from 'electron'
-import { writeFile } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SagaService } from '../core/service'
 import { EVENTS, INVOKE_METHODS, invokeChannel, type InvokeMethod, type SagaApi, type UpdateCheck } from '../shared/api'
 import { validateIpcArgs } from './guards'
 import { SINGLE_FILE_EXT } from '../core/kb/importer'
+import { backupFileName } from '../core/backup/manager'
+import { BACKUP_ERROR_TEXT, BACKUP_EXT } from '../shared/backup'
+
+/** maior arquivo de cópia que o Saga abre */
+const BACKUP_MAX_BYTES = 900 * 1024 * 1024
 
 type Handlers = { [M in InvokeMethod]: (...args: Parameters<SagaApi[M]>) => ReturnType<SagaApi[M]> }
 
@@ -26,6 +31,8 @@ export interface IpcOptions {
   getDiagnostics?: () => { text: string; lines: number }
   /** "Abrir pasta de registros" */
   openLogsFolder?: () => Promise<void>
+  /** a cópia automática foi ligada/desligada (o processo principal confere se já está na hora) */
+  onAutoBackupChanged?: () => void
 }
 
 /** Liga cada método de `window.saga` ao serviço e repassa os eventos do serviço para a janela. */
@@ -124,7 +131,60 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     kbRemovePackage: (id) => service.kbRemovePackage(Number(id)),
     kbGetChunk: (id) => service.kbGetChunk(Number(id)),
     searchMessages: (q, f) => service.searchMessages(String(q), f ?? {}),
-    summarizeSearch: (q, f) => service.summarizeSearch(String(q), f ?? {})
+    summarizeSearch: (q, f) => service.summarizeSearch(String(q), f ?? {}),
+    backupStatus: async () => service.backup.status(),
+    exportBackup: async (o) => {
+      const w = opts.getWindow()
+      const dlgOpts = {
+        title: 'Exportar cópia de segurança',
+        defaultPath: join(app.getPath('documents'), backupFileName(Date.now())),
+        filters: [{ name: 'Cópia de segurança do Saga', extensions: [BACKUP_EXT] }]
+      }
+      const r = w ? await dialog.showSaveDialog(w, dlgOpts) : await dialog.showSaveDialog(dlgOpts)
+      if (r.canceled || !r.filePath) return { status: 'canceled' }
+      try {
+        // o caminho vem do diálogo do sistema (escolha do usuário), nunca da interface
+        const out = service.backup.exportTo(r.filePath, { includeMessages: o.includeMessages === true, password: o.password || undefined, uiPrefs: o.uiPrefs })
+        return { status: 'saved', counts: out.counts, bytes: out.bytes, encrypted: !!o.password }
+      } catch {
+        return { status: 'error', message: 'Não foi possível gravar a cópia nesse lugar. Escolha outra pasta.' }
+      }
+    },
+    restoreOpen: async () => {
+      const w = opts.getWindow()
+      const dlgOpts: Electron.OpenDialogOptions = {
+        title: 'Restaurar cópia de segurança',
+        properties: ['openFile'],
+        filters: [{ name: 'Cópia de segurança do Saga', extensions: [BACKUP_EXT, 'zip'] }]
+      }
+      const r = w ? await dialog.showOpenDialog(w, dlgOpts) : await dialog.showOpenDialog(dlgOpts)
+      if (r.canceled || !r.filePaths[0]) return { status: 'canceled' }
+      try {
+        if ((await stat(r.filePaths[0])).size > BACKUP_MAX_BYTES) return { status: 'error', code: 'invalid', message: BACKUP_ERROR_TEXT.invalid }
+        return service.backup.open(await readFile(r.filePaths[0]))
+      } catch {
+        return { status: 'error', code: 'invalid', message: BACKUP_ERROR_TEXT.invalid }
+      }
+    },
+    restoreUnlock: async (token, password) => service.backup.unlock(String(token), String(password)),
+    restoreApply: async (token, mode) => {
+      const r = service.backup.restore(String(token), mode === 'replace' ? 'replace' : 'merge')
+      // o tema e as outras configurações restauradas valem já (moldura da janela etc.)
+      if (r.status === 'restored') opts.onSettingsSaved?.()
+      return r
+    },
+    chooseBackupFolder: async () => {
+      const w = opts.getWindow()
+      const dlgOpts: Electron.OpenDialogOptions = { title: 'Pasta das cópias automáticas', properties: ['openDirectory', 'createDirectory'] }
+      const r = w ? await dialog.showOpenDialog(w, dlgOpts) : await dialog.showOpenDialog(dlgOpts)
+      if (r.canceled || !r.filePaths[0]) return service.backup.status()
+      return service.backup.setAutoFolder(r.filePaths[0])
+    },
+    setAutoBackup: async (patch) => {
+      const st = service.backup.setAuto(patch)
+      opts.onAutoBackupChanged?.()
+      return st
+    }
   }
 
   for (const m of INVOKE_METHODS) {
