@@ -78,6 +78,9 @@
   --wave: light-dark(#8fb3b0, #5f8f8a);
   --progress-bg: light-dark(#e2ebea, #24363a);
   --spinner-track: light-dark(#cfe3e1, #24413e);
+  /* "Foco": conversas que não pedem resposta (v0.3.1) */
+  --dim-opacity: .28;
+  --dim-hover-opacity: .7;
   /* nome de quem mandou num grupo (fixo por pessoa) */
   --sender-0: light-dark(#0b6e69, #6fd6cc);
   --sender-1: light-dark(#8a4b08, #ffb870);
@@ -404,9 +407,14 @@ select { font: inherit; color: inherit; width: 100%; border: 1px solid var(--bor
 .focus-toggle { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); background: var(--btn-bg); color: var(--muted); border-radius: 99px; padding: 3px 10px 3px 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .focus-toggle:hover { color: var(--text); border-color: var(--border-strong); background: var(--btn-hover); }
 .focus-toggle.is-active { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-text); }
-.contact.is-dim .contact-main { opacity: .45; }
-.contact.is-dim .contact-badges { filter: grayscale(1); }
-.contact.is-dim.is-selected .contact-main, .contact.is-dim:hover .contact-main, .contact.is-dim:focus-within .contact-main { opacity: .75; }
+/* v0.3.1: bem mais apagadas (sem cor, chips inclusive) para as que pedem resposta saltarem aos olhos; ao passar o mouse
+   ou com o teclado, sobem para .7 e continuam usáveis. Vale nos dois temas (opacidade sobre o fundo do painel). */
+.contact.is-dim .contact-main { opacity: var(--dim-opacity); filter: grayscale(100%); transition: opacity .12s ease, filter .12s ease; }
+.contact.is-dim .contact-badges > * { filter: grayscale(100%) saturate(0); }
+.contact.is-dim .avatar { filter: grayscale(100%); }
+.contact.is-dim > .icon-btn, .contact.is-dim .contact-menu-wrap > .icon-btn { opacity: var(--dim-opacity); }
+.contact.is-dim.is-selected .contact-main, .contact.is-dim:hover .contact-main, .contact.is-dim:focus-within .contact-main { opacity: var(--dim-hover-opacity); }
+.contact.is-dim:hover .contact-menu-wrap > .icon-btn, .contact.is-dim:focus-within .contact-menu-wrap > .icon-btn { opacity: 1; }
 .contact.is-dim.is-hidden { opacity: 1; }
 
 /* v0.3.0: base de conhecimento (configurações) */

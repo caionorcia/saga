@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, nativeImage, nativeTheme, net, powerMonitor, protocol, shell, Tray } from 'electron'
+import { app, BrowserWindow, Menu, nativeImage, nativeTheme, net, powerMonitor, protocol, screen, shell, Tray } from 'electron'
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { arch, release, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,6 +14,7 @@ import { THEME_ARG, type ThemePref } from '../shared/api'
 import { createSettingsStore } from './settings'
 import { startUpdater, updatesEnabled, type Updater } from './updater'
 import { initialUpdaterModel } from './updaterState'
+import { MIN_SIZE, WINDOW_STATE_KEY, parseWindowState, serializeWindowState, windowCreateOptions } from './windowState'
 
 // círculo verde 16x16 (sem arquivo de recurso para empacotar)
 const TRAY_ICON =
@@ -78,10 +79,25 @@ function applyNativeTheme(theme: ThemePref): void {
   if (win && !win.isDestroyed()) win.setBackgroundColor(windowBackground())
 }
 
-function createWindow(theme: ThemePref): BrowserWindow {
+/** Onde o tamanho/posição da janela fica guardado (no banco, `settings_kv`). */
+interface WindowStore {
+  get(): string | null
+  set(v: string): void
+}
+
+function createWindow(theme: ThemePref, store: WindowStore): BrowserWindow {
+  // padrão: maximizada; se o mentor tirou do maximizado, volta como deixou (encaixado numa tela que existe agora)
+  const saved = parseWindowState(store.get())
+  const place = windowCreateOptions(
+    saved,
+    screen.getAllDisplays().map((d) => d.workArea)
+  )
   const w = new BrowserWindow({
-    width: 1100,
-    height: 760,
+    width: place.width,
+    height: place.height,
+    ...(place.x !== undefined && place.y !== undefined ? { x: place.x, y: place.y } : {}),
+    minWidth: MIN_SIZE.width,
+    minHeight: MIN_SIZE.height,
     show: false,
     backgroundColor: windowBackground(),
     webPreferences: {
@@ -107,9 +123,34 @@ function createWindow(theme: ThemePref): BrowserWindow {
     if (!isAppUrl(url, appOrigin)) e.preventDefault()
   })
   w.webContents.on('will-attach-webview', (e) => e.preventDefault())
-  w.once('ready-to-show', () => w.show())
+  // maximiza antes de mostrar (sem piscar no tamanho normal); `maximize()` já mostra a janela
+  w.once('ready-to-show', () => {
+    if (place.maximize) w.maximize()
+    w.show()
+  })
+  // guarda maximizada ou não + o tamanho normal (com uma pausa: arrastar dispara muitos eventos)
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
+  const saveNow = () => {
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = null
+    if (w.isDestroyed() || w.isFullScreen() || w.isMinimized()) return
+    try {
+      store.set(serializeWindowState({ maximized: w.isMaximized(), bounds: w.getNormalBounds() }))
+    } catch {
+      // banco fechado (saindo): fica o último estado salvo
+    }
+  }
+  const saveSoon = () => {
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(saveNow, 400)
+  }
+  w.on('maximize', saveNow)
+  w.on('unmaximize', saveNow)
+  w.on('resize', saveSoon)
+  w.on('move', saveSoon)
   // fechar a janela só esconde: o app continua lendo o WhatsApp na bandeja
   w.on('close', (e) => {
+    saveNow()
     if (!quitting) {
       e.preventDefault()
       w.hide()
@@ -260,7 +301,10 @@ function main(): void {
 
     const theme = settings.theme()
     applyNativeTheme(theme)
-    win = createWindow(theme)
+    win = createWindow(theme, {
+      get: () => repo.getSetting(WINDOW_STATE_KEY),
+      set: (v) => repo.setSetting(WINDOW_STATE_KEY, v)
+    })
     // abrir a janela (inclusive pela bandeja) também procura uma versão nova, se a última procura foi há um tempo
     win.on('show', () => updater?.onActivity())
     win.on('focus', () => updater?.onActivity())

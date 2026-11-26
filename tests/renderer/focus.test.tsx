@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ContactList, needsMentor } from '../../src/renderer/src/components/ContactList'
 import { createFakeSaga } from '../../src/renderer/src/dev/fakeSaga'
 import type { Contact } from '../../src/shared/api'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const FOCUS_KEY = 'saga.focus'
 const rowOf = (name: string) => screen.getByText(name, { selector: '.contact-name' }).closest('li')!
@@ -89,5 +91,16 @@ describe('Foco', () => {
     expect(needsMentor(c({}))).toBe(true)
     expect(needsMentor(c({ needsReply: false }))).toBe(false)
     expect(needsMentor(c({ hidden: true }))).toBe(false)
+  })
+
+  it('v0.3.1: as apagadas ficam bem mais escuras (0,28, sem cor, chips inclusive) e sobem para 0,7 ao passar o mouse', () => {
+    const css = readFileSync(resolve(__dirname, '../../src/renderer/src/styles.css'), 'utf8')
+    expect(css).toMatch(/--dim-opacity:\s*\.28;/)
+    expect(css).toMatch(/--dim-hover-opacity:\s*\.7;/)
+    expect(css).toMatch(/\.contact\.is-dim \.contact-main \{[^}]*opacity: var\(--dim-opacity\)[^}]*grayscale\(100%\)/)
+    expect(css).toMatch(/\.contact\.is-dim \.contact-badges > \* \{[^}]*grayscale\(100%\)/)
+    expect(css).toMatch(/\.contact\.is-dim:hover \.contact-main[^{]*\{[^}]*opacity: var\(--dim-hover-opacity\)/)
+    // um valor só (light-dark não entra): o mesmo nos dois temas
+    expect(css).not.toMatch(/--dim-opacity:\s*light-dark/)
   })
 })
