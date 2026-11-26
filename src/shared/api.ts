@@ -164,7 +164,10 @@ export interface SagaApi {
   /** chegou mensagem (ou transcrição) desse contato: chamar `listMessages(jid)` de novo */
   onMessages(jid: string, cb: () => void): Unsubscribe
 
-  /** `kind`: todas (padrão), só individuais ou só grupos */
+  /**
+   * `kind`: todas (padrão), só individuais ou só grupos. `includeHidden`: desde a v0.3.0 a interface não esconde mais
+   * conversas (telefone só profissional) e sempre passa `false`; os escondidos antigos foram mostrados de novo.
+   */
   listContacts(includeHidden: boolean, kind?: ContactKind): Promise<Contact[]>
   listMessages(jid: string): Promise<MessageView[]>
   /** alertas ativos de uma conversa, ou de todas as não escondidas (mais graves primeiro) */
@@ -199,7 +202,6 @@ export interface SagaApi {
   copyToClipboard(text: string): Promise<void>
 
   renameContact(jid: string, name: string): Promise<void>
-  setHidden(jid: string, hidden: boolean): Promise<void>
   setNotes(jid: string, text: string): Promise<void>
 
   pauseAll(): Promise<void>
@@ -268,7 +270,6 @@ export const INVOKE_METHODS = [
   'saveReply',
   'copyToClipboard',
   'renameContact',
-  'setHidden',
   'setNotes',
   'pauseAll',
   'resumeAll',

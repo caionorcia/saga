@@ -166,6 +166,7 @@ const EVENT_LABELS: Record<string, string> = {
   kb_import: 'Base de conhecimento importada',
   kb_import_error: 'Erro ao importar para a base de conhecimento',
   kb_removed: 'Pacote removido da base de conhecimento',
+  unhidden_requeue: 'Conversas escondidas voltaram a aparecer',
   ipc_refused: 'Chamada bloqueada por segurança',
   reconcile_error: 'Erro ao conferir mensagens enviadas',
   emit_error: 'Erro ao atualizar a tela',

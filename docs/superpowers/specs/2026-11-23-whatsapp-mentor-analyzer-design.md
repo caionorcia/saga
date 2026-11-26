@@ -30,7 +30,8 @@ cada vez menos correção.
   - **Esquerda:** lista de conversas individuais (mentorados), ordenada pela
     mensagem mais recente, com indicador de "aguardando resposta"
     (última mensagem foi do mentorado). Busca por nome. Botão para
-    esconder contatos que não são mentorados (persistente).
+    esconder contatos que não são mentorados (persistente). Removido na v0.3.0: o telefone é só profissional
+    (ver "Sem conversas escondidas").
   - **Centro:** histórico da conversa (mensagens de ambos os lados, com
     data/hora); áudios aparecem como texto transcrito (com opção de ouvir o
     original). No topo, um resumo curto: "O que a pessoa quer".
@@ -292,6 +293,15 @@ Cada mentorado costuma ter o próprio grupo, onde o mentor responde.
   escondidas) ficam apagadas (opacidade ~0,45, selos em cinza), mas na lista e clicáveis; as que pedem resposta ficam
   normais. Vale com todos os filtros e nos dois temas. Lembrado por computador (`localStorage`, com try/catch).
 
+### Sem conversas escondidas (v0.3.0, a pedido do mentor)
+
+- O telefone é estritamente profissional: saíram "Mostrar escondidos" e "Esconder/Mostrar" do menu ⋯ (sem o primeiro,
+  esconder seria irreversível) e o método `setHidden` da interface (`SagaApi`, preload e `guards`).
+- Migração v11: `contacts.hidden = 0` para todos; a lista dos que estavam escondidos vai para
+  `settings_kv['migration.unhidden_jids']` e, ao iniciar, o serviço devolve à fila (`requeue`, no ritmo normal) os áudios
+  deles sem transcrição (baixar, ou só transcrever se o arquivo já existe), apaga a lista e registra só contagens
+  (`unhidden_requeue`). A coluna e os caminhos do núcleo que olham `hidden` continuam, inofensivos (sempre 0).
+
 ## Não-objetivos (v1)
 
 - Enviar mensagens pelo app (fica para a v2).
@@ -494,7 +504,7 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 
 ## Dados (esboço)
 
-- `contacts` (jid, nome, escondido, notas, é_grupo)
+- `contacts` (jid, nome, escondido — sempre 0 desde a v0.3.0, notas, é_grupo)
 - `group_members` (grupo, participante: telefone e @lid), `group_sizes` (grupo, nº de participantes) e `message_targets` (mensagem do mentor, quem ela menciona ou cita) — v0.2.3
 - `messages` (id, jid, de_mim, timestamp, tipo, texto, caminho_audio,
   transcricao, status_transcricao; em grupos: remetente, nome_remetente,

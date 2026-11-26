@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { InvalidIpcArgsError, isAppUrl, isExternalHttpUrl, validateIpcArgs } from '../../src/main/guards'
+import { INVOKE_METHODS } from '../../src/shared/api'
 
 const INDEX = resolve('/app/resources/app.asar/out/renderer/index.html')
 const DEV = 'http://localhost:5173'
@@ -84,8 +85,6 @@ describe('validateIpcArgs', () => {
     ok('renameContact', 'a', 'Ana')
     ok('renameContact', 'a', '')
     bad('renameContact', 'a', null)
-    ok('setHidden', 'a', true)
-    bad('setHidden', 'a', 'true')
     ok('setNotes', 'a', 'notas')
     bad('setNotes', '', 'notas')
     ok('listContacts', false)
@@ -279,6 +278,10 @@ describe('alertas', () => {
 describe('base de conhecimento', () => {
   const ok = (m: any, ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).not.toThrow()
   const bad = (m: any, ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).toThrow(InvalidIpcArgsError)
+
+  it('v0.3.0: "setHidden" não existe mais na interface', () => {
+    expect((INVOKE_METHODS as readonly string[]).includes('setHidden')).toBe(false)
+  })
 
   it('importar e adicionar: o caminho nunca vem da interface (só o tipo do diálogo)', () => {
     ok('kbList')

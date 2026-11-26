@@ -62,7 +62,6 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     saveReply: (input) => service.saveReply(input),
     copyToClipboard: async (text) => clipboard.writeText(String(text)),
     renameContact: (jid, name) => service.renameContact(String(jid), String(name)),
-    setHidden: (jid, hidden) => service.setHidden(String(jid), !!hidden),
     setNotes: (jid, text) => service.setNotes(String(jid), String(text)),
     pauseAll: () => service.pauseAll(),
     resumeAll: () => service.resumeAll(),

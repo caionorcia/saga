@@ -9,9 +9,10 @@ import schemaV7 from './schema-v7.sql?raw'
 import schemaV8 from './schema-v8.sql?raw'
 import schemaV9 from './schema-v9.sql?raw'
 import schemaV10 from './schema-v10.sql?raw'
+import schemaV11 from './schema-v11.sql?raw'
 
 /** Migrações em ordem; o índice + 1 é o `user_version` resultante. */
-const MIGRATIONS: string[] = [schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10]
+const MIGRATIONS: string[] = [schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11]
 
 export function openDb(file: string | ':memory:'): DatabaseSync {
   const db = new DatabaseSync(file)

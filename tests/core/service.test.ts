@@ -587,6 +587,18 @@ describe('SagaService', () => {
       const keys = repo.listJobs('pending').map((j) => `${j.type}:${j.key}`).sort()
       expect(keys).toEqual(['download_audio:h1', 'transcribe:transcribe:h2'])
     })
+
+    it('v0.3.0: ao iniciar, os áudios das conversas que estavam escondidas (migração v11) voltam à fila uma vez', async () => {
+      audio('u1')
+      audio('u2', { file: true })
+      repo.setSetting('migration.unhidden_jids', JSON.stringify([JID]))
+      await service.start()
+      const keys = repo.listJobs('pending').map((j) => `${j.type}:${j.key}`).sort()
+      expect(keys).toEqual(['download_audio:u1', 'transcribe:transcribe:u2'])
+      expect(repo.getSetting('migration.unhidden_jids')).toBeNull()
+      const ev = repo.recentEvents(20).find((e) => e.kind === 'unhidden_requeue')!
+      expect(ev.detail).toBe('1 conversa(s) voltaram a aparecer; 2 áudio(s) de volta à fila')
+    })
   })
 
   describe('configurações', () => {

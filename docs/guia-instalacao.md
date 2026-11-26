@@ -82,7 +82,7 @@ Para ninguém ficar sem resposta:
 - Quando você responde pelo WhatsApp, os alertas de Urgente, Travado, Reunião e Esperando somem sozinhos. O de **Desânimo** fica até você clicar em **Resolver**, para você lembrar de acompanhar a pessoa.
 - Na faixa de cima, "**5 para responder · 2 com alerta**" mostra o resumo do dia; clique nele para abrir a lista **Para responder**.
 
-Os alertas são procurados aos poucos, em segundo plano, pela IA **gratuita** da Groq (a mesma chave da transcrição), uma conversa de cada vez e só quando chega mensagem nova. O Saga **nunca** usa o Claude (pago) para isso. Sem a chave da Groq, só o alerta "Esperando" funciona. Contatos escondidos não são analisados.
+Os alertas são procurados aos poucos, em segundo plano, pela IA **gratuita** da Groq (a mesma chave da transcrição), uma conversa de cada vez e só quando chega mensagem nova. O Saga **nunca** usa o Claude (pago) para isso. Sem a chave da Groq, só o alerta "Esperando" funciona.
 
 ### Ensinar o Saga: 👍 e 👎 nos alertas (versão 0.2.1)
 
@@ -145,9 +145,13 @@ Nas sugestões, aparece **Baseado em:** com o arquivo e a seção usados (só os
 
 ### Foco (versão 0.3.0)
 
-O botão **Foco**, no alto da lista de conversas, apaga as conversas que **não precisam** da sua resposta (você falou por último, o Saga ou você marcou "Não precisa responder", foi respondido no grupo, ou está escondida). Elas continuam na lista e dá para abrir normalmente; as que esperam a sua resposta ficam em destaque. Funciona junto com **Para responder**, **Com alerta**, **Individuais/Grupos** e a busca, nos dois temas. Clique de novo para desligar; o Saga lembra a escolha neste computador.
+O botão **Foco**, no alto da lista de conversas, apaga as conversas que **não precisam** da sua resposta (você falou por último, o Saga ou você marcou "Não precisa responder", ou foi respondido no grupo). Elas continuam na lista e dá para abrir normalmente; as que esperam a sua resposta ficam em destaque. Funciona junto com **Para responder**, **Com alerta**, **Individuais/Grupos** e a busca, nos dois temas. Clique de novo para desligar; o Saga lembra a escolha neste computador.
 
 ![Foco ligado](img/foco.png)
+
+### Sem conversas escondidas (versão 0.3.0)
+
+Como o telefone do Saga é só profissional, a opção **Mostrar escondidos** e o **Esconder/Mostrar** do menu ⋯ saíram. Se você tinha escondido alguma conversa numa versão anterior, ela volta a aparecer, e os áudios dela que ficaram sem baixar entram na fila aos poucos, no ritmo normal.
 
 ## 5. O que significa a faixa de cima
 

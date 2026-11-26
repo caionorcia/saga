@@ -86,7 +86,7 @@ function writeFocus(on: boolean): void {
 
 /**
  * Pede a resposta do mentor (fica normal no "Foco"): aguarda resposta e nem o Saga nem o mentor disseram que não
- * precisa (inclui "Respondido no grupo" como não precisa). Conversa escondida nunca pede.
+ * precisa (inclui "Respondido no grupo" como não precisa). Conversa escondida (de versões antigas) nunca pede.
  */
 export const needsMentor = (c: Contact): boolean => c.needsReply && !c.hidden
 
@@ -131,7 +131,6 @@ const VIEW_EMPTY: Record<Exclude<ContactView, 'all'>, string> = {
 
 export function ContactList({ selected, onSelect, request }: Props) {
   const [contacts, setContacts] = useState<Contact[] | null>(null)
-  const [showHidden, setShowHidden] = useState(false)
   const [kind, setKindState] = useState<ContactKind>(readKind)
   const [view, setViewState] = useState<ContactView>(readView)
   const [focus, setFocusState] = useState<boolean>(readFocus)
@@ -149,7 +148,7 @@ export function ContactList({ selected, onSelect, request }: Props) {
     let alive = true
     const load = () =>
       window.saga
-        .listContacts(showHidden, kind)
+        .listContacts(false, kind)
         .then((c) => {
           if (!alive) return
           setContacts(c)
@@ -162,7 +161,7 @@ export function ContactList({ selected, onSelect, request }: Props) {
       alive = false
       off()
     }
-  }, [showHidden, kind])
+  }, [kind])
 
   const setKind = (k: ContactKind) => {
     if (k === kind) return
@@ -297,10 +296,6 @@ export function ContactList({ selected, onSelect, request }: Props) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <label className="check">
-          <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
-          Mostrar escondidos
-        </label>
       </div>
 
       <ul className="contacts-list">
@@ -397,16 +392,6 @@ export function ContactList({ selected, onSelect, request }: Props) {
                 <div className="menu" role="menu">
                   <button type="button" role="menuitem" onClick={() => setEditing({ jid: c.jid, mode: 'rename' })}>
                     Renomear
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      void window.saga.setHidden(c.jid, !c.hidden)
-                      if (!c.hidden && selected === c.jid && !showHidden) onSelect(null)
-                    }}
-                  >
-                    {c.hidden ? 'Mostrar' : 'Esconder'}
                   </button>
                   <button type="button" role="menuitem" onClick={() => setEditing({ jid: c.jid, mode: 'notes' })}>
                     Notas

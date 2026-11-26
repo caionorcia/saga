@@ -404,12 +404,6 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       else names.delete(jid)
       contactListeners.forEach((l) => l())
     },
-    setHidden: async (jid, h) => {
-      if (h) hidden.add(jid)
-      else hidden.delete(jid)
-      contactListeners.forEach((l) => l())
-      emitState()
-    },
     setNotes: async (jid, text) => {
       notes.set(jid, text)
       contactListeners.forEach((l) => l())

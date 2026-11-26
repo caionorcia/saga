@@ -147,7 +147,6 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
     (i.analysisLastMsgId === null || i.analysisLastMsgId === undefined || isStr(i.analysisLastMsgId)),
   copyToClipboard: ([t]) => isStr(t),
   renameContact: ([j, n]) => nonEmpty(j) && isStr(n),
-  setHidden: ([j, h]) => nonEmpty(j) && isBool(h),
   setNotes: ([j, t]) => nonEmpty(j) && isStr(t),
   pauseAll: () => true,
   resumeAll: () => true,

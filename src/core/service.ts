@@ -55,6 +55,9 @@ import type {
   Unsubscribe
 } from '../shared/api'
 
+/** Migração v11: conversas que estavam escondidas (os áudios delas voltam para a fila ao iniciar). */
+const UNHIDDEN_KEY = 'migration.unhidden_jids'
+
 /** O que o serviço usa do cliente do WhatsApp (o real ou um falso nos testes / modo SAGA_FAKE_WA). */
 export interface WaClientLike {
   on(event: 'qr' | 'status' | 'message' | 'disk' | 'contacts', listener: (arg: any) => void): unknown
@@ -397,6 +400,7 @@ export class SagaService extends EventEmitter {
 
   private async doStart(): Promise<void> {
     this.queue.recoverAfterCrash()
+    this.requeueUnhidden()
     for (const l of Object.values(this.limiters)) l.startWarmup()
     // alertas em segundo plano: o primeiro só sai depois de um intervalo inteiro (nada de rajada ao abrir)
     this.limiters.classify.markFinished()
@@ -676,22 +680,51 @@ export class SagaService extends EventEmitter {
     this.scheduleEmit()
   }
 
-  /** Esconder para de baixar/transcrever os áudios do contato; mostrar de novo devolve os que faltam à fila. */
+  /**
+   * Esconder para de baixar/transcrever os áudios do contato; mostrar de novo devolve os que faltam à fila.
+   * Desde a v0.3.0 a interface não esconde mais (telefone só profissional): fica para o núcleo e os testes.
+   */
   async setHidden(jid: string, hidden: boolean): Promise<void> {
     this.repo.setHidden(jid, hidden)
-    if (!hidden) {
-      for (const m of this.repo.listMessages(jid)) {
-        if (m.kind !== 'audio' || m.transcriptStatus !== null) continue
-        if (m.audioPath && existsSync(m.audioPath)) {
-          this.queue.requeue('transcribe', `transcribe:${m.id}`, { id: m.id, durationSec: m.durationSec, ts: m.ts })
-        } else {
-          this.queue.requeue('download_audio', m.id, { id: m.id, ts: m.ts })
-        }
-      }
-    }
+    if (!hidden) this.requeueMissingAudio(jid)
     this.pendingContacts = true
     this.pendingState = true
     this.scheduleEmit()
+  }
+
+  /** Devolve à fila (no ritmo normal) os áudios do contato ainda sem transcrição: baixar ou só transcrever. */
+  private requeueMissingAudio(jid: string): number {
+    let n = 0
+    for (const m of this.repo.listMessages(jid)) {
+      if (m.kind !== 'audio' || m.transcriptStatus !== null) continue
+      if (m.audioPath && existsSync(m.audioPath)) {
+        this.queue.requeue('transcribe', `transcribe:${m.id}`, { id: m.id, durationSec: m.durationSec, ts: m.ts })
+      } else {
+        this.queue.requeue('download_audio', m.id, { id: m.id, ts: m.ts })
+      }
+      n++
+    }
+    return n
+  }
+
+  /**
+   * Migração v11 (v0.3.0): os contatos que estavam escondidos voltaram a aparecer; os áudios que ficaram sem baixar ou
+   * transcrever enquanto eles estavam escondidos voltam para a fila. Roda uma vez (a lista é apagada depois).
+   */
+  private requeueUnhidden(): void {
+    const raw = this.repo.getSetting(UNHIDDEN_KEY)
+    if (raw === null) return
+    let jids: unknown = []
+    try {
+      jids = JSON.parse(raw)
+    } catch {
+      // lista corrompida: só apaga
+    }
+    let audios = 0
+    const list = Array.isArray(jids) ? jids.filter((j): j is string => typeof j === 'string') : []
+    for (const jid of list) audios += this.requeueMissingAudio(jid)
+    this.repo.deleteSetting(UNHIDDEN_KEY)
+    this.repo.logEvent('unhidden_requeue', `${list.length} conversa(s) voltaram a aparecer; ${audios} áudio(s) de volta à fila`)
   }
 
   async setNotes(jid: string, text: string): Promise<void> {

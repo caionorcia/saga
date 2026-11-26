@@ -43,7 +43,7 @@ describe('Foco', () => {
     expect(document.querySelectorAll('.contact.is-dim')).toHaveLength(0)
   })
 
-  it('lembra a escolha e funciona junto com os filtros (só grupos, Para responder, escondidos)', async () => {
+  it('lembra a escolha e funciona junto com os filtros (só grupos, Para responder)', async () => {
     localStorage.setItem(FOCUS_KEY, '1')
     render(<ContactList selected={null} onSelect={() => {}} />)
     await screen.findByText('Ana Paula Souza', { selector: '.contact-name' })
@@ -70,6 +70,18 @@ describe('Foco', () => {
     expect(btn.getAttribute('aria-pressed')).toBe('false')
     fireEvent.click(btn)
     expect(btn.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('v0.3.0: sem "Mostrar escondidos" nem "Esconder/Mostrar" no menu (telefone só profissional)', async () => {
+    const list = vi.spyOn(window.saga, 'listContacts')
+    render(<ContactList selected={null} onSelect={() => {}} />)
+    await screen.findByText('Ana Paula Souza', { selector: '.contact-name' })
+    expect(screen.queryByLabelText('Mostrar escondidos')).toBeNull()
+    expect(list).toHaveBeenCalledWith(false, 'all')
+    fireEvent.click(screen.getByRole('button', { name: 'Opções de Ana Paula Souza' }))
+    const items = screen.getAllByRole('menuitem').map((b) => b.textContent)
+    expect(items).toEqual(['Renomear', 'Notas'])
+    expect('setHidden' in window.saga).toBe(false)
   })
 
   it('needsMentor: precisa de resposta e não está escondida', () => {
