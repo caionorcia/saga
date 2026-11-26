@@ -212,3 +212,11 @@ updates: Array<{ id: string,
 ## Cancelamento
 Se a equipe cancelar no Copiloto, o próximo `followups_pending` não traz mais o item; se o SagaZap já mostrou o
 aviso, o `followup_update` volta `cancelled` e o SagaZap remove o aviso (se ainda não enviou).
+
+## Implementação no SagaZap (v0.7.0)
+- A busca vem depois dos eventos pendentes da fila (no máximo alguns minutos de atraso durante a carga inicial).
+- `final_text` vai com no máximo 10000 caracteres; o texto do envio é limitado a 4000 na tela.
+- Resultado `invalid` (por item, ou 400 no lote) é final: não reenvia. `cancelled` de um já enviado conta como
+  confirmado (o Copiloto guarda o envio).
+- Envio que não saiu (falha, fora do horário, cancelado pelo mentor) não vira `failed`: o aviso volta a esperar o
+  mentor, que envia de novo ou recusa.

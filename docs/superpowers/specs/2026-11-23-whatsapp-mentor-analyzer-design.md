@@ -1,6 +1,6 @@
 # SagaZap (antes Saga) — Assistente de respostas para mentorados (WhatsApp)
 
-Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.6.2, IAs gratuitas de reserva)
+Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.7.0, follow-up do Copiloto)
 
 ## Intenção e o porquê
 
@@ -530,6 +530,32 @@ cadastrados lá. O contrato com o servidor é `2026-11-26-copiloto-integration.m
 - **Conferir no aparelho real:** o caminho do @lid (telefone conhecido só depois do histórico), a ordem entre o eco de
   um envio e o `sent`, o desempenho dos gatilhos numa importação grande com a integração ligada e o `safeStorage` do
   código no Windows.
+
+### Follow-up do Copiloto (v0.7.0, contrato v1.1)
+
+A equipe escreve o follow-up no Copiloto; o SagaZap mostra na conversa e o mentor confirma cada envio. Contrato:
+adendo v1.1 de `2026-11-26-copiloto-integration.md`.
+
+- **Busca:** `{action:"followups_pending"}` na mesma fila de 1 requisição por vez do Copiloto, ao ligar/abrir e a cada
+  5 min (depois dos eventos pendentes); falha → espera crescente (1 → 30 min), 401 para tudo. Guarda em
+  `copiloto_followups` (schema v18), dedupe pelo `id`.
+- **Conversa:** grupo pelo `chat.key`; individual pelo hash do telefone nas duas formas do 9º dígito (@lid pelo
+  telefone conhecido; duas conversas da mesma pessoa → a mais recente). Sem conversa → `failed`
+  `conversa_nao_encontrada`.
+- **Tela:** selo 📨 e filtro "Do Copiloto (n)" na lista; na coluna das sugestões, o cartão "Mensagem do Copiloto — por
+  <autor>, <data>" com "Abrir para enviar" (caixa da mensagem avulsa preenchida, editável, até 4000 caracteres) e
+  "Recusar" (motivo opcional, até 200). Nunca envia sozinho.
+- **Envio:** é a mensagem avulsa, com o id do follow-up como id do rascunho: confirmação, horário/"Forçar envio",
+  regra dos 30 dias, ritmo e tetos, marcar como lida, sem citação, sem memória. Um follow-up com envio na fila,
+  saindo, desconhecido ou enviado não aceita outro (nem com texto editado). Envio que não saiu (falhou, expirou,
+  cancelado) volta o aviso a "esperando" com o motivo. A regra dos 30 dias barrando → `failed` `fora_30_dias`.
+- **Relatório:** `{action:"followup_update"}` com `sent` (texto que saiu, até 10000; `sent_at` do eco, ou da hora do
+  envio se o eco não chegar em 2 min), `declined` e `failed`; até 100 por pedido, reenvio com espera crescente até o
+  200. `updated`, `duplicate`, `invalid` e `cancelled` são finais; `cancelled` tira o aviso de um que não saiu (num já
+  enviado, conta como confirmado). 400 conclui o lote (nunca em laço).
+- **Reiniciar no meio:** a ligação está no banco (`send_id` e o id do rascunho na chave do envio); o envio
+  desconhecido é conferido como sempre e o relatório sai certo. Desligar a integração apaga os follow-ups; se o
+  Copiloto mandar de novo um que já saiu daqui, ele volta como enviado, nunca como oferta de envio.
 
 ### Versão 0.3.1 (a pedido do mentor)
 

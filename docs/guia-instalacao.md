@@ -313,6 +313,17 @@ A linha embaixo mostra quantos eventos estão **pendentes**, o **último envio**
 
 Ao desligar, a fila deste computador é apagada. O que já foi enviado continua no Copiloto.
 
+### Mensagens do Copiloto (versão 0.7.0)
+
+Com o Copiloto da Saga ligado, a equipe pode escrever no Copiloto uma mensagem para um mentorado (ou um grupo). O SagaZap busca essas mensagens a cada 5 minutos:
+
+- Na lista de conversas aparece **📨** na conversa e o filtro **Do Copiloto** com quantas estão esperando você.
+- Abra a conversa: no alto da coluna das sugestões fica o aviso **Mensagem do Copiloto**, com quem escreveu e quando.
+- **Abrir para enviar** coloca o texto na caixa da mensagem avulsa. Edite à vontade e clique em **Enviar**: aparece a confirmação de sempre (horário de envio, "Forçar envio", ritmo seguro). Nada sai sem o seu clique.
+- **Recusar** não envia. Pode escrever um motivo (opcional) para a equipe.
+
+A equipe vê no Copiloto se foi enviada (com o texto que saiu, se você editou), recusada ou se não deu para enviar (por exemplo, o mentorado não escreve há mais de 30 dias, ou a conversa não está neste computador). Mensagens do Copiloto não entram no aprendizado das sugestões.
+
 ## 5. O que significa a faixa de cima
 
 A faixa no topo mostra como o SagaZap está.
