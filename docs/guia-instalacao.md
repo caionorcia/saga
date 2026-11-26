@@ -324,6 +324,16 @@ Com o Copiloto da Saga ligado, a equipe pode escrever no Copiloto uma mensagem p
 
 A equipe vê no Copiloto se foi enviada (com o texto que saiu, se você editou), recusada ou se não deu para enviar (por exemplo, o mentorado não escreve há mais de 30 dias, ou a conversa não está neste computador). Mensagens do Copiloto não entram no aprendizado das sugestões.
 
+#### Envio automático (versão 0.8.0)
+
+Em **Configurações › Copiloto da Saga** há a opção **Enviar follow-ups do Copiloto automaticamente** (vem desligada). Ligada, as mensagens que o Copiloto marcar como automáticas (só as de administradores, que já confirmaram lá) saem **sem a tela de confirmação**, com as mesmas travas de sempre: só para quem escreveu nos últimos 30 dias, "digitando…", marcar como lida, intervalo de 30 a 90 segundos entre envios e no máximo **30 automáticas por dia** (o resto fica para o dia seguinte).
+
+- Elas só saem **no horário de envio**, nunca com "Forçar envio". Fora dele, saem no próximo horário com alguns minutos a mais (7 a 25 minutos depois da abertura, nunca no minuto em que abre). Com o computador desligado nessa hora, saem depois que o SagaZap abrir, com as mesmas regras.
+- Só saem com o WhatsApp conectado. Sem conexão, esperam.
+- Na conversa, no lugar do aviso com "Abrir para enviar", aparece uma linha: **📨 Follow-up do Copiloto: envio automático às 09:14** (depois "enviando…" e "enviado ✓"). **Não enviar** cancela: a equipe vê que você recusou.
+- Se o SagaZap não souber se uma mensagem saiu (a conexão caiu no meio), ele **não envia de novo sozinho**: o aviso volta a ser o de sempre, com **Conferir**.
+- Desligar a opção vale na hora: o que ainda não saiu fica esperando você, como antes. As mensagens que o Copiloto não marcar como automáticas continuam pedindo a sua confirmação.
+
 ## 5. O que significa a faixa de cima
 
 A faixa no topo mostra como o SagaZap está.
@@ -383,7 +393,7 @@ Se o aviso não aparecer mesmo com uma versão nova publicada, clique em **Confi
 - A chave de acesso é guardada com a criptografia do Windows.
 - Só saem do computador: o **texto das conversas** e os **áudios**, enviados para a IA que você escolheu (Groq e, se configurado, Claude ou OpenAI, e as reservas gratuitas Gemini e Mistral quando a principal está no limite) para transcrever e gerar sugestões, e, se você importou uma **base de conhecimento**, o resumo das regras e os trechos usados em cada sugestão.
 - Com o **Copiloto da Saga** ligado (vem desligado), as conversas dos mentorados cadastrados lá também vão para o Copiloto (veja "Copiloto da Saga").
-- O SagaZap lê conversas individuais e grupos. Ele só escreve no WhatsApp quando você confirma um envio (a mensagem, o "digitando…" e marcar como lida aquela conversa) e nunca muda nada nos grupos. Status, canais e listas de transmissão são ignorados.
+- O SagaZap lê conversas individuais e grupos. Ele só escreve no WhatsApp quando você confirma um envio (ou, com o envio automático do Copiloto ligado, quando sai uma mensagem do Copiloto marcada como automática) (a mensagem, o "digitando…" e marcar como lida aquela conversa) e nunca muda nada nos grupos. Status, canais e listas de transmissão são ignorados.
 
 ## 8. Desinstalar
 

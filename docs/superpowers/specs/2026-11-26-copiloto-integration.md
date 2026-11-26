@@ -240,3 +240,20 @@ Aprovado pelo mentor (único usuário do SagaZap):
 - Sem mudança no `followup_update`.
 - No Copiloto, follow-ups **enviados** (e cancelados) saem da lista do quadro; ficam só os pendentes e os que
   falharam ou foram recusados (com "dispensar"). A mensagem enviada continua visível na conversa.
+
+## Implementação no SagaZap (v0.8.0)
+- `auto_send` ausente, `null` ou de outro tipo = `false`. Guardado no primeiro recebimento (dedupe pelo `id`).
+- A opção fica em Configurações › Copiloto da Saga (`copiloto.autoFollowups`). O envio automático confere por dentro
+  com o mesmo `prepareSend` e o mesmo token de uso único do `sendAvulsa` (id do follow-up = id do rascunho) e marca o
+  envio como automático (`sends.auto`); o `executeSend` confere de novo a opção, a integração e o follow-up antes do
+  "digitando…" e logo antes de enviar.
+- O horário escolhido (abertura + 7..25 min) fica gravado no follow-up. Um por vez, só com a conexão de pé há 1 min e o
+  teto do WhatsApp livre. O limite de 30 conta, no banco, os automáticos que saíram, estão saindo ou ficaram de estado
+  desconhecido desde a meia-noite local.
+- Estado desconhecido → o automático daquele item acaba (cartão da v1.1 com "Conferir"); nunca reenvia sozinho. Envio
+  que não chegou a sair (conexão caiu antes, horário acabou) tenta de novo no máximo 3 vezes, com as mesmas regras;
+  depois volta ao cartão.
+- "Não enviar" = `declined` `recusado_pelo_mentor` (cancela o envio se ainda estiver na fila).
+- **Limite conhecido:** o SagaZap só fica sabendo de um cancelamento feito no Copiloto pelo `followup_update`
+  (`cancelled`), ou seja, depois de enviar. Um item automático já recebido e cancelado lá antes do horário ainda pode
+  sair. Para fechar isso, o Copiloto precisaria informar os cancelados (ex.: na resposta do `followups_pending`).

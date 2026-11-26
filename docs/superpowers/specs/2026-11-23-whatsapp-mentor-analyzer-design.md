@@ -557,6 +557,37 @@ adendo v1.1 de `2026-11-26-copiloto-integration.md`.
   desconhecido é conferido como sempre e o relatório sai certo. Desligar a integração apaga os follow-ups; se o
   Copiloto mandar de novo um que já saiu daqui, ele volta como enviado, nunca como oferta de envio.
 
+### Follow-up com envio automático (v0.8.0, contrato v1.2)
+
+O mentor aprovou: o clique "Enviar pelo SagaZap" de um administrador no Copiloto, com a janela de confirmação de lá, é a
+confirmação dele. Contrato: adendo v1.2 de `2026-11-26-copiloto-integration.md`.
+
+- **Opção:** Configurações › Copiloto da Saga › "Enviar follow-ups do Copiloto automaticamente" (desligada por padrão;
+  `copiloto.autoFollowups`). Desligada, ou `auto_send: false` → v0.7.0 sem mudança (cartão e confirmação).
+- **Mesmo caminho, sem tela:** `FollowupAutoSender` (`src/core/copiloto/autoSend.ts`) chama, por dentro, o mesmo
+  `prepareSend({ kind: 'avulsa' })` (nunca `forced`) e gasta o token no mesmo `sendAvulsa` (id do follow-up = id do
+  rascunho, mesma idempotência); daí em diante é a fila `send_message` e o `executeSend` (único caminho de escrita),
+  com ritmo de 30–90 s, 40/h e 200/dia, horário de envio, 30 dias, "digitando…", marcar como lida, nunca cita,
+  expiração por queda/reinício/10 min e conferência pelo id. O `sendAvulsa` da interface nunca é automático (os guardas
+  recusam qualquer campo a mais). `sends.auto` (schema v19) marca o envio.
+- **Conferência extra no `executeSend`** (`sendGuard`): antes do "digitando…" e logo antes de enviar, um envio
+  automático só sai se a opção, a integração e o envio direto continuam ligados e o follow-up dele ainda está saindo;
+  senão expira ("envio automático desligado"). Desligar a opção (ou a integração) expira na hora o que está na fila.
+- **Quando sai:** dentro do horário, já; nunca nos primeiros 7 min da abertura (espera abertura + 7..25 min). Fora do
+  horário, o próximo horário + 7..25 min sorteados, gravados em `copiloto_followups.auto_at` (reiniciar não sorteia de
+  novo; app fechado na hora → sai depois de abrir, com as mesmas regras e ainda nunca na abertura). Um automático por
+  vez, só quando nenhum envio está na fila, com a conexão aberta há 1 min, sem "Pausar tudo", e sem pôr na fila quando
+  o teto do WhatsApp só libera daqui a mais de 2 min (expiraria lá). Varredura de 15 s, e a cada envio que termina.
+- **Limite próprio:** 30 automáticos por dia local (contados em `sends`: saíram, saindo ou desconhecidos); o
+  excedente vai para a abertura do dia seguinte + 7..25 min.
+- **Nunca reenviar no escuro:** desconhecido → `auto_off` (cartão da v0.7.0 com "Conferir"; nem depois de reconectar
+  ou reiniciar sai sozinho). Não chegou a sair (expirou, falhou antes do envio) → volta a esperar e tenta de novo,
+  no máximo 3 vezes (`auto_attempts`), depois `auto_off`. A regra dos 30 dias barrando → `failed` `fora_30_dias`.
+- **Tela:** sem "Abrir para enviar"; a linha "📨 Follow-up do Copiloto: envio automático às HH:MM" ("enviando…",
+  "enviado ✓", esperando conexão/limite do dia) e "Não enviar" (= `declined` `recusado_pelo_mentor`; cancela o envio
+  se ainda estiver na fila).
+- **Registro:** `copiloto_auto` e as linhas `send_*` de sempre ("automático" no `send_queued`); nunca texto nem jid.
+
 ### Versão 0.3.1 (a pedido do mentor)
 
 **Foco mais forte.** "A diferença não ficou tão grande": as conversas que não pedem resposta ficam com opacidade 0,28 e
@@ -815,6 +846,9 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
   antes de fechar ou cair expira e volta para "aguardando confirmação": ao abrir, os da fila e os que estavam no
   "digitando…" (ainda não tinham saído) viram `expired`; o job pendente é concluído sem rodar. Envio que espera mais de
   10 min na fila (pausa, sem conexão) também expira. Nunca sai depois de reconectar sem nova confirmação.
+  Exceção (v0.8.0, só com a opção ligada): o follow-up do Copiloto marcado como automático é confirmado de novo por
+  dentro, com todas as regras, depois de abrir/reconectar (conexão estável, nunca na abertura do horário); um de estado
+  desconhecido nunca sai sozinho.
 - Confirmação explícita a cada envio (no app; no futuro também no Claude Code): `sendReply` só aceita o token de uso
   único que o `prepareSend` emitiu para exatamente aquele jid + texto, válido por 5 min (tokens só na memória: nenhum
   vale depois de reiniciar). Os guardas do IPC validam o formato.
