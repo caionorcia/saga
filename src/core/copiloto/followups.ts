@@ -65,8 +65,8 @@ export function parseFollowup(v: unknown): PendingFollowup | null {
  * A resposta do `followups_pending`: `{ version: 1, followups: [...] }`. Envelope fora do contrato → null; itens fora
  * do contrato ficam de fora (contados em `invalid`). Ids repetidos na mesma resposta: vale o primeiro.
  */
-export function parsePending(body: unknown): { items: PendingFollowup[]; invalid: number } | null {
-  const b = body as { version?: unknown; followups?: unknown } | null
+export function parsePending(body: unknown): { items: PendingFollowup[]; invalid: number; cancelledIds: string[] } | null {
+  const b = body as { version?: unknown; followups?: unknown; cancelled_ids?: unknown } | null
   if (!b || typeof b !== 'object' || b.version !== 1 || !Array.isArray(b.followups)) return null
   const items: PendingFollowup[] = []
   const seen = new Set<string>()
@@ -82,7 +82,19 @@ export function parsePending(body: unknown): { items: PendingFollowup[]; invalid
     seen.add(f.id)
     items.push(f)
   }
-  return { items, invalid }
+  return { items, invalid, cancelledIds: parseCancelled(b.cancelled_ids) }
+}
+
+/** v1.2.1: no máximo 200 ids cancelados por resposta. */
+const MAX_CANCELLED = 200
+
+/**
+ * v1.2.1 `cancelled_ids`: ids cancelados no Copiloto (já entregues). Ausente ou fora do contrato → `[]`; ids em outro
+ * formato ficam de fora.
+ */
+export function parseCancelled(v: unknown): string[] {
+  if (!Array.isArray(v)) return []
+  return [...new Set(v.slice(0, MAX_CANCELLED).filter((x): x is string => typeof x === 'string' && DRAFT_ID_RE.test(x)))]
 }
 
 /** Uma conversa local candidata (o mínimo para casar o alvo). */

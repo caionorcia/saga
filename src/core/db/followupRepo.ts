@@ -234,6 +234,14 @@ export class FollowupRepo {
     this.db.prepare('UPDATE copiloto_followups SET auto_attempts = auto_attempts + 1 WHERE id = ?').run(id)
   }
 
+  /**
+   * v1.2.1: o Copiloto não respondeu à conferência antes do envio automático: adia para `at`, sem gastar a tentativa
+   * (nunca envia no escuro, e uma rede ruim não tira o item do automático).
+   */
+  postponeAuto(id: string, at: number): void {
+    this.db.prepare('UPDATE copiloto_followups SET auto_at = ?, auto_attempts = MAX(0, auto_attempts - 1) WHERE id = ?').run(at, id)
+  }
+
   /** O envio automático deste item acabou: daqui em diante é o cartão da v1.1 (o mentor confirma). `true` se mudou. */
   setAutoOff(id: string): boolean {
     const res = this.db.prepare('UPDATE copiloto_followups SET auto_off = 1, auto_at = NULL, updated_at = ? WHERE id = ? AND auto_off = 0').run(this.clock.now(), id)

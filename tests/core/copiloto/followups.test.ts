@@ -50,6 +50,12 @@ describe('follow-ups: leitura da fila do Copiloto', () => {
     for (const v of [null, 'true', 1, {}]) expect(parseFollowup({ ...base, auto_send: v })?.autoSend).toBe(false)
   })
 
+  it('v1.2.1 cancelled_ids: ausente → []; só ids no formato; repetidos uma vez', () => {
+    expect(parsePending({ version: 1, followups: [] })?.cancelledIds).toEqual([])
+    expect(parsePending({ version: 1, followups: [], cancelled_ids: 'x' })?.cancelledIds).toEqual([])
+    expect(parsePending({ version: 1, followups: [], cancelled_ids: [F1, F1, 3, '../x', null] })?.cancelledIds).toEqual([F1])
+  })
+
   it('envelope: version 1 e a lista; ids repetidos valem uma vez; inválidos contados', () => {
     expect(parsePending({ version: 2, followups: [] })).toBeNull()
     expect(parsePending({ version: 1 })).toBeNull()

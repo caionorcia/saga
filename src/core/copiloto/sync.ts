@@ -77,6 +77,8 @@ export interface CopilotoSyncDeps {
   diag?: (kind: string, detail: string) => void
   /** v0.7.0: os follow-ups mudaram (a interface busca de novo) */
   onFollowups?: () => void
+  /** v1.2.1: um envio desta conversa mudou (cancelado porque o follow-up foi cancelado no Copiloto) */
+  onSendChanged?: (jid: string) => void
 }
 
 interface Roster {
@@ -646,6 +648,12 @@ export class CopilotoSync {
     }
     this.followupFailures = 0
     this.followupPollAt = now + FOLLOWUP_LIMITS.pollEveryMs
+    this.storePending(parsed)
+  }
+
+  /** Guarda o que uma resposta do `followups_pending` trouxe: os cancelados saem, os novos entram. */
+  private storePending(parsed: NonNullable<ReturnType<typeof parsePending>>): void {
+    const cancelled = this.applyCancelled(parsed.cancelledIds)
     const fresh = parsed.items.filter((f) => !this.repo.followups.has(f.id))
     let added = 0
     let notFound = 0
@@ -659,8 +667,58 @@ export class CopilotoSync {
         }
       }
     }
-    if (added || parsed.invalid) this.diag('copiloto_followups', `recebidos=${parsed.items.length} novos=${added} sem_conversa=${notFound} invalidos=${parsed.invalid}`)
-    if (added) this.followupsChanged()
+    if (added || parsed.invalid || cancelled)
+      this.diag('copiloto_followups', `recebidos=${parsed.items.length} novos=${added} sem_conversa=${notFound} invalidos=${parsed.invalid} cancelados=${cancelled}`)
+    if (added || cancelled) this.followupsChanged()
+  }
+
+  /**
+   * v1.2.1: os cancelados no Copiloto saem daqui (cartão ou envio automático agendado), sem relatório (o Copiloto já
+   * sabe). Um que está só na fila de envio tem o envio cancelado antes; um que já saiu, está saindo ou ficou de estado
+   * desconhecido fica como está (o relatório de sempre conta o que aconteceu). Quantos saíram.
+   */
+  private applyCancelled(ids: ReadonlyArray<string>): number {
+    let n = 0
+    for (const id of ids) {
+      const f = this.repo.followups.get(id)
+      if (!f) continue
+      if (f.status === 'sending' && f.sendId !== null) {
+        const s = this.repo.sends.get(f.sendId)
+        if (!s || s.status !== 'queued' || !this.repo.sends.transition(s.id, s.attempt, ['queued'], 'canceled', { error: 'cancelado no Copiloto' })) continue
+        this.diag('send_canceled', `send #${s.id} cancelado no Copiloto`)
+        this.deps.onSendChanged?.(s.jid)
+      }
+      if (this.repo.followups.transition(id, ['waiting', 'sending'], 'cancelled', { sendId: null })) n++
+    }
+    return n
+  }
+
+  /**
+   * v1.2.1: logo antes de um envio automático, uma consulta nova do `followups_pending` (na mesma fila de uma
+   * requisição por vez, respeitando o intervalo entre pedidos). `cancelled` = o Copiloto cancelou este id (já tirado
+   * daqui); `unavailable` = sem resposta válida (rede, 5xx, 401, integração desligada): não enviar no escuro.
+   */
+  checkCancelled(id: string): Promise<'ok' | 'cancelled' | 'unavailable'> {
+    return this.exclusive(async () => {
+      const url = this.url()
+      const code = this.code()
+      if (!this.enabled() || !url || !code || this.repo.getSetting(K.authFailed) === '1') return 'unavailable'
+      const wait = Math.min(this.nextRequestAt - this.deps.clock.now(), COPILOTO_LIMITS.gapMs)
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+      const r = await this.post(url, code, JSON.stringify({ version: 1, action: 'followups_pending' }))
+      this.nextRequestAt = this.deps.clock.now() + COPILOTO_LIMITS.gapMs
+      if (r.kind === 'http' && r.status === 401) {
+        this.authFailed('follow-ups')
+        return 'unavailable'
+      }
+      const parsed = r.kind === 'http' && r.status === 200 ? parsePending(r.body) : null
+      if (!parsed) {
+        this.diag('copiloto_followups', `conferência antes do envio automático: status=${r.kind === 'network' ? 'network' : r.status}`)
+        return 'unavailable'
+      }
+      this.storePending(parsed)
+      return parsed.cancelledIds.includes(id) ? 'cancelled' : 'ok'
+    })
   }
 
   /**

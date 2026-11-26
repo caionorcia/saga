@@ -254,12 +254,16 @@ Aprovado pelo mentor (único usuário do SagaZap):
   que não chegou a sair (conexão caiu antes, horário acabou) tenta de novo no máximo 3 vezes, com as mesmas regras;
   depois volta ao cartão.
 - "Não enviar" = `declined` `recusado_pelo_mentor` (cancela o envio se ainda estiver na fila).
-- **Limite conhecido:** o SagaZap só fica sabendo de um cancelamento feito no Copiloto pelo `followup_update`
-  (`cancelled`), ou seja, depois de enviar. Um item automático já recebido e cancelado lá antes do horário ainda pode
-  sair. Para fechar isso, o Copiloto precisaria informar os cancelados (ex.: na resposta do `followups_pending`).
+- Cancelamento no Copiloto: resolvido pela v1.2.1 (abaixo).
 
 ### v1.2.1 — cancelados informados
 - A resposta de `followups_pending` ganha `cancelled_ids: string[]`: ids cancelados no Copiloto que já tinham sido
   entregues ao SagaZap nos últimos 7 dias (no máximo 200). Ausente → `[]`.
 - O SagaZap remove esses itens (cartão ou envio automático agendado) a cada consulta e, **logo antes de cada envio
   automático**, faz uma consulta nova e não envia se o id vier em `cancelled_ids`.
+
+Implementação no SagaZap (v0.8.0): `cancelled_ids` ausente ou fora do formato → `[]`. A cada consulta, os cancelados
+saem (esperando o mentor, agendados, ou com o envio ainda só na fila, que é cancelado), sem `followup_update`; um que já
+saiu, está saindo ou ficou desconhecido fica como está. Logo antes do "digitando…" de cada envio automático, o
+`executeSend` espera uma consulta nova (na fila de uma requisição por vez): id cancelado → não sai; sem resposta válida
+(rede, 5xx, 401) → não sai e o item é adiado 5 min, sem gastar tentativa.

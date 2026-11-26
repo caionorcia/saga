@@ -22,8 +22,18 @@ const FU = '44444444-4444-4444-8444-444444444444'
 const FU_OLD = '55555555-5555-4555-8555-555555555555'
 let pending: unknown[] = []
 let updates: any[] = []
+/** v1.2.1: o que o Copiloto devolve em `cancelled_ids`, e a falha da consulta (rede ou 5xx) */
+let cancelled: string[] | undefined = undefined
+let pendingFail: 'network' | 503 | null = null
+let pendingCalls = 0
 const fetchMock = vi.fn(async (_u: string | URL | Request, init?: RequestInit) => {
   const body = JSON.parse(String(init?.body ?? '{}'))
+  if (body.action === 'followups_pending') {
+    pendingCalls++
+    if (pendingFail === 'network') throw new TypeError('fetch failed')
+    if (pendingFail === 503) return new Response('{}', { status: 503 })
+    return new Response(JSON.stringify({ version: 1, followups: pending, ...(cancelled ? { cancelled_ids: cancelled } : {}) }), { status: 200 })
+  }
   if (body.action === 'roster') return new Response(JSON.stringify({ version: 1, phones: [] }), { status: 200 })
   if (body.action === 'followups_pending') return new Response(JSON.stringify({ version: 1, followups: pending }), { status: 200 })
   if (body.action === 'followup_update') {
@@ -230,6 +240,9 @@ describe('follow-up com envio automático no serviço (v0.8.0, contrato v1.2)', 
     sockets = []
     diag = []
     rngValue = 0
+    cancelled = undefined
+    pendingFail = null
+    pendingCalls = 0
     service = make()
   })
 
@@ -279,6 +292,11 @@ describe('follow-up com envio automático no serviço (v0.8.0, contrato v1.2)', 
     await drain(120_000)
     expect(sentCount()).toBe(1)
     expect(repo.listApproved({ limit: 100 })).toHaveLength(0)
+    // v1.2.1: cancelado lá depois de enviado: continua enviado aqui
+    cancelled = [FU]
+    ;(service.copiloto as any).followupPollAt = 0
+    await report()
+    expect(repo.followups.get(FU)!.status).toBe('sent')
   })
 
   it('auto_send=false ou a opção desligada: o cartão de sempre (nada sai sozinho)', async () => {
@@ -470,5 +488,64 @@ describe('follow-up com envio automático no serviço (v0.8.0, contrato v1.2)', 
     await drain(2 * MIN)
     expect(sentCount()).toBe(0)
     expect((await view(FU))).toMatchObject({ status: 'waiting', auto: null })
+  })
+
+  describe('v1.2.1: cancelados informados', () => {
+    it('a cada consulta, os cancelados saem daqui (cartão e automático agendado), sem relatório', async () => {
+      clock.advance(6 * 3_600_000) // fora do horário: o automático fica agendado
+      await startOpen()
+      await withFollowups([item(FU, '5547999998888', true, 'Oi! Como foi a semana?'), item(FU_OLD, '5511988887777', false, 'Faz tempo! Tudo bem?')])
+      await drain(30_000)
+      expect((await view(FU))?.auto).toMatchObject({ state: 'scheduled' })
+      expect(await view(FU_OLD)).toMatchObject({ status: 'waiting', auto: null })
+      cancelled = [FU, FU_OLD, 'nao-existe-aqui-123']
+      service.copiloto.save({ enabled: true })
+      ;(service.copiloto as any).followupPollAt = 0
+      await report()
+      expect(repo.followups.get(FU)!.status).toBe('cancelled')
+      expect(repo.followups.get(FU_OLD)!.status).toBe('cancelled')
+      expect(await service.listFollowups()).toEqual([])
+      await report()
+      expect(updates).toEqual([])
+      clock.advance(local(25, 10, 0) - clock.now())
+      await drain(5 * MIN)
+      expect(writes()).toBe(0)
+    })
+
+    it('logo antes do envio automático: consulta nova; cancelado lá → não sai e não relata nada', async () => {
+      await startOpen()
+      await withFollowups([item(FU, '5547999998888', true, 'Oi! Como foi a semana?')])
+      const before = pendingCalls
+      // cancelado no Copiloto depois da última busca (a próxima busca normal só sairia em 5 min)
+      cancelled = [FU]
+      await drain(90_000)
+      expect(pendingCalls).toBeGreaterThan(before)
+      expect(sentCount()).toBe(0)
+      expect(writes(['sendPresenceUpdate'])).toBe(0)
+      expect(repo.sends.listForJid(JID)[0].status).toBe('canceled')
+      expect(repo.followups.get(FU)!.status).toBe('cancelled')
+      await report()
+      expect(updates).toEqual([])
+      await drain(10 * MIN)
+      expect(sentCount()).toBe(0)
+    })
+
+    for (const fail of ['network', 503] as const) {
+      it(`consulta antes do envio falhou (${fail}): não envia no escuro; adia sem gastar tentativa e sai depois`, async () => {
+        await startOpen()
+        await withFollowups([item(FU, '5547999998888', true, 'Oi! Como foi a semana?')])
+        pendingFail = fail
+        await drain(90_000)
+        expect(sentCount()).toBe(0)
+        expect(writes(['sendPresenceUpdate'])).toBe(0)
+        expect(repo.sends.listForJid(JID)[0]).toMatchObject({ status: 'expired', error: 'o Copiloto não respondeu; envio adiado' })
+        const f = repo.followups.get(FU)!
+        expect(f).toMatchObject({ status: 'waiting', autoAttempts: 0, autoOff: false })
+        expect(f.autoAt).toBeGreaterThan(clock.now())
+        pendingFail = null
+        await drain(7 * MIN)
+        expect(sentCount()).toBe(1)
+      })
+    }
   })
 })

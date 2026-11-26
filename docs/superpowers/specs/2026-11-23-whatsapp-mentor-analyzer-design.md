@@ -586,6 +586,10 @@ confirmação dele. Contrato: adendo v1.2 de `2026-11-26-copiloto-integration.md
 - **Tela:** sem "Abrir para enviar"; a linha "📨 Follow-up do Copiloto: envio automático às HH:MM" ("enviando…",
   "enviado ✓", esperando conexão/limite do dia) e "Não enviar" (= `declined` `recusado_pelo_mentor`; cancela o envio
   se ainda estiver na fila).
+- **Cancelados (v1.2.1):** `cancelled_ids` do `followups_pending` tira os itens daqui a cada consulta (sem relatório;
+  nunca um que já saiu ou está saindo). Logo antes do "digitando…" de um automático, o `executeSend` espera uma consulta
+  nova (`sendPreflight`, na fila de uma requisição por vez do Copiloto): cancelado → não sai; falha → não sai, adia 5 min
+  sem gastar tentativa.
 - **Registro:** `copiloto_auto` e as linhas `send_*` de sempre ("automático" no `send_queued`); nunca texto nem jid.
 
 ### Versão 0.3.1 (a pedido do mentor)

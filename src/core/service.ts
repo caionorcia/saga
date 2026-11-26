@@ -339,7 +339,8 @@ export class SagaService extends EventEmitter {
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
       pnForLid: (lid) => this.wa?.pnForLid?.(lid) ?? null,
       diag: (k, d) => this.diag(k, d),
-      onFollowups: () => this.markFollowups()
+      onFollowups: () => this.markFollowups(),
+      onSendChanged: (jid) => this.markSends(jid)
     })
 
     this.autoFollowups = new FollowupAutoSender({
@@ -476,7 +477,8 @@ export class SagaService extends EventEmitter {
       ...(opts.fetchWaVersion ? { fetchWaVersion: opts.fetchWaVersion } : {}),
       ...(opts.diag ? { diag: opts.diag } : {}),
       sendOptions: () => this.settings.sendOptions(),
-      sendGuard: (s) => this.autoSendGuard(s)
+      sendGuard: (s) => this.autoSendGuard(s),
+      sendPreflight: (s) => this.autoPreflight(s)
     })
     this.wa.on('send', (jid: string) => this.markSends(jid))
     this.wa.on('qr', (dataUrl: string) => {
@@ -1420,6 +1422,26 @@ export class SagaService extends EventEmitter {
     const f = this.repo.followups.bySendId(s.id)
     if (!f || f.status !== 'sending' || !f.autoSend || f.autoOff) return 'o follow-up não está mais para envio automático'
     return null
+  }
+
+  /**
+   * v1.2.1: logo antes do "digitando…" de um envio automático, pergunta de novo ao Copiloto (na fila de uma requisição
+   * por vez). Cancelado lá → não sai (o follow-up já foi tirado daqui). Sem resposta válida → não sai agora: adia o item
+   * (sem gastar tentativa) e tenta de novo depois, com as mesmas regras.
+   */
+  private async autoPreflight(s: SendRow): Promise<string | null> {
+    if (!s.auto) return null
+    const f = this.repo.followups.bySendId(s.id)
+    if (!f) return 'o follow-up não está mais para envio automático'
+    const r = await this.copiloto.checkCancelled(f.id)
+    if (r === 'ok') return null
+    if (r === 'cancelled') {
+      this.sendDiag('send_refused', s, 'cancelado no Copiloto')
+      return 'cancelado no Copiloto'
+    }
+    this.repo.followups.postponeAuto(f.id, this.clock.now() + FOLLOWUP_AUTO.postponeMs)
+    this.sendDiag('send_refused', s, 'Copiloto sem resposta: envio automático adiado')
+    return 'o Copiloto não respondeu; envio adiado'
   }
 
   /** O que está na fila de envio automático não sai (vira "não enviada"; o follow-up volta ao cartão ou a esperar). */
