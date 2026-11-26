@@ -1,6 +1,6 @@
 # SagaZap (antes Saga) — Assistente de respostas para mentorados (WhatsApp)
 
-Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.6.0, mensagem avulsa)
+Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.6.2, IAs gratuitas de reserva)
 
 ## Intenção e o porquê
 
@@ -451,6 +451,35 @@ O mentor pediu "uma opção pra poder enviar uma mensagem normalmente, sem preci
   texto`; o id do rascunho é gerado pela interface quando a caixa abre, então o mesmo rascunho com o mesmo texto nunca
   vira dois envios (depois de falha/expiração, uma nova confirmação reaproveita a linha, como nas respostas).
 - **Registro:** as mesmas linhas `send_*`, com " avulsa" em `send_queued`/`send_sent`; nunca texto nem jid.
+
+### IAs gratuitas de reserva: Gemini e Mistral (v0.6.2, a pedido do mentor)
+
+O mentor pediu que, quando a cota gratuita da Groq acabar, outras IAs gratuitas assumam sozinhas por algumas horas, e
+que ele possa configurá-las no app.
+
+- **Configurações › Chaves de acesso › IAs gratuitas de reserva (opcional):** chaves "Gemini (Google, gratuito)"
+  (Google AI Studio) e "Mistral (gratuito)" (plano Experiment), cifradas com `safeStorage` como as outras, com
+  Adicionar/Testar/Trocar/Remover. Sem chave, a reserva fica desligada. Aviso sempre visível: "No plano gratuito, o
+  provedor pode usar as conversas enviadas para melhorar os modelos dele (…). Use só se concordar."
+- **Corrente (`src/core/ai/fallback.ts`):** vale para tudo que usa a IA de conversa (sugestões, alertas/"precisa
+  responder", resumo da busca). Principal como hoje; se ela terminar em 429 (`LlmRateLimitError`, depois de a Groq já
+  ter trocado de modelo, ou com todos os modelos da Groq "no limite"), tenta o Gemini e depois o Mistral, só os que têm
+  chave. Um 429 de uma reserva a tira da corrente até o tempo pedido (mínimo 2 min; guardado em `settings_kv`,
+  `llm.fallback.limited`). Chave da reserva recusada: fora por 30 min; rede ou outro erro: passa para a próxima.
+  Resposta fora do formato sobe como hoje (nova tentativa). Com o **Claude** como principal a mesma corrente vale
+  (um 429 do Claude passa para as reservas); os alertas em segundo plano continuam só com a Groq como principal.
+- **Gemini:** `POST …/v1beta/openai/chat/completions`, `Authorization: Bearer`, `response_format: json_object`. Modelo
+  escolhido pela lista (`GET …/v1beta/openai/models`, prefixo `models/` tirado, cache de 24 h): o `gemini-X.Y-flash` de
+  maior versão, senão qualquer "flash" de conversa (sem lite/imagem/tts/live); sem lista, `gemini-2.5-flash`. 404 marca
+  o modelo como ruim (24 h) e escolhe outro. Espera do 429: `retry-after` ou `retryDelay` do corpo.
+- **Mistral:** `POST https://api.mistral.ai/v1/chat/completions`, `mistral-small-latest` (setting opcional
+  `llm.mistral.model`); modelo inexistente → `open-mistral-nemo`.
+- **Quem respondeu:** o resultado traz `provider`; a análise grava `gemini`/`mistral` e a coluna de sugestões mostra
+  "Gerado por: Gemini (grátis, reserva)". Custo 0 (só o Claude entra no teto de gasto).
+- **Mensagem final de limite:** sem chave de reserva, sugere adicionar uma do Gemini ou do Mistral em Configurações;
+  com chave, diz que as IAs gratuitas de reserva também estão no limite e voltam sozinhas.
+- **Registro:** `llm_fallback` (quem respondeu), `llm_fallback_limited`, `llm_fallback_error` (só o tipo do erro),
+  `gemini_model_gone`, `mistral_model_gone`; nunca chave nem texto.
 
 ### Copiloto da Saga (v0.5.0, a pedido do mentor)
 

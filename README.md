@@ -47,6 +47,7 @@ O modelo de texto padrão é `llama-3.3-70b-versatile` (constante `DEFAULT_GROQ_
 ## Limites
 
 - Groq gratuito: 20 pedidos/min, 2.000/dia, 28.800 s de áudio/dia, mínimo de 10 s cobrado por pedido.
+- Reservas gratuitas opcionais (v0.6.2): com a Groq (ou o Claude) no limite, o pedido vai ao Gemini e depois ao Mistral, só com chave salva; cada 429 tira a reserva por no mínimo 2 min (`src/core/ai/fallback.ts`).
 - Downloads de mídia: intervalo sorteado de 4 a 12 s, até 300 por hora e 2.000 por dia. Aquecimento de 15 min com intervalos dobrados ao iniciar ou ao acordar de suspensão de mais de 1 h.
 - Reconexão: esperas de 10 s, 30 s, 2 min, 5 min, 15 min e 30 min (±20%); no máximo 6 tentativas por hora, depois só manual.
 - IA: até 3 tentativas com espera crescente; depois "falhou" com botão "Tentar de novo". Teto de gasto diário configurável (padrão US$ 1,00).

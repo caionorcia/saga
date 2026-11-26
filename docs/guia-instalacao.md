@@ -271,6 +271,33 @@ Funciona igual às respostas: você confirma cada envio, o SagaZap espera a vez,
 
 O botão só aparece com **Configurações › Envio direto** ligado. **Descartar** fecha a caixa e apaga o rascunho; depois de enviada, **Nova mensagem avulsa** abre a caixa vazia para outra.
 
+### IAs gratuitas de reserva: Gemini e Mistral (versão 0.6.2)
+
+![Chaves das IAs gratuitas de reserva](img/config-ias-reserva.png)
+
+A Groq gratuita tem um limite de uso por dia. Quando ele acaba, o SagaZap pode passar sozinho para outra IA gratuita
+(primeiro o **Gemini**, do Google, depois o **Mistral**) até a Groq voltar. É opcional: sem chave, nada muda. Quando
+uma reserva escreve as sugestões, aparece embaixo **Gerado por: Gemini (grátis, reserva)**.
+
+**Atenção à privacidade:** no plano gratuito, o provedor pode usar as conversas enviadas para melhorar os modelos dele
+(Google: plano gratuito do Gemini; Mistral: o plano Experiment exige aceitar isso). Use só se concordar.
+
+Chave do Gemini:
+
+1. Abra <https://aistudio.google.com/apikey> e entre com a sua conta Google.
+2. Clique em **Get API key** (ou **Create API key**) e copie a chave.
+3. No SagaZap, abra **Configurações › Chaves de acesso › IAs gratuitas de reserva**, clique em **Adicionar** ao lado de
+   **Gemini (Google, gratuito)**, cole a chave, clique em **Testar** e depois em **Salvar**.
+
+Chave do Mistral:
+
+1. Abra <https://console.mistral.ai> e crie uma conta. Escolha o plano gratuito **Experiment** (ele pede um número de
+   celular e o aceite do uso dos dados).
+2. No menu, abra **API Keys**, clique em **Create new key** e copie a chave.
+3. No SagaZap, clique em **Adicionar** ao lado de **Mistral (gratuito)**, cole, **Testar** e **Salvar**.
+
+Se todas as IAs gratuitas estiverem no limite ao mesmo tempo, o SagaZap avisa e elas voltam sozinhas mais tarde.
+
 ### Copiloto da Saga (versão 0.5.0)
 
 O SagaZap pode enviar ao **Copiloto da Saga** o que acontece nas conversas dos **mentorados cadastrados lá**: as mensagens (com os áudios já transcritos), os alertas, o "Para responder", os resumos e as respostas que você enviou. Entram também os grupos em que há um mentorado. Não vão as chaves de IA, as respostas aprovadas, a base de conhecimento, os arquivos de mídia nem nada de quem não é mentorado (num grupo, os números de quem não é mentorado ficam no computador).
@@ -343,7 +370,7 @@ Se o aviso não aparecer mesmo com uma versão nova publicada, clique em **Confi
 
 - Suas conversas, áudios e configurações ficam **neste computador** (pasta de dados do SagaZap no seu usuário do Windows). Não existe servidor do SagaZap.
 - A chave de acesso é guardada com a criptografia do Windows.
-- Só saem do computador: o **texto das conversas** e os **áudios**, enviados para a IA que você escolheu (Groq e, se configurado, Claude ou OpenAI) para transcrever e gerar sugestões, e, se você importou uma **base de conhecimento**, o resumo das regras e os trechos usados em cada sugestão.
+- Só saem do computador: o **texto das conversas** e os **áudios**, enviados para a IA que você escolheu (Groq e, se configurado, Claude ou OpenAI, e as reservas gratuitas Gemini e Mistral quando a principal está no limite) para transcrever e gerar sugestões, e, se você importou uma **base de conhecimento**, o resumo das regras e os trechos usados em cada sugestão.
 - Com o **Copiloto da Saga** ligado (vem desligado), as conversas dos mentorados cadastrados lá também vão para o Copiloto (veja "Copiloto da Saga").
 - O SagaZap lê conversas individuais e grupos. Ele só escreve no WhatsApp quando você confirma um envio (a mensagem, o "digitando…" e marcar como lida aquela conversa) e nunca muda nada nos grupos. Status, canais e listas de transmissão são ignorados.
 
