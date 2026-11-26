@@ -163,8 +163,8 @@ export class JobQueue {
   }
 
   /** Como `enqueue`, mas um job já concluído com a mesma chave volta para a fila (tentativas zeradas). */
-  requeue(type: JobType, key: string, payload: unknown, priority = 0): void {
-    this.repo.requeueJob(type, key, payload, priority)
+  requeue(type: JobType, key: string, payload: unknown, priority = 0, opts: { revive?: boolean } = {}): void {
+    this.repo.requeueJob(type, key, payload, priority, opts.revive === true)
     this.wake()
   }
 

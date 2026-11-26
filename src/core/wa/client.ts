@@ -55,6 +55,8 @@ export interface WaSocket {
   signalRepository?: { lidMapping?: { getPNForLID(lid: string): Promise<string | null> } }
   /** só leitura (uma consulta IQ): os grupos de que o mentor participa, com o assunto e os participantes. Sempre pela fila. */
   groupFetchAllParticipating?(): Promise<Record<string, { id?: string; subject?: string | null; participants?: ParticipantLike[] | null }>>
+  /** v0.8.1, só leitura (uma consulta IQ): um grupo só (assunto e participantes). Sempre pela fila, no máximo uma vez por grupo. */
+  groupMetadata?(jid: string): Promise<{ id?: string; subject?: string | null; participants?: ParticipantLike[] | null } | null | undefined>
   /** só `executeSend`: "digitando…" na conversa, "parou" e, no fim, de volta a indisponível */
   sendPresenceUpdate?(type: 'composing' | 'paused' | 'unavailable', toJid?: string): Promise<void>
   /** só `executeSend`: a resposta confirmada pelo mentor */
@@ -129,7 +131,18 @@ const BROWSER_SETTING = 'wa.browserIdx'
  * quando os nomes e os participantes dos grupos foram buscados pela última vez (epoch ms do PC). Chave nova na v0.2.3
  * (antes só os nomes, em `wa.groupsFetchedAt`): quem atualiza busca os participantes logo na primeira conexão.
  */
-const GROUPS_FETCHED_SETTING = 'wa.groupMembersFetchedAt'
+export const GROUPS_FETCHED_SETTING = 'wa.groupMembersFetchedAt'
+/**
+ * v0.8.1: grupo sem nome visto (ou conectou com grupos sem nome): pede a consulta dos grupos de novo, no máximo uma vez
+ * por hora (fora a de 24 h).
+ */
+const GROUPS_UNNAMED_EVERY_MS = 60 * 60_000
+/** v0.8.1: prioridade das consultas de grupos na fila (na frente dos downloads de áudio, atrás dos envios; no ritmo de sempre) */
+const GROUPS_JOB_PRIORITY = 15
+/** v0.8.1: no máximo tantas consultas de um grupo só por execução (grupos novos; o resto vem na consulta de todos) */
+const GROUPS_META_MAX = 20
+/** mensagem de grupo até este tempo antes da última consulta de todos ainda conta como "grupo novo" */
+const GROUPS_META_MARGIN_MS = 10 * 60_000
 /** no máximo uma busca dos nomes dos grupos por dia */
 const GROUPS_FETCH_EVERY_MS = DAY
 /** chave fixa do job (um só pendente por vez; volta para a fila depois de concluído) */
@@ -202,6 +215,15 @@ interface ChatLike {
 interface GroupLike {
   id?: string | null
   subject?: string | null
+  /** `groups.upsert` (grupo novo, ou o mentor entrou nele) traz os participantes */
+  participants?: ParticipantLike[] | null
+}
+
+/** v0.8.1: `group-participants.update` (entrou ou saiu gente; o Baileys manda o JID ou o participante inteiro). */
+interface GroupParticipantsUpdate {
+  id?: string | null
+  action?: string | null
+  participants?: Array<string | ParticipantLike> | null
 }
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -255,6 +277,10 @@ export class WhatsAppClient extends EventEmitter {
   private diskTimer: ReturnType<typeof setTimeout> | null = null
   /** LID (sem dispositivo) → JID de telefone */
   private lidToPn = new Map<string, string>()
+  /** v0.8.1: quando a consulta dos grupos foi pedida por último (grupo sem nome: no máximo uma por hora) */
+  private groupsRequestedAt = -Infinity
+  /** v0.8.1: grupos com a consulta de um grupo só já pedida nesta execução */
+  private groupMetaAsked = new Set<string>()
   /**
    * Melhor nome conhecido por JID (telefone ou @lid ainda sem telefone). Vale para contatos que ainda não
    * têm mensagem (o nome entra quando a primeira chegar) e para @lid que só depois ganha o telefone.
@@ -553,6 +579,7 @@ export class WhatsAppClient extends EventEmitter {
     on('chats.update', (cs: ChatLike[]) => this.learnChats('chats.update', cs ?? []))
     on('groups.upsert', (gs: GroupLike[]) => this.learnGroups(gs ?? []))
     on('groups.update', (gs: GroupLike[]) => this.learnGroups(gs ?? []))
+    on('group-participants.update', (u: GroupParticipantsUpdate) => this.learnParticipants(u))
   }
 
   private async onConnectionUpdate(u: {
@@ -618,8 +645,23 @@ export class WhatsAppClient extends EventEmitter {
    */
   private scheduleGroupSubjects(): void {
     const last = Number(this.deps.repo.getSetting(GROUPS_FETCHED_SETTING) ?? 0)
-    if (Number.isFinite(last) && last > 0 && this.deps.clock.now() - last < GROUPS_FETCH_EVERY_MS) return
-    this.deps.queue.requeue('fetch_profile', GROUPS_JOB_KEY, { kind: 'group_subjects' })
+    if (Number.isFinite(last) && last > 0 && this.deps.clock.now() - last < GROUPS_FETCH_EVERY_MS) {
+      // v0.8.1: grupos sem nome aqui: consulta de novo (no máximo uma vez por hora)
+      if (this.deps.repo.unnamedGroupCount() > 0) this.requestGroupSubjects()
+      return
+    }
+    this.requestGroupSubjects(true)
+  }
+
+  /**
+   * v0.8.1: põe a consulta dos grupos na fila (com prioridade, no ritmo do limitador). Um job que falhou de vez antes
+   * volta também (antes ficava falho para sempre e os nomes nunca chegavam). Fora a de 24 h, no máximo uma por hora.
+   */
+  private requestGroupSubjects(force = false): void {
+    const now = this.deps.clock.now()
+    if (!force && now - this.groupsRequestedAt < GROUPS_UNNAMED_EVERY_MS) return
+    this.groupsRequestedAt = now
+    this.deps.queue.requeue('fetch_profile', GROUPS_JOB_KEY, { kind: 'group_subjects' }, GROUPS_JOB_PRIORITY, { revive: true })
   }
 
   private stopWith(state: ConnState, detail: string): void {
@@ -746,13 +788,44 @@ export class WhatsAppClient extends EventEmitter {
       const pn = toPhoneJid(m?.pn)
       if (!m?.lid || !pn) continue
       const lid = stripDevice(m.lid)
-      this.lidToPn.set(lid, pn)
+      this.learnLid(lid, pn)
       // nome que chegou para o @lid antes do telefone: vai para o contato do telefone
       const pending = this.knownNames.get(lid)
       if (pending) {
         this.knownNames.delete(lid)
         if (this.rememberName(pn, pending.name, pending.rank)) this.emit('contacts')
       }
+    }
+  }
+
+  /**
+   * v0.8.1: um par @lid → telefone. Novo: o telefone entra como forma do participante nos grupos em que o @lid está
+   * (guardado; o mapa é só da memória) e o Copiloto confere de novo os grupos (pode ter passado a ser de mentorado).
+   */
+  private learnLid(lid: string, pn: string): void {
+    if (this.lidToPn.get(lid) === pn) return
+    this.lidToPn.set(lid, pn)
+    try {
+      this.deps.repo.linkLidPhone(lid, pn)
+    } catch {
+      // só melhora a participação conhecida; nunca quebra a ingestão
+    }
+    this.emit('membership')
+  }
+
+  /**
+   * v0.8.1: mensagem de grupo: sem nome, pede a consulta dos grupos (no máximo uma por hora); sem participantes
+   * conhecidos (grupo novo), a consulta só desse grupo, pela fila. Só com a conexão aberta.
+   */
+  private checkGroup(groupJid: string, ts: number): void {
+    if (this.status !== 'open') return
+    try {
+      if (!this.deps.repo.groupHasName(groupJid)) this.requestGroupSubjects()
+      // só grupo que apareceu depois da última consulta de todos (o histórico antigo espera a consulta de todos)
+      const fetched = Number(this.deps.repo.getSetting(GROUPS_FETCHED_SETTING) ?? 0)
+      if (fetched > 0 && ts >= fetched - GROUPS_META_MARGIN_MS && !this.deps.repo.hasGroupMembership(groupJid)) this.requestGroupMeta(groupJid)
+    } catch {
+      // nunca quebra a ingestão
     }
   }
 
@@ -783,13 +856,51 @@ export class WhatsAppClient extends EventEmitter {
     for (const g of groups) {
       const subject = g?.subject?.trim()
       if (!subject || !g.id || !isGroupJid(g.id)) continue
-      if (this.rememberName(g.id, subject, NAME_RANK.profile)) applied = true
+      // v0.8.1: guardado mesmo sem a conversa do grupo existir ainda (antes ficava só na memória e se perdia ao fechar)
+      this.knownNames.set(g.id, { name: subject, rank: NAME_RANK.profile })
+      if (this.deps.repo.setGroupSubject(g.id, subject)) applied = true
     }
     return applied
   }
 
-  private learnGroups(groups: GroupLike[]): void {
-    if (this.applyGroupNames(groups)) this.emit('contacts')
+  private async learnGroups(groups: GroupLike[]): Promise<void> {
+    const named = this.applyGroupNames(groups)
+    // v0.8.1: grupo novo (ou o mentor entrou nele): os participantes vêm junto, sem consulta nenhuma
+    const withMembers = groups.filter((g) => g?.id && Array.isArray(g.participants)).map((g) => ({ id: g.id as string, participants: g.participants }))
+    const members = withMembers.length ? await this.applyGroupMembers(withMembers) : { count: 0, changed: false }
+    if (members.changed) this.emit('membership')
+    if (named || members.changed) this.emit('contacts')
+  }
+
+  /** v0.8.1: `group-participants.update`: entrou ou saiu gente do grupo (sem consulta). */
+  private async learnParticipants(u: GroupParticipantsUpdate): Promise<void> {
+    const id = u?.id
+    if (!id || !isGroupJid(id) || !Array.isArray(u.participants)) return
+    const action = u.action === 'add' ? 'add' : u.action === 'remove' ? 'remove' : null
+    if (!action) return
+    const forms = new Set<string>()
+    for (const p of u.participants) {
+      const part: ParticipantLike = typeof p === 'string' ? { id: p } : p
+      for (const f of participantJids(part, (lid) => this.lidToPn.get(lid) ?? null)) {
+        forms.add(f)
+        if (f.endsWith('@lid')) forms.add(await this.resolveJid(f))
+      }
+    }
+    if (!this.deps.repo.hasGroupMembership(id) && action === 'add') {
+      // ainda não se sabe quem mais está no grupo: uma consulta só deste grupo, pela fila
+      this.requestGroupMeta(id)
+    }
+    if (this.deps.repo.changeGroupMembers(id, action, [...forms], u.participants.length)) {
+      this.emit('membership')
+      this.emit('contacts')
+    }
+  }
+
+  /** v0.8.1: a consulta de um grupo só (assunto e participantes), pela fila, no máximo uma vez por grupo por execução. */
+  private requestGroupMeta(groupJid: string): void {
+    if (this.groupMetaAsked.has(groupJid) || this.groupMetaAsked.size >= GROUPS_META_MAX || !this.sock?.groupMetadata) return
+    this.groupMetaAsked.add(groupJid)
+    this.deps.queue.requeue('fetch_profile', `wa:group_meta:${groupJid}`, { kind: 'group_meta', jid: groupJid }, GROUPS_JOB_PRIORITY, { revive: true })
   }
 
   /** Aplica nomes de uma lista de JIDs que são a mesma pessoa (id, telefone, @lid). */
@@ -798,7 +909,7 @@ export class WhatsAppClient extends EventEmitter {
     const raw = ids.filter(WhatsAppClient.isPersonJid).map((j) => stripDevice(j))
     const pn = raw.find((j) => !j.endsWith('@lid'))
     for (const lid of raw.filter((j) => j.endsWith('@lid'))) {
-      if (pn && !this.lidToPn.has(lid)) this.lidToPn.set(lid, pn)
+      if (pn && !this.lidToPn.has(lid)) this.learnLid(lid, pn)
     }
     for (const j of raw) targets.add(await this.resolveJid(j))
     let changed = false
@@ -838,6 +949,11 @@ export class WhatsAppClient extends EventEmitter {
     if (applied) this.emit('contacts')
   }
 
+  /** v0.8.1: "Atualizar nomes dos grupos": a consulta dos grupos de novo, pela fila (com a conexão aberta). */
+  refreshGroupSubjects(): void {
+    this.requestGroupSubjects(true)
+  }
+
   /** v0.5.0 (Copiloto): o telefone já conhecido para um @lid (só o mapa em memória, sem rede); null se não souber. */
   pnForLid(lid: string): string | null {
     return this.lidToPn.get(lid) ?? null
@@ -852,7 +968,7 @@ export class WhatsAppClient extends EventEmitter {
       // consulta só o armazenamento local de chaves (sem rede)
       const pn = toPhoneJid(await this.sock?.signalRepository?.lidMapping?.getPNForLID(jid))
       if (pn) {
-        this.lidToPn.set(jid, pn)
+        this.learnLid(jid, pn)
         return pn
       }
     } catch {
@@ -916,6 +1032,7 @@ export class WhatsAppClient extends EventEmitter {
         }
         repo.setContactName(n.jid, known.name, known.rank)
       }
+      if (n.isGroup) this.checkGroup(n.jid, n.ts)
       if (!repo.insertMessage(n)) continue
       this.emit('message', n)
       if (n.kind === 'audio') audios.push(n)
@@ -1002,6 +1119,7 @@ export class WhatsAppClient extends EventEmitter {
    */
   private async fetchProfile(payload: { jid?: string; kind?: string }): Promise<void> {
     if (payload?.kind === 'group_subjects') return this.fetchGroupSubjects()
+    if (payload?.kind === 'group_meta' && typeof payload.jid === 'string') return this.fetchGroupMeta(payload.jid)
     this.deps.repo.logEvent('fetch_profile_skipped', String(payload?.jid))
   }
 
@@ -1013,12 +1131,30 @@ export class WhatsAppClient extends EventEmitter {
     const all = await sock.groupFetchAllParticipating()
     // mesmo se o socket caiu enquanto buscava, a resposta (só leitura) vale
     const entries = Object.entries(all ?? {})
+    // v0.8.1: resposta vazia com grupos aqui não conta como feita (tenta de novo, no ritmo da fila)
+    if (entries.length === 0 && this.deps.repo.groupCount() > 0) throw new Error('consulta dos grupos sem nenhum grupo')
     const groups = entries.map(([id, g]) => ({ id: g?.id ?? id, subject: g?.subject ?? null }))
     const members = await this.applyGroupMembers(entries.map(([id, g]) => ({ id: g?.id ?? id, participants: g?.participants })))
     // só as contagens: nunca os nomes dos grupos nem os participantes
     this.diag('wa_groups', `nomes de grupos: ${groups.length} grupos${members.count ? `, ${members.count} participantes` : ''}`)
     this.deps.repo.setSetting(GROUPS_FETCHED_SETTING, String(this.deps.clock.now()))
+    if (members.changed) this.emit('membership')
     if (this.applyGroupNames(groups) || members.changed) this.emit('contacts')
+  }
+
+  /** v0.8.1: `{ kind: 'group_meta', jid }`: um grupo só (uma IQ de leitura), para um grupo novo de que nada se sabe. */
+  private async fetchGroupMeta(groupJid: string): Promise<void> {
+    const sock = this.sock
+    if (!sock || this.status !== 'open' || !sock.groupMetadata) {
+      throw new DeferJobError('sem conexão aberta para consultar o grupo', GROUPS_DEFER_MS)
+    }
+    const g = await sock.groupMetadata(groupJid)
+    if (!g) return
+    const named = this.applyGroupNames([{ id: groupJid, subject: g.subject ?? null }])
+    const members = await this.applyGroupMembers([{ id: groupJid, participants: g.participants }])
+    this.diag('wa_groups', `consulta de um grupo: ${members.count} participantes`)
+    if (members.changed) this.emit('membership')
+    if (named || members.changed) this.emit('contacts')
   }
 
   /**
@@ -1037,7 +1173,7 @@ export class WhatsAppClient extends EventEmitter {
         for (const f of forms) {
           jids.add(f)
           if (!f.endsWith('@lid')) continue
-          if (pn && !this.lidToPn.has(f)) this.lidToPn.set(f, pn)
+          if (pn && !this.lidToPn.has(f)) this.learnLid(f, pn)
           jids.add(await this.resolveJid(f))
         }
       }

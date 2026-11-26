@@ -64,6 +64,8 @@ class FakeSocket {
   signalRepository = { lidMapping: { getPNForLID: vi.fn(async (_lid: string) => null as string | null) } }
   /** leitura (IQ): os grupos de que participo */
   groupFetchAllParticipating = vi.fn(async () => ({}) as Record<string, { id: string; subject?: string }>)
+  /** leitura (IQ): um grupo só (v0.8.1) */
+  groupMetadata = vi.fn(async (_jid: string) => null as null | { id: string; subject?: string; participants?: unknown[] })
   spies: Record<string, ReturnType<typeof vi.fn>> = {}
   constructor(public config: any) {
     for (const name of FORBIDDEN) {
@@ -452,6 +454,98 @@ describe('WhatsAppClient', () => {
           const j = groupJobs()[0]
           expect(j.attempts).toBe(0)
           expect(repo.getSetting('wa.groupMembersFetchedAt')).toBeNull()
+        })
+
+        // --- v0.8.1: nomes que se perdiam, consulta que falhou de vez, grupos novos ---
+        const GRP3 = '120363027777777777@g.us'
+        const name = (jid: string) => repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)?.displayName
+
+        it('v0.8.1: assunto de um grupo ainda sem conversa fica guardado e vira o nome quando a conversa aparece', async () => {
+          await emit('connection.update', { connection: 'open' })
+          expect(await queue.tick()).toBe('ran')
+          expect(repo.groupHasName(GRP3)).toBe(true)
+          // como depois de reiniciar (sem a memória do cliente): a conversa nasce já com o nome
+          repo.upsertContact({ jid: GRP3, isGroup: true })
+          expect(name(GRP3)).toBe('Sem mensagens')
+        })
+
+        it('v0.8.1: resposta vazia não conta como feita (tenta de novo pela fila)', async () => {
+          last().groupFetchAllParticipating.mockResolvedValue({})
+          await emit('connection.update', { connection: 'open' })
+          expect(await queue.tick()).toBe('ran')
+          expect(repo.getSetting('wa.groupMembersFetchedAt')).toBeNull()
+          expect(groupJobs()).toHaveLength(1)
+          expect(groupJobs()[0].attempts).toBe(1)
+        })
+
+        it('v0.8.1: grupo sem nome visto: a consulta volta (mesmo a que falhou de vez), no máximo uma vez por hora', async () => {
+          const groupJobs = () => repo.listJobs('pending').filter((j) => j.key === 'wa:group_subjects')
+          last().groupFetchAllParticipating.mockResolvedValue({ [GRP]: { id: GRP, subject: 'Mentoria Turma 3' } })
+          await emit('connection.update', { connection: 'open' })
+          const job = groupJobs()[0]
+          expect(job.priority).toBeGreaterThan(10)
+          repo.markJobFailed(job.id, 3, 'falhou', null)
+          expect(groupJobs()).toHaveLength(0)
+          // dentro da hora do pedido: espera
+          await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'n0', jid: GRP2, participant: JID2, ts: NOW - 200 })] })
+          expect(groupJobs()).toHaveLength(0)
+          // antes (v0.8.0) o job falho nunca voltava; agora volta com o próximo grupo sem nome visto depois da hora
+          await advance(61 * 60_000)
+          await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'n1', jid: GRP2, participant: JID2, ts: NOW + 61 * 60_000 })] })
+          expect(groupJobs()).toHaveLength(1)
+          expect(await queue.tick()).toBe('ran')
+          expect(name(GRP)).toBe('Mentoria Turma 3')
+          // GRP2 continua sem nome: dentro da hora, nada de consulta nova
+          await advance(30 * 60_000)
+          await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'n2', jid: GRP2, participant: JID2, ts: NOW + 91 * 60_000 })] })
+          expect(groupJobs()).toHaveLength(0)
+          await advance(31 * 60_000)
+          await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'n3', jid: GRP2, participant: JID2, ts: NOW + 122 * 60_000 })] })
+          expect(groupJobs()).toHaveLength(1)
+        })
+
+        it('v0.8.1: groups.upsert com participantes (grupo novo) e group-participants.update guardam a participação e avisam', async () => {
+          const membership = vi.fn()
+          client.on('membership', membership)
+          await emit('groups.upsert', [{ id: GRP3, subject: 'Grupo novo', participants: [{ id: '5531933332222@s.whatsapp.net' }] }])
+          expect(repo.groupMembers(GRP3)).toEqual(['5531933332222@s.whatsapp.net'])
+          expect(repo.groupHasName(GRP3)).toBe(true)
+          expect(membership).toHaveBeenCalledTimes(1)
+          await emit('group-participants.update', { id: GRP3, action: 'add', participants: ['5541922221111@s.whatsapp.net'] })
+          expect(repo.groupMembers(GRP3)).toEqual(['5531933332222@s.whatsapp.net', '5541922221111@s.whatsapp.net'])
+          await emit('group-participants.update', { id: GRP3, action: 'remove', participants: [{ id: '5531933332222@s.whatsapp.net' }] })
+          expect(repo.groupMembers(GRP3)).toEqual(['5541922221111@s.whatsapp.net'])
+          await emit('group-participants.update', { id: GRP3, action: 'promote', participants: ['5541922221111@s.whatsapp.net'] })
+          expect(membership).toHaveBeenCalledTimes(3)
+        })
+
+        it('v0.8.1: @lid que ganha telefone: o telefone entra como forma do participante (guardado) e avisa', async () => {
+          const membership = vi.fn()
+          client.on('membership', membership)
+          repo.setGroupMembers(GRP, ['55555@lid'])
+          await emit('lid-mapping.update', { lid: '55555:2@lid', pn: '5562911110000:4@s.whatsapp.net' })
+          expect(repo.groupMembers(GRP)).toEqual(['55555@lid', '5562911110000@s.whatsapp.net'])
+          expect(membership).toHaveBeenCalledTimes(1)
+          // o mesmo par de novo: nada
+          await emit('lid-mapping.update', { lid: '55555@lid', pn: '5562911110000@s.whatsapp.net' })
+          expect(membership).toHaveBeenCalledTimes(1)
+        })
+
+        it('v0.8.1: grupo que aparece depois da consulta de todos, sem participantes: uma consulta só dele, pela fila', async () => {
+          await emit('connection.update', { connection: 'open' })
+          expect(await queue.tick()).toBe('ran')
+          const s = last()
+          s.groupMetadata.mockResolvedValue({ id: GRP3, subject: 'Turma nova', participants: [{ id: '5531933332222@s.whatsapp.net' }] })
+          await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'm1', jid: GRP3, fromMe: true, ts: NOW + 1000 })] })
+          await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'm2', jid: GRP3, fromMe: true, ts: NOW + 2000 })] })
+          const meta = groupJobs().filter((j) => (j.payload as { kind?: string }).kind === 'group_meta')
+          expect(meta).toHaveLength(1)
+          expect(s.groupMetadata).not.toHaveBeenCalled()
+          await advance(60_000)
+          expect(await queue.tick()).toBe('ran')
+          expect(s.groupMetadata).toHaveBeenCalledWith(GRP3)
+          expect(repo.groupMembers(GRP3)).toEqual(['5531933332222@s.whatsapp.net'])
+          expect(name(GRP3)).toBe('Turma nova')
         })
       })
     })

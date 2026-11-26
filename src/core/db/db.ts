@@ -18,6 +18,7 @@ import schemaV16 from './schema-v16.sql?raw'
 import schemaV17 from './schema-v17.sql?raw'
 import schemaV18 from './schema-v18.sql?raw'
 import schemaV19 from './schema-v19.sql?raw'
+import schemaV20 from './schema-v20.sql?raw'
 
 /**
  * v19 (v0.8.0): colunas novas com `ALTER TABLE ... ADD COLUMN`, que o SQLite não aceita duas vezes. Cada linha do
@@ -37,7 +38,7 @@ function migrateV19(db: DatabaseSync): void {
 }
 
 /** Migrações em ordem; o índice + 1 é o `user_version` resultante. */
-const MIGRATIONS: Array<string | ((db: DatabaseSync) => void)> = [schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, migrateV19]
+const MIGRATIONS: Array<string | ((db: DatabaseSync) => void)> = [schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, migrateV19, schemaV20]
 
 export function openDb(file: string | ':memory:'): DatabaseSync {
   const db = new DatabaseSync(file)

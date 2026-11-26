@@ -52,7 +52,7 @@ describe('índice da busca (gatilhos)', () => {
       r.upsertContact({ jid: ANA, pushName: 'Ana Teste' })
       db.exec('DROP TRIGGER messages_fts_ai; DROP TRIGGER messages_fts_au; DROP TRIGGER messages_fts_ad; DROP TABLE messages_fts; DROP INDEX idx_messages_ts')
       r.insertMessage(msg({ id: 'x1', jid: ANA, text: 'Precificação do pacote' }))
-      db.exec('DROP TRIGGER copiloto_send_au; DROP TRIGGER copiloto_msg_ai; DROP TRIGGER copiloto_msg_au; DROP TRIGGER copiloto_alert_ai; DROP TRIGGER copiloto_alert_au; DROP TRIGGER copiloto_afb_ai; DROP TRIGGER copiloto_afb_au; DROP TRIGGER copiloto_rc_ai; DROP TRIGGER copiloto_rc_au; DROP TRIGGER copiloto_rf_ai; DROP TRIGGER copiloto_rf_au; DROP TRIGGER copiloto_analysis_ai; DROP TRIGGER copiloto_analysis_au; DROP TABLE copiloto_outbox; DROP TABLE copiloto_dirty; DROP TABLE copiloto_chats')
+      db.exec('DROP TRIGGER copiloto_group_name_au; DROP TABLE group_subjects; DROP TRIGGER copiloto_send_au; DROP TRIGGER copiloto_msg_ai; DROP TRIGGER copiloto_msg_au; DROP TRIGGER copiloto_alert_ai; DROP TRIGGER copiloto_alert_au; DROP TRIGGER copiloto_afb_ai; DROP TRIGGER copiloto_afb_au; DROP TRIGGER copiloto_rc_ai; DROP TRIGGER copiloto_rc_au; DROP TRIGGER copiloto_rf_ai; DROP TRIGGER copiloto_rf_au; DROP TRIGGER copiloto_analysis_ai; DROP TRIGGER copiloto_analysis_au; DROP TABLE copiloto_outbox; DROP TABLE copiloto_dirty; DROP TABLE copiloto_chats')
     db.exec('ALTER TABLE messages DROP COLUMN wa_key_json; DROP TABLE sends')
       db.exec('PRAGMA user_version = 12')
       db.close()

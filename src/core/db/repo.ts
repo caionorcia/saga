@@ -470,6 +470,39 @@ export class Repo {
                             THEN excluded.name_rank ELSE name_rank END`
       )
       .run(c.jid, name, rank, c.isGroup ? 1 : 0)
+    // v0.8.1: grupo sem nome que já tem o assunto guardado (a consulta dos grupos veio antes da primeira mensagem)
+    if (c.isGroup) {
+      this.db
+        .prepare(
+          `UPDATE contacts SET push_name = (SELECT subject FROM group_subjects WHERE group_jid = ?1), name_rank = ?2
+            WHERE jid = ?1 AND push_name IS NULL AND EXISTS (SELECT 1 FROM group_subjects WHERE group_jid = ?1)`
+        )
+        .run(c.jid, NAME_RANK.profile)
+    }
+  }
+
+  /**
+   * v0.8.1: o assunto de um grupo (consulta dos grupos, `groups.upsert`/`groups.update`). Fica guardado mesmo sem a
+   * conversa existir ainda; com ela, vira o nome (se não for pior que o atual). `true` se o nome da conversa mudou.
+   */
+  setGroupSubject(groupJid: string, subject: string): boolean {
+    this.db
+      .prepare(
+        `INSERT INTO group_subjects(group_jid, subject, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(group_jid) DO UPDATE SET subject = excluded.subject, updated_at = excluded.updated_at`
+      )
+      .run(groupJid, subject, this.clock.now())
+    return this.setContactName(groupJid, subject, NAME_RANK.profile)
+  }
+
+  /** v0.8.1: o grupo tem nome (o personalizado ou o assunto)? Sem a conversa aqui, vale o assunto guardado. */
+  groupHasName(groupJid: string): boolean {
+    return !!this.db
+      .prepare(
+        `SELECT 1 WHERE EXISTS (SELECT 1 FROM contacts WHERE jid = ?1 AND (custom_name IS NOT NULL OR push_name IS NOT NULL))
+            OR EXISTS (SELECT 1 FROM group_subjects WHERE group_jid = ?1)`
+      )
+      .get(groupJid)
   }
 
   /** Guarda o nome de um contato que já existe, se não for pior que o atual. `true` se mudou. */
@@ -633,6 +666,68 @@ export class Repo {
       throw e
     }
     return true
+  }
+
+  /** v0.8.1: quantos grupos há aqui e quantos sem nome nenhum (nem personalizado, nem assunto). */
+  groupCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM contacts WHERE is_group = 1').get() as Row).n
+  }
+
+  unnamedGroupCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM contacts WHERE is_group = 1 AND custom_name IS NULL AND push_name IS NULL').get() as Row).n
+  }
+
+  /** v0.8.1: já se sabe quem participa deste grupo (alguma consulta trouxe os participantes)? */
+  hasGroupMembership(groupJid: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM group_sizes WHERE group_jid = ?').get(groupJid)
+  }
+
+  /**
+   * v0.8.1 (`group-participants.update`): entra ou sai gente do grupo, sem uma consulta nova. `forms` são as formas do
+   * JID de cada pessoa (telefone e @lid); `people` quantas pessoas são (ajusta a contagem já conhecida). `true` se mudou.
+   */
+  changeGroupMembers(groupJid: string, action: 'add' | 'remove', forms: ReadonlyArray<string>, people: number): boolean {
+    let changed = false
+    this.inTx(() => {
+      const st =
+        action === 'add'
+          ? this.db.prepare('INSERT OR IGNORE INTO group_members(group_jid, member_jid) VALUES (?, ?)')
+          : this.db.prepare('DELETE FROM group_members WHERE group_jid = ? AND member_jid = ?')
+      for (const j of forms) if (j && j !== groupJid && Number(st.run(groupJid, j).changes) > 0) changed = true
+      if (changed && people > 0) {
+        this.db
+          .prepare('UPDATE group_sizes SET members = MAX(0, members + ?) WHERE group_jid = ?')
+          .run(action === 'add' ? people : -people, groupJid)
+      }
+    })
+    return changed
+  }
+
+  /**
+   * v0.8.1: um @lid ganhou telefone. Nos grupos em que ele participa (pela consulta ou por ter mandado mensagem), o
+   * telefone entra como mais uma forma do participante, guardada (o mapa do WhatsApp é só da memória). Quantos grupos.
+   */
+  linkLidPhone(lid: string, pn: string): number {
+    const res = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO group_members(group_jid, member_jid)
+         SELECT group_jid, ?2 FROM group_members WHERE member_jid = ?1
+         UNION SELECT DISTINCT jid, ?2 FROM messages WHERE sender_jid = ?1 AND jid LIKE '%@g.us'`
+      )
+      .run(lid, pn)
+    return Number(res.changes)
+  }
+
+  private inTx(fn: () => void): void {
+    if (this.db.isTransaction) return fn()
+    this.db.exec('BEGIN')
+    try {
+      fn()
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
   }
 
   /** Participantes conhecidos de um grupo (pela consulta), em ordem. */
@@ -1205,15 +1300,16 @@ export class Repo {
    * Insere o job, ou devolve um já concluído (`done`) para a fila com tentativas zeradas
    * (ex.: áudio pulado enquanto o contato estava escondido). Pendente, rodando ou falho fica como está.
    */
-  requeueJob(type: string, key: string, payload: unknown, priority: number): void {
+  /** `revive` (v0.8.1): um job que falhou de vez também volta (só para consultas de leitura, nunca envios). */
+  requeueJob(type: string, key: string, payload: unknown, priority: number, revive = false): void {
     this.db
       .prepare(
-        `INSERT INTO jobs(type, key, payload_json, status, priority) VALUES (?, ?, ?, 'pending', ?)
+        `INSERT INTO jobs(type, key, payload_json, status, priority) VALUES (?1, ?2, ?3, 'pending', ?4)
          ON CONFLICT(key) DO UPDATE SET status = 'pending', attempts = 0, next_run_at = 0, last_error = NULL,
            payload_json = excluded.payload_json, priority = excluded.priority
-         WHERE jobs.status = 'done'`
+         WHERE jobs.status = 'done' OR (?5 = 1 AND jobs.status = 'failed' AND jobs.type <> 'send_message')`
       )
-      .run(type, key, JSON.stringify(payload), priority)
+      .run(type, key, JSON.stringify(payload), priority, revive ? 1 : 0)
   }
 
   /**
