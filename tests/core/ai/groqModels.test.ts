@@ -182,3 +182,54 @@ describe('createTranscriber groq: escolha do modelo', () => {
     expect(seen?.aborted).toBe(true)
   })
 })
+
+describe('GroqModels: limite (429) troca de modelo', () => {
+  let clock: FakeClock
+  let repo: Repo
+  beforeEach(() => {
+    clock = new FakeClock(T0)
+    repo = new Repo(openDb(':memory:'), clock)
+  })
+  const IDS = ['openai/gpt-oss-120b', 'llama-3.3-70b-versatile', 'qwen/qwen3-32b', 'openai/gpt-oss-20b']
+  /** Groq falsa em que os modelos de `limited` respondem 429 (retry-after em segundos). */
+  function limitedGroq(limited: string[], retryAfter = '3600') {
+    const calls: string[] = []
+    const impl = (async (url: any, init: any) => {
+      const u = String(url)
+      if (u === MODELS) return json(200, { object: 'list', data: IDS.map((id) => ({ id, active: true })) })
+      const model = JSON.parse(init.body).model
+      calls.push(model)
+      if (limited.includes(model)) return new Response('{}', { status: 429, headers: { 'retry-after': retryAfter } })
+      return json(200, { choices: [{ message: { content: GOOD } }], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+    }) as unknown as typeof fetch
+    return { impl, calls }
+  }
+
+  it('429 no modelo preferido: usa o próximo na mesma chamada e lembra o limite', async () => {
+    const g = limitedGroq(['openai/gpt-oss-120b'])
+    const llm = createLlm('groq', 'K', { fetchImpl: g.impl, repo, clock })
+    const r = await llm.complete({ system: 's', user: 'u' })
+    expect(r.model).toBe('llama-3.3-70b-versatile')
+    expect(g.calls).toEqual(['openai/gpt-oss-120b', 'llama-3.3-70b-versatile'])
+    // próxima chamada (outra instância, mesmo banco): já vai direto ao modelo livre
+    const g2 = limitedGroq(['openai/gpt-oss-120b'])
+    await createLlm('groq', 'K', { fetchImpl: g2.impl, repo, clock }).complete({ system: 's', user: 'u' })
+    expect(g2.calls).toEqual(['llama-3.3-70b-versatile'])
+  })
+
+  it('o modelo preferido volta depois do tempo pedido', async () => {
+    const g = limitedGroq(['openai/gpt-oss-120b'], '600')
+    await createLlm('groq', 'K', { fetchImpl: g.impl, repo, clock }).complete({ system: 's', user: 'u' })
+    clock.advance(11 * 60_000)
+    const g2 = limitedGroq([])
+    const r = await createLlm('groq', 'K', { fetchImpl: g2.impl, repo, clock }).complete({ system: 's', user: 'u' })
+    expect(r.model).toBe('openai/gpt-oss-120b')
+  })
+
+  it('no máximo 3 modelos por chamada; todos no limite: devolve o 429 (a fila espera)', async () => {
+    const g = limitedGroq(IDS)
+    const llm = createLlm('groq', 'K', { fetchImpl: g.impl, repo, clock })
+    await expect(llm.complete({ system: 's', user: 'u' })).rejects.toMatchObject({ name: 'LlmRateLimitError' })
+    expect(g.calls.length).toBe(3)
+  })
+})

@@ -112,7 +112,9 @@ export function createTranscriber(
     async transcribe(file: string, _durationSec: number, signal?: AbortSignal): Promise<string> {
       const bytes = await readFile(file)
       if (!models) return post(bytes, file, PROVIDERS.openai.model, signal)
-      return models.withModel('transcribe', null, (model) => post(bytes, file, model, signal), signal)
+      return models.withModel('transcribe', null, (model) => post(bytes, file, model, signal), signal, (e) =>
+        e instanceof RateLimitedError ? e.retryAfterMs : null
+      )
     }
   }
 }

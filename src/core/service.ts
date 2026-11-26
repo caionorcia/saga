@@ -198,7 +198,7 @@ const AI_MESSAGES: Record<AiErrorCode, string> = {
   missing_key: 'Configure a chave da IA nas configurações.',
   invalid_key: 'A chave da IA foi recusada. Confira a chave nas configurações.',
   budget_exceeded: 'O teto diário de gasto com IA foi atingido.',
-  rate_limited: 'A IA pediu para esperar um pouco. Tente de novo em instantes.',
+  rate_limited: 'A IA gratuita (Groq) chegou ao limite de uso por agora; ela volta sozinha mais tarde. Se tiver pressa, escolha o Claude nas Configurações.',
   refusal: 'A IA não quis responder a esta conversa. Tente de novo.',
   invalid_output: 'A IA respondeu fora do formato esperado. Tente de novo.',
   no_messages: 'Ainda não há mensagens deste contato.',

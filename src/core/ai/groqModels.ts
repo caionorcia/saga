@@ -25,6 +25,12 @@ export type GroqModelKind = 'chat' | 'transcribe'
 
 const CACHE_KEY = 'groq.models.cache'
 const BAD_KEY = 'groq.models.bad'
+/** Modelos que responderam 429 (limite por modelo, ex.: cota diária do plano gratuito) → até quando ficam de fora. */
+const LIMITED_KEY = 'groq.models.limited'
+/** Um 429 tira o modelo da escolha por pelo menos isto (a Groq às vezes não manda retry-after). */
+const MIN_LIMITED_MS = 2 * 60_000
+/** Quantos modelos tentar num mesmo pedido quando o anterior está no limite. */
+const MAX_RATE_LIMIT_HOPS = 3
 const CHOSEN_KEY = (k: GroqModelKind) => `groq.models.chosen.${k}`
 const CACHE_MS = 24 * 3_600_000
 const LIST_TIMEOUT_MS = 15_000
@@ -82,6 +88,7 @@ export class GroqModels {
   private readonly clock: Clock
   private memCache: { at: number; ids: string[] } | null = null
   private memBad: Record<string, number> = {}
+  private memLimited: Record<string, number> = {}
 
   constructor(private readonly opts: GroqModelsOpts) {
     this.fetchImpl = opts.fetchImpl ?? fetch
@@ -113,6 +120,22 @@ export class GroqModels {
     const now = this.clock.now()
     const all = { ...(this.readJson<Record<string, number>>(BAD_KEY) ?? {}), ...this.memBad }
     return new Set(Object.entries(all).filter(([, at]) => now - at < CACHE_MS).map(([id]) => id))
+  }
+
+  /** Modelos ainda no limite (429), com o instante em que voltam. */
+  private limitedMap(): Record<string, number> {
+    const now = this.clock.now()
+    const all = { ...(this.readJson<Record<string, number>>(LIMITED_KEY) ?? {}), ...this.memLimited }
+    return Object.fromEntries(Object.entries(all).filter(([, until]) => typeof until === 'number' && until > now))
+  }
+
+  /** O modelo respondeu 429: fica de fora até `retryAfterMs` (mínimo 2 min). Os outros modelos têm cota própria. */
+  markLimited(model: string, retryAfterMs: number): void {
+    const until = this.clock.now() + Math.max(retryAfterMs, MIN_LIMITED_MS)
+    this.memLimited[model] = until
+    const stored = this.limitedMap()
+    stored[model] = until
+    this.writeJson(LIMITED_KEY, stored)
   }
 
   /** O modelo respondeu 404: fica de fora por 24 h e a lista é buscada de novo. */
@@ -173,6 +196,7 @@ export class GroqModels {
    */
   async pick(kind: GroqModelKind, explicit?: string | null, signal?: AbortSignal): Promise<string> {
     const bad = this.badSet()
+    for (const id of Object.keys(this.limitedMap())) bad.add(id)
     let model: string | undefined
     let source = 'configurado'
     if (explicit && !bad.has(explicit)) model = explicit
@@ -213,26 +237,47 @@ export class GroqModels {
     kind: GroqModelKind,
     explicit: string | null | undefined,
     run: (model: string) => Promise<T>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /** devolve o tempo de espera pedido se o erro for 429 (limite do modelo); senão null */
+    rateLimitOf?: (e: unknown) => number | null
   ): Promise<T> {
-    const first = await this.pick(kind, explicit, signal)
-    try {
-      return await run(first)
-    } catch (e) {
-      if (!(e instanceof ModelNotFoundError)) throw e
-      this.diag('groq_model_gone', `${kind}: ${first} respondeu 404; escolhendo outro`)
-      this.markBad(first)
+    let goneOnce = false
+    let lastLimit: unknown = null
+    const tried = new Set<string>()
+    for (let attempt = 0; attempt < MAX_RATE_LIMIT_HOPS + 2; attempt++) {
+      let model: string
+      try {
+        model = await this.pick(kind, explicit, signal)
+      } catch (e) {
+        // todos no limite: devolve o 429 original (a fila espera e tenta de novo)
+        if (lastLimit && e instanceof ModelUnavailableError) throw lastLimit
+        throw e
+      }
+      if (tried.has(model)) {
+        if (lastLimit) throw lastLimit
+        throw new ModelUnavailableError(kind)
+      }
+      tried.add(model)
+      try {
+        return await run(model)
+      } catch (e) {
+        const wait = rateLimitOf ? rateLimitOf(e) : null
+        if (wait !== null) {
+          lastLimit = e
+          this.markLimited(model, wait)
+          if (tried.size >= MAX_RATE_LIMIT_HOPS) throw e
+          this.diag('groq_model_limited', `${kind}: ${model} no limite (429) por ${Math.ceil(Math.max(wait, MIN_LIMITED_MS) / 60_000)} min; tentando outro`)
+          continue
+        }
+        if (!(e instanceof ModelNotFoundError)) throw e
+        this.diag('groq_model_gone', `${kind}: ${model} respondeu 404; escolhendo outro`)
+        this.markBad(model)
+        if (goneOnce) throw new ModelUnavailableError(kind)
+        goneOnce = true
+      }
     }
-    const second = await this.pick(kind, explicit, signal)
-    if (second === first) throw new ModelUnavailableError(kind)
-    try {
-      return await run(second)
-    } catch (e) {
-      if (!(e instanceof ModelNotFoundError)) throw e
-      this.diag('groq_model_gone', `${kind}: ${second} respondeu 404`)
-      this.markBad(second)
-      throw new ModelUnavailableError(kind)
-    }
+    if (lastLimit) throw lastLimit
+    throw new ModelUnavailableError(kind)
   }
 }
 
@@ -240,4 +285,5 @@ export class GroqModels {
 export function resetGroqModelCache(repo: Repo): void {
   repo.deleteSetting(CACHE_KEY)
   repo.deleteSetting(BAD_KEY)
+  repo.deleteSetting(LIMITED_KEY)
 }

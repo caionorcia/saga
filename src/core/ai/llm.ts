@@ -126,7 +126,10 @@ export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateL
     }
     return {
       name: 'groq',
-      complete: ({ system, user, temperature }) => models.withModel('chat', explicit, (model) => call(model, system, user, temperature))
+      complete: ({ system, user, temperature }) =>
+        models.withModel('chat', explicit, (model) => call(model, system, user, temperature), undefined, (e) =>
+          e instanceof LlmRateLimitError ? e.retryAfterMs : null
+        )
     }
   }
 
