@@ -240,6 +240,58 @@ Cada mentorado costuma ter o próprio grupo, onde o mentor responde.
   (`--saga-theme=`) para a primeira pintura sair certa. Contraste AA conferido nos dois temas (texto, selos, alertas,
   balões, avisos, nomes de quem mandou). O QR fica sempre em fundo branco com margem clara.
 
+### Base de conhecimento do método (v0.3.0, a pedido do mentor)
+
+- **Por quê:** as sugestões vão para mentorados e devem responder com o método do mentor, não com conhecimento genérico.
+  O mentor já tem o método escrito (pacotes de skills / GPT: arquivos .md com regras, conteúdo e material interno).
+- **Importar (Configurações › Base de conhecimento):** "Importar pacote / skill" (.zip, .skill ou pasta, pelo diálogo
+  do sistema no processo principal; a interface só diz o tipo, nunca o caminho), "Adicionar arquivo" (.md, .txt, .docx;
+  .docx lido sem dependência: é um .zip com XML; PDF fica para depois) e "Colar texto" (título + texto). Arquivo avulso e
+  texto colado vão para o pacote "Arquivos avulsos" (o de mesmo nome é substituído). Reimportar um pacote (pelo nome:
+  pasta raiz do .zip, nome da pasta ou do arquivo) troca tudo numa transação; o papel e o "Usar" que o mentor mudou à mão
+  continuam valendo para o arquivo de mesmo caminho.
+- **Segurança do .zip:** lido só em memória (nada é extraído no disco); recusa `..`, caminho absoluto, letra de unidade,
+  NUL, links simbólicos, ocultos e `__MACOSX`; limites de 25 MB no arquivo, 20 MB de texto no total, 2 MB por arquivo e
+  500 arquivos, conferidos também na descompactação ("zip bomb"); ignora .zip dentro do .zip e o que não for .md/.txt;
+  ZIP64 não é aceito (importar a pasta). Pasta: sem seguir links, sem pastas ocultas, até 8 níveis. Repetidos (mesmo
+  conteúdo) entram uma vez (fica o de caminho mais curto).
+- **Papel de cada arquivo (heurística, editável):** `regras` (regras/vocabulário/checklist no nome, `INSTRUCOES*`,
+  `SKILL.md` — da skill vale a `description` do cabeçalho), `conhecimento` (o resto), `interno` (o LEIA-ME/README ou as
+  instruções avisam que é material interno — "material interno", "não é pra repassar", "nomes reais", "preços de um
+  aluno" — ou o arquivo tem muitos nomes de pessoas, ou nomes junto com valores em dinheiro; `exemplo-*`), `desligado`
+  (LEIA-ME/README/índice, pastas ou arquivos de anúncios/copies/ganchos, pastas `exemplos/`).
+- **Índice:** seções por título (`#` a `####`, fora de blocos de código); seção acima de ~1.200 caracteres vira pedaços
+  por parágrafo com ~150 de sobreposição. Trilha "Pacote › Arquivo (sem número) › Seção". Seções sobre o próprio
+  material ("como a IA usa este arquivo", "qual arquivo abrir", índice) ficam fora. Trecho com valor em dinheiro, 3+ nomes
+  de pessoas ou título que se diz interno ("interna", "bastidores", "nunca vai pro aluno") é marcado sensível: vai para a
+  IA só como orientação. Tabelas `kb_packages`, `kb_files`, `kb_chunks` e o FTS5 `kb_fts` (unicode61, sem acentos);
+  `analyses.sources_json` guarda o "Baseado em". Tudo local.
+- **Na hora da sugestão (individual e grupo):** consulta = mensagens novas do contato (com transcrições; sem novas, as 3
+  últimas dele), sem palavras vazias, com radical e alguns sinônimos de conversa ("zap" → WhatsApp, "insta" →
+  Instagram, "cobrar" → preço); bm25 no FTS5; um trecho só entra com 2+ termos da consulta; até 4 trechos e ~3.000
+  caracteres, no máximo 2 por arquivo e 1 interno, "conhecimento" antes de "interno", nunca "desligado" nem "regras".
+  As regras viram um bloco de até 2.500 caracteres no pedido do sistema: primeiro postura/bastidor, regras e vocabulário
+  dos arquivos de regras, depois a `description` dos SKILL.md e as seções de tom/regra das instruções; fora checklists,
+  exemplos, casos, contas, instruções para outra IA e trechos sensíveis.
+- **Instruções à IA (valem mais que as do pacote):** seguir as regras; usar os trechos para responder com precisão;
+  "Conhecimento" pode ser mencionado (o conceito, a aula); "Orientação interna" só para entender, sem copiar frases nem
+  citar nomes, preços, resultados, depoimentos ou falas; sem bastidor (nunca revelar outros alunos, preços de outros,
+  frases literais, nem que existem arquivos ou uma base); se não estiver coberto, não inventar e dizer "vou confirmar e
+  te retorno" (nunca mandar a pessoa perguntar a outra pessoa); continuar imitando o estilo do mentor (exemplos da memória
+  seguem valendo).
+- **Interface:** embaixo de cada sugestão, "Baseado em:" com um chip por trecho de conhecimento (arquivo › seção; a trilha
+  inteira na dica); clicar abre o trecho num diálogo. Trecho interno não aparece. Na tela da base: lista por pacote com
+  papel (select), tamanho, seções e "Usar"; "Usar" e "Remover" por pacote; aviso de que os trechos vão para a IA.
+- **Registro:** só contagens (`kb_import`: arquivos, seções, ignorados, repetidos; `kb_used`: caracteres das regras e
+  quantos trechos de cada papel). Nunca nomes de arquivo nem texto da base ou das mensagens.
+
+### Foco (v0.3.0, a pedido do mentor)
+
+- Botão "Foco" (ícone de alvo, `aria-pressed`) no alto da lista de conversas. Ligado, as conversas que não pedem a
+  resposta do mentor (mentor falou por último, "Não precisa responder" do Saga ou do mentor, "Respondido no grupo",
+  escondidas) ficam apagadas (opacidade ~0,45, selos em cinza), mas na lista e clicáveis; as que pedem resposta ficam
+  normais. Vale com todos os filtros e nos dois temas. Lembrado por computador (`localStorage`, com try/catch).
+
 ## Não-objetivos (v1)
 
 - Enviar mensagens pelo app (fica para a v2).
@@ -447,7 +499,9 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 - `messages` (id, jid, de_mim, timestamp, tipo, texto, caminho_audio,
   transcricao, status_transcricao; em grupos: remetente, nome_remetente,
   menciona_mentor)
-- `analyses` (jid, ultima_msg_id, resumo, sugestoes_json, criado_em)
+- `analyses` (jid, ultima_msg_id, resumo, sugestoes_json, criado_em; `sources_json`, o "Baseado em" — v0.3.0)
+- `kb_packages`, `kb_files` (papel, papel automático e motivo, usar), `kb_chunks` (trilha, texto, sensível) e o índice
+  FTS5 `kb_fts` — base de conhecimento, v0.3.0
 - `approved_replies` (como acima)
 - `jobs` (fila única: tipo, chave única, status, tentativas, próxima_execução)
 - `rate_state` e `events` (histórico de ações e de desconexões, para o painel)

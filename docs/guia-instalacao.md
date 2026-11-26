@@ -122,6 +122,33 @@ Em **Configurações › Tema**, escolha **Automático (do Windows)** (o padrão
 
 ![Tema escuro](img/tema-escuro.png)
 
+### Base de conhecimento do seu método (versão 0.3.0)
+
+Ensine ao Saga o seu método, para as sugestões responderem as dúvidas dos mentorados com o que você ensina.
+
+1. Abra **Configurações › Base de conhecimento**.
+2. Clique em **Importar pacote / skill** e escolha o arquivo `.zip` ou `.skill` do seu material (ou clique em **ou uma pasta** para escolher uma pasta). Para um arquivo solto, use **Adicionar arquivo** (`.md`, `.txt` ou `.docx`); para um texto rápido, **Colar texto** (título + texto). PDF ainda não é aceito: salve como `.docx` ou `.txt`.
+3. O Saga lê os arquivos de texto, ignora repetidos, imagens e `.zip` dentro do `.zip`, divide cada arquivo em seções pelos títulos e mostra a lista com o **papel** de cada arquivo, que você pode trocar:
+   - **Regras (sempre):** um resumo curto das regras e do vocabulário vai em toda sugestão.
+   - **Conhecimento:** trechos buscados quando a mensagem do mentorado pede. Aparecem embaixo da sugestão.
+   - **Interno (só orientação):** a IA usa só para entender o método e o tom; nunca cita nomes, preços nem trechos. O Saga já marca assim os arquivos que o próprio pacote avisa que são internos e os que têm muitos nomes de pessoas ou valores. **Confira essa lista**: material com nomes, preços ou falas de outros alunos deve ficar como Interno ou Desligado.
+   - **Desligado:** não é usado (anúncios, exemplos prontos, o LEIA-ME).
+4. Importar de novo o mesmo pacote substitui a versão anterior de uma vez (os papéis que você mudou continuam valendo). **Usar** liga e desliga um arquivo ou o pacote inteiro; **Remover** apaga o pacote do Saga.
+
+Nas sugestões, aparece **Baseado em:** com o arquivo e a seção usados (só os de Conhecimento). Clique para ver o trecho. Se a dúvida não estiver no material, a sugestão diz que você vai confirmar e retornar, em vez de inventar.
+
+> **Atenção:** a base fica só no seu computador, mas os trechos usados vão junto com a conversa para a IA que escreve as sugestões (Groq ou Claude).
+
+![Configurações › Base de conhecimento](img/base-de-conhecimento.png)
+
+![Sugestão com "Baseado em"](img/baseado-em.png)
+
+### Foco (versão 0.3.0)
+
+O botão **Foco**, no alto da lista de conversas, apaga as conversas que **não precisam** da sua resposta (você falou por último, o Saga ou você marcou "Não precisa responder", foi respondido no grupo, ou está escondida). Elas continuam na lista e dá para abrir normalmente; as que esperam a sua resposta ficam em destaque. Funciona junto com **Para responder**, **Com alerta**, **Individuais/Grupos** e a busca, nos dois temas. Clique de novo para desligar; o Saga lembra a escolha neste computador.
+
+![Foco ligado](img/foco.png)
+
 ## 5. O que significa a faixa de cima
 
 A faixa no topo mostra como o Saga está.
@@ -177,7 +204,7 @@ Se o aviso não aparecer mesmo com uma versão nova publicada, clique em **Confi
 
 - Suas conversas, áudios e configurações ficam **neste computador** (pasta de dados do Saga no seu usuário do Windows). Não existe servidor do Saga.
 - A chave de acesso é guardada com a criptografia do Windows.
-- Só saem do computador: o **texto das conversas** e os **áudios**, enviados para a IA que você escolheu (Groq e, se configurado, Claude ou OpenAI) para transcrever e gerar sugestões.
+- Só saem do computador: o **texto das conversas** e os **áudios**, enviados para a IA que você escolheu (Groq e, se configurado, Claude ou OpenAI) para transcrever e gerar sugestões, e, se você importou uma **base de conhecimento**, o resumo das regras e os trechos usados em cada sugestão.
 - O Saga lê conversas individuais e grupos, sem nunca escrever nem mudar nada neles. Status, canais e listas de transmissão são ignorados.
 
 ## 8. Desinstalar

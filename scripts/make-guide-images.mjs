@@ -64,6 +64,26 @@ await page.getByRole('button', { name: 'Verificar agora' }).click()
 await page.getByText(/você já está na versão mais nova/).waitFor()
 await page.getByRole('region', { name: 'Atualizações' }).screenshot({ path: `${OUT}/config-atualizacoes.png` })
 
+// base de conhecimento, "Baseado em" e Foco (v0.3.0; base de demonstração)
+await page.goto(BASE)
+await page.getByRole('button', { name: 'Configurações' }).click()
+const kb = page.getByRole('region', { name: 'Base de conhecimento' })
+await kb.getByText('Método Exemplo (demonstração)').waitFor()
+await kb.scrollIntoViewIfNeeded()
+await page.waitForTimeout(300)
+await shot('base-de-conhecimento')
+await page.goto(BASE)
+await page.locator('.contact-name', { hasText: /^Mentoria Turma 3/ }).click()
+await page.locator('.kb-chip').first().waitFor()
+await page.waitForTimeout(500)
+await page.locator('.suggestions').screenshot({ path: `${OUT}/baseado-em.png` })
+await page.evaluate(() => localStorage.setItem('saga.focus', '1'))
+await page.goto(BASE)
+await page.locator('.contact-main').first().waitFor()
+await page.waitForTimeout(300)
+await page.locator('nav.contacts').screenshot({ path: `${OUT}/foco.png` })
+await page.evaluate(() => localStorage.removeItem('saga.focus'))
+
 // faixa de estado
 const states = {
   'estado-conectado': {},
