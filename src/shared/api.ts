@@ -20,7 +20,7 @@ import type {
 } from './backup'
 import type { PrepareSendInput, PrepareSendResult, SendAvulsaInput, SendKind, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView } from './send'
 import type { SendHoursInfo, SendSchedule } from './sendHours'
-import type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult, FollowupOpenResult, FollowupStatus, FollowupView } from './copiloto'
+import type { CopilotoCodeResult, CopilotoPatch, CopilotoRepairResult, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult, FollowupOpenResult, FollowupStatus, FollowupView } from './copiloto'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind, ThemePref }
@@ -334,6 +334,8 @@ export interface SagaApi {
   copilotoGenerateCode(): Promise<CopilotoCodeResult>
   /** "Testar conexão": busca a lista de mentorados e diz quantos telefones e conversas daqui casaram */
   copilotoTest(): Promise<CopilotoTestResult>
+  /** v0.8.1: "Reenviar histórico dos grupos": pede os nomes dos grupos de novo e põe o histórico dos grupos na fila */
+  copilotoRepairGroups(): Promise<CopilotoRepairResult>
 
   // --- follow-up do Copiloto (v0.7.0): a equipe escreve, o mentor confirma cada envio ---
   /** os follow-ups esperando o mentor ou saindo (e, por algumas horas, os enviados e os que não dão para enviar) */
@@ -407,6 +409,7 @@ export const INVOKE_METHODS = [
   'copilotoSave',
   'copilotoGenerateCode',
   'copilotoTest',
+  'copilotoRepairGroups',
   'listFollowups',
   'followupOpen',
   'followupDecline'

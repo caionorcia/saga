@@ -139,17 +139,23 @@ export class EventBuilder {
     return out
   }
 
+  /** Os telefones (do roster) dos participantes do grupo, em ordem; vazio = não é grupo de mentorado. */
+  groupPhones(jid: string): string[] {
+    const phones = new Set<string>()
+    for (const p of this.deps.repo.copiloto.groupParticipants(jid)) {
+      const ph = this.rosterPhone(p)
+      if (ph) phones.add(ph)
+    }
+    return [...phones].sort()
+  }
+
   private computeChat(jid: string): Chat | null {
     const c = this.deps.repo.copiloto.chat(jid)
     if (!c) return null
     if (c.isGroup) {
-      const phones = new Set<string>()
-      for (const p of this.deps.repo.copiloto.groupParticipants(jid)) {
-        const ph = this.rosterPhone(p)
-        if (ph) phones.add(ph)
-      }
-      if (phones.size === 0) return null
-      return { key: chatKey(jid), kind: 'group', name: c.name, phones: [...phones].sort() }
+      const phones = this.groupPhones(jid)
+      if (phones.length === 0) return null
+      return { key: chatKey(jid), kind: 'group', name: c.name, phones }
     }
     const phone = this.rosterPhone(jid)
     if (!phone) return null

@@ -17,6 +17,8 @@ import {
   COPILOTO_TEXT,
   isCopilotoUrl,
   type CopilotoCodeResult,
+  type CopilotoGroupRepair,
+  type CopilotoRepairResult,
   type CopilotoPatch,
   type CopilotoSaveResult,
   type CopilotoStatus,
@@ -47,7 +49,9 @@ export const COPILOTO_LIMITS = {
   /** v0.7.0: o servidor recusa `final_text` acima disso (`invalid` nunca se resolve): corta antes */
   finalTextMax: 10_000,
   /** enviado sem o eco ter chegado: espera ele até este tempo para o `sent_at`; depois vale a hora do envio */
-  echoWaitMs: 2 * 60_000
+  echoWaitMs: 2 * 60_000,
+  /** v0.8.1: grupos ainda sem carga são conferidos de novo contra o roster neste intervalo (e logo que a participação muda) */
+  regroupEveryMs: 10 * 60_000
 } as const
 
 const DAY = 24 * 60 * 60_000
@@ -67,7 +71,13 @@ export const COPILOTO_KEYS = {
   autoFollowupsAt: 'copiloto.autoFollowupsAt',
   /** falhas seguidas da conferência antes do envio automático e até quando todos esperam (espera crescente) */
   autoPollFailures: 'copiloto.autoPollFailures',
-  autoPollUntil: 'copiloto.autoPollUntil'
+  autoPollUntil: 'copiloto.autoPollUntil',
+  /** v0.8.1: o reenvio do histórico dos grupos já rodou uma vez neste computador ('1') */
+  groupRepairDone: 'copiloto.groupRepairV081',
+  /** o botão "Reenviar histórico dos grupos" pediu um reenvio que ainda espera o roster ('1') */
+  groupRepairPending: 'copiloto.groupRepairPending',
+  /** o resultado do último reenvio (JSON `{at, groups, messages, empty}`: só contagens) */
+  groupRepairResult: 'copiloto.groupRepairResult'
 } as const
 
 const K = COPILOTO_KEYS
@@ -84,7 +94,15 @@ export interface CopilotoSyncDeps {
   onFollowups?: () => void
   /** v1.2.1: um envio desta conversa mudou (cancelado porque o follow-up foi cancelado no Copiloto) */
   onSendChanged?: (jid: string) => void
+  /**
+   * v0.8.1: o WhatsApp está conectado há algum tempo (o mapa @lid → telefone já carregou). O reenvio automático dos grupos
+   * espera por isso; sem a função, vale sempre.
+   */
+  waReady?: () => boolean
 }
+
+/** v0.8.1: o que o reenvio do histórico dos grupos pôs na fila (só contagens). */
+export type GroupRepairResult = CopilotoGroupRepair
 
 interface Roster {
   at: number
@@ -109,6 +127,8 @@ export class CopilotoSync {
   private followupPollAt = 0
   private followupFailures = 0
   private reportFailures = 0
+  /** v0.8.1: quando conferir de novo os grupos ainda sem carga (0 = na próxima volta) */
+  private regroupAt = 0
 
   constructor(private readonly deps: CopilotoSyncDeps) {
     this.repo = deps.repo
@@ -191,7 +211,18 @@ export class CopilotoSync {
       rosterSize: r?.phones.length ?? 0,
       rosterAt: r?.at ?? null,
       chats: this.repo.copiloto.chatCount(),
-      autoFollowups: this.autoFollowups()
+      autoFollowups: this.autoFollowups(),
+      groupRepair: this.groupRepairResult(),
+      groupRepairPending: this.repo.getSetting(K.groupRepairPending) === '1'
+    }
+  }
+
+  private groupRepairResult(): GroupRepairResult | null {
+    try {
+      const v = JSON.parse(this.repo.getSetting(K.groupRepairResult) ?? 'null') as GroupRepairResult | null
+      return v && typeof v.at === 'number' ? v : null
+    } catch {
+      return null
     }
   }
 
@@ -228,6 +259,8 @@ export class CopilotoSync {
       this.repo.deleteSetting(K.authFailed)
       // roster novo ao ligar (e a carga inicial das conversas de mentorados)
       this.repo.deleteSetting(K.roster)
+      // ligada agora (fila vazia, carga nova com a regra dos grupos da v0.8.1): o reenvio único não é preciso
+      this.repo.setSetting(K.groupRepairDone, '1')
       this.resetBackoff()
       this.repo.logEvent('copiloto_on', 'integração com o Copiloto ligada')
     } else if (patch.enabled === false && this.enabled()) {
@@ -360,6 +393,14 @@ export class CopilotoSync {
     // sem roster nenhum ainda: nada vira evento (o que mudou fica anotado, só local)
     const set = this.rosterSet()
     if (!set) return Math.max(this.rosterRetryAt - now, COPILOTO_LIMITS.gapMs)
+    // v0.8.1: o reenvio único dos grupos (depois da atualização, com o WhatsApp de pé) ou o pedido pelo botão
+    const repairDue = this.repo.getSetting(K.groupRepairPending) === '1' || (this.repo.getSetting(K.groupRepairDone) !== '1' && (this.deps.waReady?.() ?? true))
+    if (repairDue) this.repairGroupsNow(set)
+    // v0.8.1: grupo que passou a casar (participantes conhecidos depois, @lid que ganhou telefone): carga dele agora
+    if (now >= this.regroupAt) {
+      this.matchNewGroups(set)
+      this.regroupAt = now + COPILOTO_LIMITS.regroupEveryMs
+    }
     const processed = this.processDirty(set)
     if (wait > 0) return wait
     const rows = this.repo.copiloto.due(now, this.maxBatch)
@@ -395,6 +436,102 @@ export class CopilotoSync {
     this.followupPollAt = 0
     this.followupFailures = 0
     this.reportFailures = 0
+    this.regroupAt = 0
+  }
+
+  // --- grupos (v0.8.1) ---
+
+  /**
+   * A participação nos grupos mudou (participantes de um grupo, um @lid que ganhou telefone): os grupos sem carga são
+   * conferidos de novo na próxima volta.
+   */
+  membershipChanged(): void {
+    // vários de uma vez (histórico chegando): uma conferência só, logo depois
+    const at = this.deps.clock.now() + COPILOTO_LIMITS.gapMs
+    if (this.regroupAt > at) this.regroupAt = at
+  }
+
+  /**
+   * Os grupos que ainda não tiveram carga e agora casam com o roster ganham a carga dos últimos 30 dias (ou a mensagem
+   * mais recente). Antes só o roster (ao ligar e a cada 6 h) ou uma mudança no próprio grupo faziam isso. Público para os testes.
+   */
+  matchNewGroups(roster: ReadonlySet<string>): number {
+    const pending = this.repo.copiloto.groupsNotBackfilled()
+    if (pending.length === 0) return 0
+    const b = this.builder(roster)
+    const since = this.deps.clock.now() - COPILOTO_LIMITS.backfillDays * DAY
+    let groups = 0
+    let messages = 0
+    for (const jid of pending) {
+      if (!b.chat(jid)) continue
+      messages += this.repo.copiloto.backfill(jid, since)
+      groups++
+    }
+    if (groups) this.repo.logEvent('copiloto_groups', `grupos que passaram a ser de mentorados: ${groups}; mensagens anotadas: ${messages}`)
+    return groups
+  }
+
+  /** "Reenviar histórico dos grupos": agora, se o roster já chegou; senão, assim que chegar. */
+  repairGroups(): Promise<CopilotoRepairResult> {
+    return this.exclusive(async () => {
+      if (!this.enabled()) return { ok: false as const, message: COPILOTO_TEXT.repairOff }
+      const set = this.rosterSet()
+      if (set) this.repairGroupsNow(set)
+      else {
+        this.repo.setSetting(K.groupRepairPending, '1')
+        this.kick()
+      }
+      return { ok: true as const, status: this.status() }
+    })
+  }
+
+  /**
+   * O reenvio do histórico dos grupos: para cada grupo que casa com o roster, todas as mensagens dos últimos 30 dias
+   * (ou a mais recente guardada, se não houver nenhuma nesse tempo), os alertas, os envios, o "Para responder" e o resumo,
+   * com os mesmos ids e o mesmo formato da captura normal, de volta a pendentes (mesmo já aceitos). A fila tem uma linha
+   * por id e o servidor faz upsert pelo id: rodar de novo não duplica nada. Público para os testes.
+   */
+  repairGroupsNow(roster: ReadonlySet<string>): GroupRepairResult {
+    const b = this.builder(roster)
+    const repo = this.repo.copiloto
+    const since = this.deps.clock.now() - COPILOTO_LIMITS.backfillDays * DAY
+    const out: GroupRepairResult = { at: this.deps.clock.now(), groups: 0, messages: 0, empty: 0 }
+    const put = (built: ReturnType<EventBuilder['message']>, jid: string): boolean => {
+      if (!built || built.jid !== jid) return false
+      const { json, hash } = serialize(built.event)
+      repo.upsert(built.id, built.jid, json, hash, true)
+      return true
+    }
+    for (const jid of repo.groupJids()) {
+      if (!b.chat(jid)) {
+        // grupo de mentorado conhecido só pelos participantes (nenhuma conversa aqui): não há o que mandar
+        if (!repo.chat(jid) && b.groupPhones(jid).length > 0) out.empty++
+        continue
+      }
+      const ids = repo.backfillMessageIds(jid, since)
+      if (ids.length === 0) {
+        out.empty++
+        continue
+      }
+      let n = 0
+      for (const id of ids) {
+        const m = this.repo.getMessage(id)
+        if (m && m.jid === jid && put(b.message(m), jid)) n++
+      }
+      const extras = repo.backfillExtras(jid, since)
+      for (const id of extras.sends) put(b.send(id), jid)
+      for (const id of extras.alerts) put(b.alert(id), jid)
+      put(b.replyState(jid), jid)
+      put(b.summary(jid), jid)
+      repo.markBackfilled(jid)
+      if (n > 0) out.groups++
+      out.messages += n
+    }
+    this.repo.setSetting(K.groupRepairResult, JSON.stringify(out))
+    this.repo.setSetting(K.groupRepairDone, '1')
+    this.repo.deleteSetting(K.groupRepairPending)
+    this.repo.logEvent('copiloto_groups', `reenvio dos grupos: ${out.groups} grupo(s), ${out.messages} mensagem(ns) na fila; ${out.empty} grupo(s) sem nenhuma mensagem neste computador`)
+    return out
   }
 
   private diag(kind: string, detail: string): void {
@@ -478,7 +615,12 @@ export class CopilotoSync {
     const extra: Array<{ ref: string; jid: string }> = []
     let queued = 0
     for (const { ref, jid } of refs) {
-      if (!b.chat(jid)) continue
+      if (!b.chat(jid)) {
+        // v0.8.1: a carga desta conversa foi anotada quando ela casava e agora não casa (o telefone de um @lid ainda não
+        // carregou, por exemplo): esquece a carga, que é refeita quando ela voltar a casar (antes ela se perdia)
+        if (this.repo.copiloto.isBackfilled(jid)) this.repo.copiloto.forgetChat(jid)
+        continue
+      }
       if (!this.repo.copiloto.isBackfilled(jid)) this.repo.copiloto.backfill(jid, since)
       const sep = ref.indexOf(':')
       const kind = ref.slice(0, sep)
@@ -497,6 +639,12 @@ export class CopilotoSync {
       else if (kind === 'r') built = b.replyState(jid)
       else if (kind === 's') built = b.summary(jid)
       else if (kind === 'x') built = b.send(Number(key))
+      else if (kind === 'n') {
+        // v0.8.1: o grupo ganhou (ou trocou de) nome: a mensagem mais recente volta à fila com o `chat.name` novo
+        const last = this.repo.copiloto.backfillMessageIds(jid, Number.MAX_SAFE_INTEGER)[0]
+        const m = last ? this.repo.getMessage(last) : null
+        if (m && m.jid === jid) built = b.message(m)
+      }
       if (!built || built.jid !== jid) continue
       const { json, hash } = serialize(built.event)
       if (this.repo.copiloto.upsert(built.id, built.jid, json, hash)) queued++

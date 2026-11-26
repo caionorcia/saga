@@ -487,7 +487,9 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     rosterSize: 0,
     rosterAt: null,
     chats: 0,
-    autoFollowups: false
+    autoFollowups: false,
+    groupRepair: null,
+    groupRepairPending: false
   }
   if (opts.autoFollowups) Object.assign(copiloto, { enabled: true, url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook', hasCode: true, rosterSize: 24, rosterAt: now, chats: 5, autoFollowups: true })
   applyAuto()
@@ -893,6 +895,13 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       if (patch.autoFollowups !== undefined) copiloto.autoFollowups = patch.autoFollowups
       applyAuto()
       notifyFollowups()
+      return { ok: true, status: { ...copiloto } }
+    },
+    copilotoRepairGroups: async () => {
+      record('copilotoRepairGroups', [], undefined)
+      if (!copiloto.enabled) return { ok: false, message: COPILOTO_TEXT.repairOff }
+      copiloto.groupRepair = { at: Date.now(), groups: 4, messages: 212, empty: 1 }
+      copiloto.pending += 212
       return { ok: true, status: { ...copiloto } }
     },
     copilotoGenerateCode: async () => {

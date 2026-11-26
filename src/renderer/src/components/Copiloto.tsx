@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { CopilotoStatus } from '../../../shared/copiloto'
-import { COPILOTO_TEXT, isCopilotoUrl } from '../../../shared/copiloto'
+import { COPILOTO_TEXT, groupRepairLine, isCopilotoUrl } from '../../../shared/copiloto'
 import { formatDay, formatTime } from '../format'
 
 const when = (ts: number) => `${formatDay(ts)}, ${formatTime(ts)}`
@@ -79,6 +79,26 @@ export function CopilotoSection() {
       setSt(await window.saga.copilotoStatus())
     } catch {
       setMsg({ text: COPILOTO_TEXT.network, bad: true })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // v0.8.1: reenvio do histórico dos grupos (e os nomes dos grupos de novo)
+  const repair = async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const r = await window.saga.copilotoRepairGroups()
+      if (r.ok) {
+        setSt(r.status)
+        setMsg({
+          text: r.status.groupRepairPending ? 'Pedido feito: o reenvio começa assim que a lista de mentorados chegar.' : 'Histórico dos grupos colocado na fila ✓',
+          bad: false
+        })
+      } else setMsg({ text: r.message, bad: true })
+    } catch {
+      setMsg({ text: 'Não foi possível reenviar. Tente de novo.', bad: true })
     } finally {
       setBusy(false)
     }
@@ -173,15 +193,32 @@ export function CopilotoSection() {
 
       <div className="export-row">
         <button type="button" className="btn" disabled={busy || !st.url || !st.hasCode} onClick={() => void test()}>
-          {busy ? 'Testando…' : 'Testar conexão'}
+          {busy ? 'Aguarde…' : 'Testar conexão'}
         </button>
+        {st.enabled && (
+          <button type="button" className="btn" disabled={busy} onClick={() => void repair()}>
+            Reenviar histórico dos grupos
+          </button>
+        )}
       </div>
+      {st.enabled && (
+        <p className="muted small">
+          Põe de novo na fila os últimos 30 dias dos grupos dos mentorados e pede os nomes dos grupos ao WhatsApp. Nada é
+          duplicado no Copiloto.
+        </p>
+      )}
       <p className={msg?.bad ? 'field-error small' : 'ok-text small'} role="status" aria-live="polite">
         {msg?.text ?? ' '}
       </p>
       {st.authFailed && <p className="field-error small">{COPILOTO_TEXT.invalidCode}. Gere outro código ou confira o secret no Copiloto.</p>}
       {st.enabled && (
         <p className="muted small" data-testid="copiloto-status">
+          {st.groupRepair && (
+            <>
+              <span data-testid="copiloto-group-repair">{groupRepairLine(st.groupRepair)}</span>
+              <br />
+            </>
+          )}
           Pendentes: {st.pending} · Último envio: {st.lastSentAt ? when(st.lastSentAt) : 'ainda não'}
           {st.lastError && !st.authFailed && (
             <>

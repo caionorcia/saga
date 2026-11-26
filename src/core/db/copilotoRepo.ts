@@ -51,9 +51,10 @@ export class CopilotoRepo {
 
   /**
    * Põe (ou troca) o evento na fila. Mesmo id com o mesmo conteúdo já aceito ou na fila: nada muda (`false`).
-   * Conteúdo novo: volta a pendente, com as tentativas zeradas.
+   * Conteúdo novo: volta a pendente, com as tentativas zeradas. `force` (v0.8.1, reenvio dos grupos): volta a pendente
+   * mesmo com o mesmo conteúdo já aceito (o servidor faz upsert pelo id; a fila continua com uma linha por id).
    */
-  upsert(eventId: string, jid: string, payloadJson: string, payloadHash: string): boolean {
+  upsert(eventId: string, jid: string, payloadJson: string, payloadHash: string, force = false): boolean {
     const res = this.db
       .prepare(
         `INSERT INTO copiloto_outbox(event_id, jid, payload_json, payload_hash, status, attempts, next_attempt_at, updated_at)
@@ -61,9 +62,9 @@ export class CopilotoRepo {
          ON CONFLICT(event_id) DO UPDATE SET
            jid = excluded.jid, payload_json = excluded.payload_json, payload_hash = excluded.payload_hash,
            status = 'pending', attempts = 0, next_attempt_at = 0, last_status = NULL, updated_at = excluded.updated_at
-         WHERE copiloto_outbox.payload_hash <> excluded.payload_hash`
+         WHERE copiloto_outbox.payload_hash <> excluded.payload_hash OR (?6 = 1 AND copiloto_outbox.status <> 'pending')`
       )
-      .run(eventId, jid, payloadJson, payloadHash, this.clock.now())
+      .run(eventId, jid, payloadJson, payloadHash, this.clock.now(), force ? 1 : 0)
     return Number(res.changes) > 0
   }
 
@@ -165,19 +166,66 @@ export class CopilotoRepo {
   /**
    * Carga inicial de uma conversa de mentorado: anota tudo dos últimos dias (mensagens, alertas, envios, o "Para
    * responder" e o resumo) para virar evento, e marca a conversa como feita.
+   * v0.8.1: grupo sem mensagem nos últimos dias leva a mais recente guardada aqui (seja de quando for), para o Copiloto
+   * saber que o grupo existe. Devolve quantas mensagens anotou.
    */
-  backfill(jid: string, since: number): void {
+  backfill(jid: string, since: number): number {
+    let n = 0
     this.tx(() => {
       const ins = this.db.prepare('INSERT OR IGNORE INTO copiloto_dirty(ref, jid) VALUES (?, ?)')
-      for (const r of this.db.prepare('SELECT id FROM messages WHERE jid = ? AND ts >= ? ORDER BY ts').all(jid, since) as Row[]) ins.run(`m:${r.id}`, jid)
-      for (const r of this.db.prepare('SELECT id FROM alerts WHERE jid = ? AND (created_at >= ?2 OR dismissed_at IS NULL)').all(jid, since) as Row[]) {
-        ins.run(`a:${r.id}`, jid)
+      for (const id of this.backfillMessageIds(jid, since)) {
+        ins.run(`m:${id}`, jid)
+        n++
       }
-      for (const r of this.db.prepare("SELECT id FROM sends WHERE jid = ? AND status = 'sent' AND sent_at >= ?").all(jid, since) as Row[]) ins.run(`x:${r.id}`, jid)
+      const extras = this.backfillExtras(jid, since)
+      for (const id of extras.alerts) ins.run(`a:${id}`, jid)
+      for (const id of extras.sends) ins.run(`x:${id}`, jid)
       ins.run(`r:${jid}`, jid)
       ins.run(`s:${jid}`, jid)
-      this.db.prepare('INSERT OR REPLACE INTO copiloto_chats(jid, backfilled_at) VALUES (?, ?)').run(jid, this.clock.now())
+      this.markBackfilled(jid)
     })
+    return n
+  }
+
+  /** As mensagens da carga: as dos últimos dias; grupo sem nenhuma nesse tempo, a mais recente guardada (ou nada). */
+  backfillMessageIds(jid: string, since: number): string[] {
+    const ids = (this.db.prepare('SELECT id FROM messages WHERE jid = ? AND ts >= ? ORDER BY ts, rowid').all(jid, since) as Row[]).map((r) => r.id as string)
+    if (ids.length > 0 || !jid.endsWith('@g.us')) return ids
+    const last = this.db.prepare('SELECT id FROM messages WHERE jid = ? ORDER BY ts DESC, rowid DESC LIMIT 1').get(jid) as Row | undefined
+    return last ? [last.id as string] : []
+  }
+
+  /** Os alertas e os envios diretos da carga (os mesmos de `backfill`). */
+  backfillExtras(jid: string, since: number): { alerts: number[]; sends: number[] } {
+    return {
+      alerts: (this.db.prepare('SELECT id FROM alerts WHERE jid = ?1 AND (created_at >= ?2 OR dismissed_at IS NULL)').all(jid, since) as Row[]).map((r) => r.id as number),
+      sends: (this.db.prepare("SELECT id FROM sends WHERE jid = ? AND status = 'sent' AND sent_at >= ?").all(jid, since) as Row[]).map((r) => r.id as number)
+    }
+  }
+
+  markBackfilled(jid: string): void {
+    this.db.prepare('INSERT OR REPLACE INTO copiloto_chats(jid, backfilled_at) VALUES (?, ?)').run(jid, this.clock.now())
+  }
+
+  /** Esquece a carga desta conversa (v0.8.1: ela deixou de casar; quando casar de novo, a carga é refeita). */
+  forgetChat(jid: string): void {
+    this.db.prepare('DELETE FROM copiloto_chats WHERE jid = ?').run(jid)
+  }
+
+  /** Os grupos ainda sem carga feita (candidatos a casar com o roster). */
+  groupsNotBackfilled(): string[] {
+    return (
+      this.db.prepare("SELECT jid FROM contacts WHERE is_group = 1 AND jid NOT IN (SELECT jid FROM copiloto_chats) ORDER BY jid").all() as Row[]
+    ).map((r) => r.jid as string)
+  }
+
+  /** Todos os grupos deste computador: os com conversa e os conhecidos só pela consulta de participantes. */
+  groupJids(): string[] {
+    return (
+      this.db
+        .prepare("SELECT jid FROM contacts WHERE is_group = 1 UNION SELECT group_jid FROM group_sizes WHERE group_jid LIKE '%@g.us' ORDER BY 1")
+        .all() as Row[]
+    ).map((r) => r.jid as string)
   }
 
   chatCount(): number {

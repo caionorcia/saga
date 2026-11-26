@@ -46,7 +46,7 @@ import { LIMITS, RateLimiter, type LimiterName } from './queue/limiter'
 import { JobQueue, type JobType } from './queue/queue'
 import { EncryptionUnavailableError, SettingsStore, testKey, type Cipher, type KeyKind, type Provider, type SettingsPatch } from './settings'
 import type { NormalizedMessage } from './types'
-import { WhatsAppClient, type ConnState, type WhatsAppClientDeps } from './wa/client'
+import { GROUPS_FETCHED_SETTING, WhatsAppClient, type ConnState, type WhatsAppClientDeps } from './wa/client'
 import type { WaVersionFetcher } from './wa/version'
 import { formatPhone } from './db/repo'
 import { SendConflictError, sendJobKey, type SendRow } from './db/sendRepo'
@@ -61,6 +61,7 @@ import {
   type CopilotoPatch,
   type CopilotoSaveResult,
   type CopilotoStatus,
+  type CopilotoRepairResult,
   type CopilotoTestResult,
   type FollowupOpenResult,
   type FollowupView
@@ -105,7 +106,7 @@ const UNHIDDEN_KEY = 'migration.unhidden_jids'
 
 /** O que o serviço usa do cliente do WhatsApp (o real ou um falso nos testes / modo SAGA_FAKE_WA). */
 export interface WaClientLike {
-  on(event: 'qr' | 'status' | 'message' | 'disk' | 'contacts' | 'send', listener: (arg: any) => void): unknown
+  on(event: 'qr' | 'status' | 'message' | 'disk' | 'contacts' | 'send' | 'membership', listener: (arg: any) => void): unknown
   start(): Promise<void>
   stop(): Promise<void>
   manualReconnect(): Promise<void>
@@ -121,6 +122,8 @@ export interface WaClientLike {
   isSendInFlight?(sendId: number): boolean
   /** v0.5.0: o telefone (`@s.whatsapp.net`) já conhecido para um @lid, sem rede; null se não souber */
   pnForLid?(lid: string): string | null
+  /** v0.8.1: pede a consulta dos grupos (nomes e participantes) de novo, pela fila */
+  refreshGroupSubjects?(): void
 }
 
 export interface SagaServiceOpts {
@@ -256,6 +259,8 @@ export class SagaService extends EventEmitter {
   readonly autoFollowups: FollowupAutoSender
   /** desde quando a conexão está aberta (null = fechada): o envio automático só sai com ela estável */
   private connOpenSince: number | null = null
+  /** v0.8.1: quando esta execução começou (a consulta dos grupos feita depois disso vale para o reenvio dos grupos) */
+  private readonly startedAt: number
   private readonly wa: WaClientLike
   private readonly repo: Repo
   private readonly settings: SettingsStore
@@ -313,6 +318,7 @@ export class SagaService extends EventEmitter {
     this.repo = repo
     this.settings = opts.settings
     this.clock = clock
+    this.startedAt = clock.now()
     this.fetchImpl = opts.fetchImpl
     this.diagFn = opts.diag
     this.llmFactory = opts.llmFactory ?? ((kind, key, o) => createLlm(kind, key, o))
@@ -340,7 +346,8 @@ export class SagaService extends EventEmitter {
       pnForLid: (lid) => this.wa?.pnForLid?.(lid) ?? null,
       diag: (k, d) => this.diag(k, d),
       onFollowups: () => this.markFollowups(),
-      onSendChanged: (jid) => this.markSends(jid)
+      onSendChanged: (jid) => this.markSends(jid),
+      waReady: () => this.groupsReady()
     })
 
     this.autoFollowups = new FollowupAutoSender({
@@ -503,6 +510,8 @@ export class SagaService extends EventEmitter {
       this.markState()
     })
     this.wa.on('disk', () => this.markState())
+    // v0.8.1: participantes de grupo ou um @lid com telefone novo: o Copiloto confere de novo os grupos
+    this.wa.on('membership', () => this.copiloto.membershipChanged())
     this.wa.on('contacts', () => {
       this.pendingContacts = true
       this.scheduleEmit()
@@ -1759,6 +1768,28 @@ export class SagaService extends EventEmitter {
 
   copilotoTest(): Promise<CopilotoTestResult> {
     return this.copiloto.test()
+  }
+
+  /** v0.8.1: "Reenviar histórico dos grupos": pede os nomes dos grupos de novo e põe o histórico dos grupos na fila. */
+  copilotoRepairGroups(): Promise<CopilotoRepairResult> {
+    try {
+      this.wa.refreshGroupSubjects?.()
+    } catch {
+      // sem conexão: os nomes vêm na próxima consulta
+    }
+    return this.copiloto.repairGroups()
+  }
+
+  /**
+   * v0.8.1: o reenvio automático dos grupos espera o WhatsApp de pé há 1 min e a consulta dos grupos feita nesta
+   * execução (os eventos levam os nomes); se a consulta não sair, no máximo 15 min de conexão.
+   */
+  private groupsReady(): boolean {
+    if (this.connOpenSince === null) return false
+    const open = this.clock.now() - this.connOpenSince
+    const fetched = Number(this.repo.getSetting(GROUPS_FETCHED_SETTING) ?? 0)
+    const named = fetched >= this.startedAt || (fetched > 0 && this.repo.unnamedGroupCount() === 0)
+    return (open >= 60_000 && named) || open >= 15 * 60_000
   }
 
   // --- base de conhecimento ---

@@ -26,8 +26,25 @@ export const COPILOTO_TEXT = {
   needsSetup: 'Preencha o endereço e gere o código antes de ligar.',
   encryption: 'A criptografia do Windows não está disponível. O código não foi salvo.',
   network: 'Sem conexão com o Copiloto. Tente de novo.',
-  server: 'O Copiloto não respondeu direito. Tente de novo mais tarde.'
+  server: 'O Copiloto não respondeu direito. Tente de novo mais tarde.',
+  repairOff: 'Ligue o envio para o Copiloto antes de reenviar o histórico dos grupos.'
 } as const
+
+/** v0.8.1: o último "Reenviar histórico dos grupos" (só contagens). */
+export interface CopilotoGroupRepair {
+  /** epoch ms */
+  at: number
+  /** grupos de mentorados com mensagens postas na fila */
+  groups: number
+  messages: number
+  /** grupos de mentorados sem nenhuma mensagem guardada neste computador (nada a mandar) */
+  empty: number
+}
+
+/** A linha que Configurações › Copiloto da Saga mostra depois do reenvio. */
+export function groupRepairLine(r: CopilotoGroupRepair): string {
+  return `Grupos: ${r.groups} grupo(s) e ${r.messages} mensagem(ns) colocados na fila para o Copiloto (${r.empty} grupo(s) sem nenhuma mensagem neste computador)`
+}
 
 /** O que a tela de configurações mostra. O código nunca volta para a interface: só se está configurado. */
 export interface CopilotoStatus {
@@ -50,7 +67,13 @@ export interface CopilotoStatus {
   chats: number
   /** v0.8.0 (contrato v1.2): "Enviar follow-ups do Copiloto automaticamente" (padrão: desligado) */
   autoFollowups: boolean
+  /** v0.8.1: o último reenvio do histórico dos grupos (null = ainda não rodou) e se há um pedido esperando o roster */
+  groupRepair: CopilotoGroupRepair | null
+  groupRepairPending: boolean
 }
+
+/** v0.8.1: "Reenviar histórico dos grupos". */
+export type CopilotoRepairResult = { ok: true; status: CopilotoStatus } | { ok: false; message: string }
 
 export interface CopilotoPatch {
   enabled?: boolean

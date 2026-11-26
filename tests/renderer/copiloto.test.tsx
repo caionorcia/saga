@@ -56,3 +56,23 @@ describe('Configurações › Copiloto: envio automático dos follow-ups (v0.8.0
     expect(ctl.calls.filter((c) => c.method === 'copilotoSave').map((c) => c.args[0])).toContainEqual({ autoFollowups: true })
   })
 })
+
+describe('Configurações › Copiloto: reenvio do histórico dos grupos (v0.8.1)', () => {
+  it('só com a integração ligada; mostra a linha com as contagens', async () => {
+    render(<CopilotoSection />)
+    await screen.findByLabelText('Enviar para o Copiloto da Saga')
+    expect(screen.queryByRole('button', { name: 'Reenviar histórico dos grupos' })).toBeNull()
+    fireEvent.change(screen.getByLabelText('Endereço do Copiloto'), { target: { value: URL_OK } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar endereço' }))
+    await screen.findByText('Salvo ✓')
+    fireEvent.click(screen.getByRole('button', { name: 'Gerar código' }))
+    await screen.findByLabelText('Código do Copiloto')
+    fireEvent.click(screen.getByLabelText('Enviar para o Copiloto da Saga'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reenviar histórico dos grupos' }))
+    expect(await screen.findByText('Histórico dos grupos colocado na fila ✓')).toBeTruthy()
+    expect(screen.getByTestId('copiloto-group-repair').textContent).toBe(
+      'Grupos: 4 grupo(s) e 212 mensagem(ns) colocados na fila para o Copiloto (1 grupo(s) sem nenhuma mensagem neste computador)'
+    )
+    expect(ctl.calls.some((c) => c.method === 'copilotoRepairGroups')).toBe(true)
+  })
+})
