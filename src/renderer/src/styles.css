@@ -602,3 +602,4 @@ select { font: inherit; color: inherit; width: 100%; border: 1px solid var(--bor
 .fu-note { margin: 0 0 6px; }
 .fu-open .sug-avulsa { margin-top: 0; }
 .fu-composer textarea { width: 100%; }
+.fu-auto { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; border-left: 4px solid var(--accent); background: var(--accent-soft); color: var(--text); }

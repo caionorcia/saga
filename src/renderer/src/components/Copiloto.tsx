@@ -39,7 +39,7 @@ export function CopilotoSection() {
 
   if (!st) return null
 
-  const save = async (patch: { enabled?: boolean; url?: string }) => {
+  const save = async (patch: { enabled?: boolean; url?: string; autoFollowups?: boolean }) => {
     setMsg(null)
     try {
       const r = await window.saga.copilotoSave(patch)
@@ -99,6 +99,14 @@ export function CopilotoSection() {
         Enviar para o Copiloto da Saga
       </label>
       <p className="muted small">Ao desligar, a fila deste computador é apagada. O que já foi enviado fica no Copiloto.</p>
+      <label className="check">
+        <input type="checkbox" checked={st.autoFollowups} onChange={(e) => void save({ autoFollowups: e.target.checked })} />
+        Enviar follow-ups do Copiloto automaticamente
+      </label>
+      <p className="muted small">
+        Os follow-ups que o Copiloto marcar como automáticos saem sem a tela de confirmação, só no horário de envio e com
+        as travas de sempre (30 dias, ritmo, até 30 por dia); os outros continuam esperando você.
+      </p>
 
       <label htmlFor="copiloto-url">Endereço do Copiloto</label>
       <div className="inline-field">

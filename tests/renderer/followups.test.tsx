@@ -106,3 +106,35 @@ describe('Follow-up do Copiloto (v0.7.0)', () => {
     expect(screen.queryByRole('textbox', { name: 'Mensagem do Copiloto' })).toBeNull()
   })
 })
+
+describe('Follow-up com envio automático (v0.8.0)', () => {
+  it('agendado: linha de estado em vez do cartão, sem "Abrir para enviar"; "Não enviar" recusa', async () => {
+    const ctl = install({ autoFollowups: true })
+    render(<Suggestions jid={ANA} />)
+    const line = await screen.findByRole('status', { name: 'Follow-up do Copiloto' })
+    expect(line.textContent).toMatch(/📨 Follow-up do Copiloto: envio automático (amanhã )?às 09:14/)
+    expect(screen.queryByRole('button', { name: 'Abrir para enviar' })).toBeNull()
+    expect(calls(ctl, 'sendAvulsa')).toHaveLength(0)
+    await act(async () => {
+      fireEvent.click(within(line).getByRole('button', { name: 'Não enviar' }))
+    })
+    expect(calls(ctl, 'followupDecline').map((c) => c.args)).toEqual([[FU_ANA, null]])
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Follow-up do Copiloto' })).toBeNull())
+  })
+
+  it('o do grupo (sem auto_send) continua com o cartão de sempre', async () => {
+    install({ autoFollowups: true })
+    render(<Suggestions jid={GRP} />)
+    const card = await screen.findByRole('group', { name: 'Mensagem do Copiloto' })
+    expect(within(card).getByRole('button', { name: 'Abrir para enviar' })).toBeTruthy()
+  })
+
+  it('textos da linha: enviando…, enviado, esperando conexão', async () => {
+    const { autoStatusText } = await import('../../src/renderer/src/components/Followups')
+    const at = new Date(2026, 10, 26, 14, 5).getTime()
+    expect(autoStatusText({ state: 'sending', at: null, wait: null, canCancel: false })).toBe('enviando…')
+    expect(autoStatusText({ state: 'sent', at, wait: null, canCancel: false })).toBe('enviado ✓ às 14:05')
+    expect(autoStatusText({ state: 'scheduled', at: null, wait: 'connection', canCancel: true })).toMatch(/WhatsApp estiver conectado/)
+    expect(autoStatusText({ state: 'scheduled', at, wait: null, canCancel: true }, new Date(2026, 10, 26, 9, 0).getTime())).toBe('envio automático às 14:05')
+  })
+})

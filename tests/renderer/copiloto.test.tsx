@@ -44,3 +44,15 @@ describe('Configurações › Copiloto da Saga', () => {
     expect(ctl.calls.filter((c) => c.method === 'copilotoSave').map((c) => c.args[0])).toEqual([{ url: URL_OK }, { enabled: true }])
   })
 })
+
+describe('Configurações › Copiloto: envio automático dos follow-ups (v0.8.0)', () => {
+  it('vem desligado, com a explicação; ligar salva autoFollowups', async () => {
+    render(<CopilotoSection />)
+    const toggle = (await screen.findByLabelText('Enviar follow-ups do Copiloto automaticamente')) as HTMLInputElement
+    expect(toggle.checked).toBe(false)
+    expect(screen.getByText(/saem sem a tela de confirmação, só no horário de envio/)).toBeTruthy()
+    fireEvent.click(toggle)
+    await waitFor(() => expect(toggle.checked).toBe(true))
+    expect(ctl.calls.filter((c) => c.method === 'copilotoSave').map((c) => c.args[0])).toContainEqual({ autoFollowups: true })
+  })
+})

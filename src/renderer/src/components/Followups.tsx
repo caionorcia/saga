@@ -65,7 +65,67 @@ export function FollowupSection({ jid, drafts, sends, onQueued }: SectionProps) 
   )
 }
 
+/** "às 09:14", "amanhã às 09:14", "segunda às 09:14" */
+export function autoWhen(at: number, now = Date.now()): string {
+  const a = new Date(at)
+  const n = new Date(now)
+  const same = (x: Date, y: Date) => x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate()
+  if (same(a, n)) return `às ${hhmm(at)}`
+  if (same(a, new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1))) return `amanhã às ${hhmm(at)}`
+  return `${['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'][a.getDay()]} às ${hhmm(at)}`
+}
+
+/** v0.8.0: a linha de estado do envio automático ("Follow-up do Copiloto: envio automático às HH:MM"). */
+export function autoStatusText(auto: NonNullable<FollowupView['auto']>, now = Date.now()): string {
+  if (auto.state === 'sent') return `enviado ✓${auto.at ? ` às ${hhmm(auto.at)}` : ''}`
+  if (auto.state === 'sending') return 'enviando…'
+  if (auto.wait === 'no_hours') return 'envio automático quando houver um dia liberado no horário de envio'
+  if (auto.wait === 'connection') return 'envio automático assim que o WhatsApp estiver conectado'
+  if (auto.wait === 'daily_cap') return 'envio automático amanhã (limite de 30 por dia)'
+  if (auto.at !== null && auto.at > now) return `envio automático ${autoWhen(auto.at, now)}`
+  return 'envio automático em instantes'
+}
+
+/** v0.8.0: o follow-up sai sozinho: só uma linha de estado na conversa e "Não enviar" (vai ao Copiloto como recusado). */
+function AutoFollowupLine({ followup: f }: { followup: FollowupView & { auto: NonNullable<FollowupView['auto']> } }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const cancel = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      if (!(await window.saga.followupDecline(f.id, null))) setError('Não dá mais para cancelar: o envio já começou.')
+    } catch {
+      setError('Não foi possível cancelar. Tente de novo.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="fu-auto small" role="status" aria-label="Follow-up do Copiloto" title={`${followupByline(f)}: ${f.text}`}>
+      <span>
+        📨 Follow-up do Copiloto: <strong>{autoStatusText(f.auto)}</strong>
+      </span>
+      {f.auto.canCancel && (
+        <button type="button" className="btn btn-small" disabled={busy} onClick={() => void cancel()}>
+          Não enviar
+        </button>
+      )}
+      {error && (
+        <span className="field-error" role="alert">
+          {error}
+        </span>
+      )}
+    </div>
+  )
+}
+
 function FollowupCard({ followup: f, drafts, sends, onQueued }: { followup: FollowupView; drafts: DraftStore; sends: SendView[]; onQueued: (send: SendView) => void }) {
+  if (f.auto) return <AutoFollowupLine followup={f as FollowupView & { auto: NonNullable<FollowupView['auto']> }} />
+  return <ManualFollowupCard followup={f} drafts={drafts} sends={sends} onQueued={onQueued} />
+}
+
+function ManualFollowupCard({ followup: f, drafts, sends, onQueued }: { followup: FollowupView; drafts: DraftStore; sends: SendView[]; onQueued: (send: SendView) => void }) {
   const [open, setOpen] = useState(f.status === 'sending')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
