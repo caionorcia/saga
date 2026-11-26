@@ -139,8 +139,18 @@ export const GROUPS_FETCHED_SETTING = 'wa.groupMembersFetchedAt'
 const GROUPS_UNNAMED_EVERY_MS = 60 * 60_000
 /** v0.8.1: prioridade das consultas de grupos na fila (na frente dos downloads de áudio, atrás dos envios; no ritmo de sempre) */
 const GROUPS_JOB_PRIORITY = 15
-/** v0.8.1: no máximo tantas consultas de um grupo só por execução (grupos novos; o resto vem na consulta de todos) */
-const GROUPS_META_MAX = 20
+/**
+ * v0.8.1: consultas de um grupo só (grupos novos; o resto vem na consulta de todos): no máximo 10 por hora e 40 por dia
+ * local, gravado no banco (vale entre reinícios), e no máximo uma por grupo por dia (sem nova tentativa no mesmo dia).
+ */
+export const GROUP_META_LIMITS = { perHour: 10, perDay: 40 } as const
+/** meia-noite (local) do dia de `now` */
+const localDayStart = (now: number): number => {
+  const d = new Date(now)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+}
+/** registro (persistido) das consultas de um grupo só: quando cada uma rodou e o dia local da última de cada grupo */
+export const GROUP_META_LOG_SETTING = 'wa.groupMetaLog'
 /** mensagem de grupo até este tempo antes da última consulta de todos ainda conta como "grupo novo" */
 const GROUPS_META_MARGIN_MS = 10 * 60_000
 /** no máximo uma busca dos nomes dos grupos por dia */
@@ -279,8 +289,6 @@ export class WhatsAppClient extends EventEmitter {
   private lidToPn = new Map<string, string>()
   /** v0.8.1: quando a consulta dos grupos foi pedida por último (grupo sem nome: no máximo uma por hora) */
   private groupsRequestedAt = -Infinity
-  /** v0.8.1: grupos com a consulta de um grupo só já pedida nesta execução */
-  private groupMetaAsked = new Set<string>()
   /**
    * Melhor nome conhecido por JID (telefone ou @lid ainda sem telefone). Vale para contatos que ainda não
    * têm mensagem (o nome entra quando a primeira chegar) e para @lid que só depois ganha o telefone.
@@ -896,10 +904,9 @@ export class WhatsAppClient extends EventEmitter {
     }
   }
 
-  /** v0.8.1: a consulta de um grupo só (assunto e participantes), pela fila, no máximo uma vez por grupo por execução. */
+  /** v0.8.1: a consulta de um grupo só (assunto e participantes), pela fila, dentro dos limites (`GROUP_META_LIMITS`). */
   private requestGroupMeta(groupJid: string): void {
-    if (this.groupMetaAsked.has(groupJid) || this.groupMetaAsked.size >= GROUPS_META_MAX || !this.sock?.groupMetadata) return
-    this.groupMetaAsked.add(groupJid)
+    if (!this.sock?.groupMetadata || !this.groupMetaAllowed(groupJid)) return
     this.deps.queue.requeue('fetch_profile', `wa:group_meta:${groupJid}`, { kind: 'group_meta', jid: groupJid }, GROUPS_JOB_PRIORITY, { revive: true })
   }
 
@@ -1148,13 +1155,57 @@ export class WhatsAppClient extends EventEmitter {
     if (!sock || this.status !== 'open' || !sock.groupMetadata) {
       throw new DeferJobError('sem conexão aberta para consultar o grupo', GROUPS_DEFER_MS)
     }
-    const g = await sock.groupMetadata(groupJid)
+    // conferido de novo na hora: acima do limite (ou já tentada hoje), espera a consulta de todos do dia
+    if (!this.groupMetaAllowed(groupJid)) {
+      this.diag('wa_groups', 'consulta de um grupo: limite atingido, fica para a consulta de todos')
+      return
+    }
+    this.recordGroupMeta(groupJid)
+    let g: Awaited<ReturnType<NonNullable<WaSocket['groupMetadata']>>>
+    try {
+      g = await sock.groupMetadata(groupJid)
+    } catch (e) {
+      // nunca tenta de novo no mesmo dia (o job conclui; a consulta de todos do dia cobre o grupo)
+      this.diag('wa_groups', `consulta de um grupo falhou: ${e instanceof Error ? e.name : 'erro'}`)
+      return
+    }
     if (!g) return
     const named = this.applyGroupNames([{ id: groupJid, subject: g.subject ?? null }])
     const members = await this.applyGroupMembers([{ id: groupJid, participants: g.participants }])
     this.diag('wa_groups', `consulta de um grupo: ${members.count} participantes`)
     if (members.changed) this.emit('membership')
     if (named || members.changed) this.emit('contacts')
+  }
+
+  private groupMetaLog(): { at: number[]; groups: Record<string, number> } {
+    try {
+      const v = JSON.parse(this.deps.repo.getSetting(GROUP_META_LOG_SETTING) ?? 'null') as { at?: unknown; groups?: unknown } | null
+      const at = Array.isArray(v?.at) ? v.at.filter((x): x is number => typeof x === 'number') : []
+      const groups = v?.groups && typeof v.groups === 'object' ? (v.groups as Record<string, number>) : {}
+      return { at, groups }
+    } catch {
+      return { at: [], groups: {} }
+    }
+  }
+
+  /** Cabe mais uma consulta deste grupo agora? (10/h, 40/dia local, uma por grupo por dia) */
+  private groupMetaAllowed(groupJid: string): boolean {
+    const now = this.deps.clock.now()
+    const day = localDayStart(now)
+    const log = this.groupMetaLog()
+    if (log.groups[groupJid] === day) return false
+    if (log.at.filter((t) => t >= day).length >= GROUP_META_LIMITS.perDay) return false
+    return log.at.filter((t) => t > now - 60 * 60_000).length < GROUP_META_LIMITS.perHour
+  }
+
+  private recordGroupMeta(groupJid: string): void {
+    const now = this.deps.clock.now()
+    const day = localDayStart(now)
+    const log = this.groupMetaLog()
+    const keep = Math.min(day, now - 60 * 60_000)
+    const groups = Object.fromEntries(Object.entries(log.groups).filter(([, d]) => d === day))
+    groups[groupJid] = day
+    this.deps.repo.setSetting(GROUP_META_LOG_SETTING, JSON.stringify({ at: [...log.at.filter((t) => t >= keep), now], groups }))
   }
 
   /**

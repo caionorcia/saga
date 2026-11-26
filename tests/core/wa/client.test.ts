@@ -547,6 +547,43 @@ describe('WhatsAppClient', () => {
           expect(repo.groupMembers(GRP3)).toEqual(['5531933332222@s.whatsapp.net'])
           expect(name(GRP3)).toBe('Turma nova')
         })
+
+        it('v0.8.1: consultas de um grupo só com limite gravado (10/h, 40/dia local) e uma por grupo por dia, sem nova tentativa', async () => {
+          await emit('connection.update', { connection: 'open' })
+          expect(await queue.tick()).toBe('ran')
+          const s = last()
+          s.groupMetadata.mockRejectedValue(new Error('rate-overlimit'))
+          const metaJobs = () => repo.listJobs('pending').filter((j) => (j.payload as { kind?: string }).kind === 'group_meta')
+          const g = (i: number) => `1203630300000000${String(i).padStart(2, '0')}@g.us`
+          let seq = 0
+          const msgIn = (jid: string) =>
+            emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: `q${++seq}`, jid, fromMe: true, ts: clock.now() + 1000 })] })
+          const runAll = async () => {
+            for (let i = 0; i < 30 && metaJobs().length; i++) {
+              await advance(60_000)
+              await queue.tick()
+            }
+          }
+          for (let i = 0; i < 12; i++) await msgIn(g(i))
+          await runAll()
+          // 12 grupos novos na mesma hora: só 10 consultas; falha não tenta de novo
+          expect(s.groupMetadata).toHaveBeenCalledTimes(10)
+          expect(metaJobs()).toHaveLength(0)
+          // o mesmo grupo de novo no mesmo dia: nunca outra consulta (mesmo depois de reiniciar: está no banco)
+          await advance(61 * 60_000)
+          await msgIn(g(0))
+          expect(metaJobs()).toHaveLength(0)
+          // limite do dia local (gravado): com 40 hoje, nenhuma consulta nova, mesmo numa hora livre
+          const midnight = new Date(clock.now())
+          midnight.setHours(0, 0, 0, 0)
+          const today = Array.from({ length: 40 }, (_, i) => midnight.getTime() + i)
+          repo.setSetting('wa.groupMetaLog', JSON.stringify({ at: today, groups: {} }))
+          await msgIn(g(40))
+          expect(metaJobs()).toHaveLength(0)
+          const perGroup = new Map<string, number>()
+          for (const [jid] of s.groupMetadata.mock.calls) perGroup.set(jid as string, (perGroup.get(jid as string) ?? 0) + 1)
+          expect(Math.max(...perGroup.values())).toBe(1)
+        })
       })
     })
 

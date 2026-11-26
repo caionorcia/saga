@@ -617,8 +617,9 @@ Muitos grupos antigos com assunto apareciam como "Grupo sem nome".
   quando for), para o Copiloto saber que ele existe; nunca se inventa mensagem.
 - **Grupo novo:** `groups.upsert` (grupo criado, ou o mentor entrou nele) já traz os participantes; `group-participants.update`
   acrescenta ou tira gente (sem consulta). Mensagem num grupo que apareceu depois da última consulta de todos e de que
-  não se sabe quem participa → uma consulta só daquele grupo (`groupMetadata`, leitura), pela fila, uma vez por grupo e
-  no máximo 20 por execução. O grupo novo de um mentorado aparece no Copiloto na volta seguinte da integração depois de
+  não se sabe quem participa → uma consulta só daquele grupo (`groupMetadata`, leitura), pela fila, com limite gravado no banco:
+  no máximo 10 por hora e 40 por dia local, uma por grupo por dia e sem nova tentativa (falhou → espera a consulta de
+  todos do dia). Acima do limite, o grupo espera a consulta de todos do dia seguinte. O grupo novo de um mentorado aparece no Copiloto na volta seguinte da integração depois de
   a participação ficar conhecida (segundos, até ~15 s; com o mentorado só como @lid, assim que o telefone dele ficar
   conhecido), com a mensagem do mentor e o que houver dos últimos 30 dias.
 - **Reenvio único (`copiloto.groupRepairV081`):** depois da atualização, com o WhatsApp de pé há 1 min e a consulta dos
