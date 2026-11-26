@@ -48,6 +48,8 @@ import type { WaVersionFetcher } from './wa/version'
 import { formatPhone } from './db/repo'
 import { SendConflictError, sendJobKey, type SendRow } from './db/sendRepo'
 import { SendGate } from './send/gate'
+import { CopilotoSync } from './copiloto/sync'
+import type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult } from '../shared/copiloto'
 import { chatHash, hasRecentContactMessage, pickQuote, sendAddress, textHash } from './send/logic'
 import { verifyUnknownSend } from './send/verify'
 import {
@@ -95,6 +97,8 @@ export interface WaClientLike {
   connGen?(): number
   /** o pedido deste envio ao WhatsApp ainda está em andamento */
   isSendInFlight?(sendId: number): boolean
+  /** v0.5.0: o telefone (`@s.whatsapp.net`) já conhecido para um @lid, sem rede; null se não souber */
+  pnForLid?(lid: string): string | null
 }
 
 export interface SagaServiceOpts {
@@ -212,6 +216,8 @@ export class SagaService extends EventEmitter {
   readonly limiters: Record<LimiterName, RateLimiter>
   /** cópia de segurança (v0.3.1) */
   readonly backup: BackupManager
+  /** Copiloto da Saga (v0.5.0): fila de saída e envio por HTTPS, fora da fila do WhatsApp */
+  readonly copiloto: CopilotoSync
   private readonly wa: WaClientLike
   private readonly repo: Repo
   private readonly settings: SettingsStore
@@ -284,6 +290,15 @@ export class SagaService extends EventEmitter {
         this.markContacts()
         this.markState()
       }
+    })
+
+    this.copiloto = new CopilotoSync({
+      repo,
+      cipher: opts.cipher ?? NO_CIPHER,
+      clock,
+      ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+      pnForLid: (lid) => this.wa?.pnForLid?.(lid) ?? null,
+      diag: (k, d) => this.diag(k, d)
     })
 
     const lim = (name: LimiterName) => new RateLimiter(LIMITS[name], clock, rng, { repo, key: `limiter:${name}` })
@@ -523,6 +538,7 @@ export class SagaService extends EventEmitter {
       await this.wa.start()
     }
     this.queue.start()
+    this.copiloto.start()
     this.markState()
   }
 
@@ -540,6 +556,7 @@ export class SagaService extends EventEmitter {
       this.waitingTimer = null
       if (this.sendSweepTimer) clearInterval(this.sendSweepTimer)
       this.sendSweepTimer = null
+      this.copiloto.stop()
       const timeoutMs = opts.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
       await withDeadline(this.queue.stop(), timeoutMs)
       await withDeadline(this.wa.stop(), timeoutMs)
@@ -1364,6 +1381,25 @@ export class SagaService extends EventEmitter {
 
   testKey(kind: KeyKind, key: string): Promise<boolean> {
     return testKey(kind, key, { fetchImpl: this.fetchImpl })
+  }
+
+  // --- Copiloto da Saga (v0.5.0) ---
+
+  async copilotoStatus(): Promise<CopilotoStatus> {
+    return this.copiloto.status()
+  }
+
+  async copilotoSave(patch: CopilotoPatch): Promise<CopilotoSaveResult> {
+    return this.copiloto.save(patch)
+  }
+
+  /** O código aparece só nesta resposta; depois a interface só sabe que ele existe. */
+  async copilotoGenerateCode(): Promise<CopilotoCodeResult> {
+    return this.copiloto.generateCode()
+  }
+
+  copilotoTest(): Promise<CopilotoTestResult> {
+    return this.copiloto.test()
   }
 
   // --- base de conhecimento ---

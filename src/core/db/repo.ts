@@ -6,6 +6,7 @@ import type { KbSource } from '../../shared/kb'
 import { KbRepo } from './kbRepo'
 import { SendRepo } from './sendRepo'
 import { BackupRepo } from './backupRepo'
+import { CopilotoRepo } from './copilotoRepo'
 import type { GroupAnswer, ReasonCode, ReplyDecision, ReplyDecisionSource, ReplyReasonCode, ReplyVerdict, Verdict } from '../../shared/feedback'
 
 /** Qualidade da fonte do nome guardado em `push_name` (maior vence; empate: o mais novo). */
@@ -431,6 +432,8 @@ export class Repo {
   readonly sends: SendRepo
   /** cópia de segurança (v0.3.1) */
   readonly backup: BackupRepo
+  /** Copiloto da Saga (v0.5.0) */
+  readonly copiloto: CopilotoRepo
 
   constructor(
     private readonly db: DatabaseSync,
@@ -439,6 +442,7 @@ export class Repo {
     this.kb = new KbRepo(db, clock)
     this.sends = new SendRepo(db, clock)
     this.backup = new BackupRepo(db)
+    this.copiloto = new CopilotoRepo(db, clock)
   }
 
   // --- contatos ---

@@ -832,6 +832,11 @@ export class WhatsAppClient extends EventEmitter {
     if (applied) this.emit('contacts')
   }
 
+  /** v0.5.0 (Copiloto): o telefone já conhecido para um @lid (só o mapa em memória, sem rede); null se não souber. */
+  pnForLid(lid: string): string | null {
+    return this.lidToPn.get(lid) ?? null
+  }
+
   /** `@lid` → telefone quando conhecido (mapa do histórico/eventos, depois o armazenamento local do Baileys). */
   private async resolveJid(jid: string): Promise<string> {
     if (!jid.endsWith('@lid')) return jid
