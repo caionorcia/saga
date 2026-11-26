@@ -1,6 +1,6 @@
 # SagaZap (antes Saga) — Assistente de respostas para mentorados (WhatsApp)
 
-Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.4.2, novo nome SagaZap)
+Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.5.0, Copiloto da Saga)
 
 ## Intenção e o porquê
 
@@ -418,6 +418,56 @@ O mentor pediu: "configurar os dias e horários disponíveis pra mensagem, por e
 - **Registro de diagnóstico:** `send_outside_hours` (confirmação aberta ou recusada fora do horário, envio que expirou
   por isso, com a etapa) e `send_forced` (envio forçado posto na fila fora do horário); só id do envio/job e a impressão
   da conversa, nunca texto nem jid.
+
+### Copiloto da Saga (v0.5.0, a pedido do mentor)
+
+O mentor pediu que o que acontece no WhatsApp profissional chegue ao Copiloto da Saga, mas só dos mentorados
+cadastrados lá. O contrato com o servidor é `2026-11-26-copiloto-integration.md` (v1); aqui fica só o lado do SagaZap.
+
+- **Configurações › Copiloto da Saga:** "Enviar para o Copiloto da Saga" (padrão: desligado), o endereço (https,
+  terminando em `/functions/v1/sagazap-webhook`, sem `?`/`#`), "Gerar código" (32 bytes aleatórios em base64url,
+  mostrado uma vez com Copiar; guardado com o `safeStorage` em `key.copiloto`; depois a tela só sabe "código
+  configurado"), "Testar conexão" (pede o roster e diz quantos telefones vieram e quantas conversas daqui casam) e a
+  linha de situação (pendentes, último envio, último erro). Ligar exige endereço e código. Desligar apaga a fila local
+  (`copiloto_outbox`, `copiloto_dirty`, `copiloto_chats`) e o roster; o que já foi enviado fica no Copiloto. Nada disso
+  vai na cópia de segurança.
+- **Módulo `src/core/copiloto/`:** `identity.ts` (normalização: só dígitos, 10–11 dígitos ganham 55; as duas formas do
+  celular BR com e sem o 9; `sha256hex("sagazap-v1:"+telefone)`; `chat.key`; ids `sz1:m:`/`a:`/`r:`/`s:`),
+  `events.ts` (monta `message`, `alert`, `reply_state` e `summary` das tabelas locais) e `sync.ts` (fila e envio).
+- **Só mentorados:** conversa individual entra se o telefone dela está no roster (o @lid usa o telefone que o cliente do
+  WhatsApp já conhece; sem telefone, não entra). Grupo entra se algum participante (consulta de participantes + quem
+  já mandou mensagem) está no roster; `chat.phones` leva só esses telefones e `sender.phone` só vai se quem mandou é
+  mentorado (o nome que o grupo mostra cai no número: nesse caso vai só o pushName). O resto é descartado antes de
+  virar evento.
+- **O que muda vira evento (schema v16):** gatilhos do SQLite anotam em `copiloto_dirty` (só com
+  `copiloto.enabled = '1'`) as mensagens novas ou com transcrição nova, alertas e avaliações, `reply_checks`,
+  `reply_feedback`, análises e envios que viraram `sent`. Assim toda gravação conta (ingestão, IA, regras, mentor,
+  envio) sem espalhar ganchos pelo código. A volta seguinte confere o roster, monta o evento e faz upsert em
+  `copiloto_outbox` pelo id do evento: um estado mais novo troca o pendente; o mesmo estado (mesma impressão sha256 do
+  JSON) não volta. Uma mensagem do mentor num grupo também refaz o "Para responder" das conversas individuais dos
+  participantes mentorados ("Respondido no grupo"). Depois de aceito, o JSON sai da fila (fica a impressão por 45 dias).
+- **Carga inicial:** a primeira vez que uma conversa de mentorado aparece (ao ligar, a cada roster novo, ou num grupo
+  que passou a ter mentorado) entram os últimos 30 dias: mensagens, alertas (e os ativos), envios, o "Para responder" e
+  o resumo.
+- **Envio (processo principal, fora da fila de jobs do WhatsApp):** `fetch` com prazo de 30 s, sem seguir
+  redirecionamento; uma requisição por vez (envio, roster e teste), ≥ 2 s entre elas; lotes de até 100 eventos e
+  512 KB. 200: o lote todo concluído, seja qual for o status de cada um. 400: lote inválido. 413: o próximo lote tem a
+  metade (um evento sozinho grande demais fica inválido). 401: para e mostra "Código do Copiloto inválido" até gerar
+  outro código, trocar o endereço ou o teste passar. 429, 5xx, rede ou outra resposta: espera de 1, 2, 4… até 30 min.
+  Roster ao ligar e a cada 6 h (falhou: tenta em 5 min, usando o roster anterior enquanto isso); conversas que saíram
+  do roster perdem os pendentes.
+- **Mapeamento:** `messages` → `message` (texto, ou a transcrição do áudio com `transcription_status`; mídia só como
+  `has_media`; imagem/documento pelo rótulo `[imagem]`/`[documento: …]` sem legenda, o resto `other`;
+  `sent_via_sagazap` quando um envio confirmado tem esse id); `sends` `sent` → a mensagem do mentor (mesmo id do eco);
+  `alerts` + `alert_feedback` (no "esperando", o `reply_feedback` ligado a ele) → `alert`; `reply_checks` +
+  `reply_feedback` → `reply_state` (`mentor`/`rule`/`ai`; motivo `respondi_grupo` ou a regra do grupo →
+  `replied_in_group`; mentor falou por último → `replied`); `analyses` → `summary`.
+- **Registro:** só contagens e códigos de status (`copiloto_on`, `copiloto_off`, `copiloto_code`, `copiloto_test`,
+  `copiloto_roster`, `copiloto_error`; no diagnóstico `copiloto_batch`, `copiloto_queue`, `copiloto_backfill`). Nunca
+  conteúdo, telefone, endereço nem o código.
+- **Conferir no aparelho real:** o caminho do @lid (telefone conhecido só depois do histórico), a ordem entre o eco de
+  um envio e o `sent`, o desempenho dos gatilhos numa importação grande com a integração ligada e o `safeStorage` do
+  código no Windows.
 
 ### Versão 0.3.1 (a pedido do mentor)
 

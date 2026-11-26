@@ -258,6 +258,21 @@ Se uma resposta ainda estiver na fila quando o horário acabar, ela **não sai d
 
 E você pode ajudar: responda de verdade a cada pessoa (evite mandar o mesmo texto para muita gente), não tente "zerar" dezenas de conversas de uma vez e continue usando o WhatsApp normalmente pelo celular. Se aparecer **Conta restrita pelo WhatsApp**, pare de enviar pelo SagaZap por alguns dias.
 
+### Copiloto da Saga (versão 0.5.0)
+
+O SagaZap pode enviar ao **Copiloto da Saga** o que acontece nas conversas dos **mentorados cadastrados lá**: as mensagens (com os áudios já transcritos), os alertas, o "Para responder", os resumos e as respostas que você enviou. Entram também os grupos em que há um mentorado. Não vão as chaves de IA, as respostas aprovadas, a base de conhecimento, os arquivos de mídia nem nada de quem não é mentorado (num grupo, os números de quem não é mentorado ficam no computador).
+
+Vem desligado. Para ligar, em **Configurações › Copiloto da Saga**:
+
+1. Cole o **Endereço do Copiloto** (termina em `/functions/v1/sagazap-webhook`) e clique em **Salvar endereço**.
+2. Clique em **Gerar código** e em **Copiar**. Cole o código no Lovable Cloud como o secret `SAGAZAP_WEBHOOK_SECRET`. O código aparece só essa vez; depois a tela mostra só **código configurado**.
+3. Clique em **Testar conexão**. Aparece quantos telefones de mentorados o Copiloto mandou e quantas conversas deste computador são deles.
+4. Marque **Enviar para o Copiloto da Saga**. Vão os últimos 30 dias dessas conversas e, depois, o que for acontecendo.
+
+A linha embaixo mostra quantos eventos estão **pendentes**, o **último envio** e o **último erro**. Sem internet, o SagaZap tenta de novo sozinho, cada vez esperando mais (até 30 minutos). Se aparecer **Código do Copiloto inválido**, o envio para: gere outro código e cole no Copiloto de novo. Mentorado novo no Copiloto entra sozinho em até 6 horas (ou na hora, com **Testar conexão**).
+
+Ao desligar, a fila deste computador é apagada. O que já foi enviado continua no Copiloto.
+
 ## 5. O que significa a faixa de cima
 
 A faixa no topo mostra como o SagaZap está.
@@ -316,6 +331,7 @@ Se o aviso não aparecer mesmo com uma versão nova publicada, clique em **Confi
 - Suas conversas, áudios e configurações ficam **neste computador** (pasta de dados do SagaZap no seu usuário do Windows). Não existe servidor do SagaZap.
 - A chave de acesso é guardada com a criptografia do Windows.
 - Só saem do computador: o **texto das conversas** e os **áudios**, enviados para a IA que você escolheu (Groq e, se configurado, Claude ou OpenAI) para transcrever e gerar sugestões, e, se você importou uma **base de conhecimento**, o resumo das regras e os trechos usados em cada sugestão.
+- Com o **Copiloto da Saga** ligado (vem desligado), as conversas dos mentorados cadastrados lá também vão para o Copiloto (veja "Copiloto da Saga").
 - O SagaZap lê conversas individuais e grupos. Ele só escreve no WhatsApp quando você confirma um envio (a mensagem, o "digitando…" e marcar como lida aquela conversa) e nunca muda nada nos grupos. Status, canais e listas de transmissão são ignorados.
 
 ## 8. Desinstalar

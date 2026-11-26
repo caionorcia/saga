@@ -1,6 +1,6 @@
 # SagaZap
 
-Aplicativo de desktop (Windows) que lê as conversas (individuais e grupos) do WhatsApp do mentor dos últimos 30 dias, transcreve os áudios e sugere respostas para ele revisar, copiar ou enviar. Desde a 0.4.0 o app envia respostas, **só com a confirmação explícita do mentor a cada envio** e em ritmo lento.
+Aplicativo de desktop (Windows) que lê as conversas (individuais e grupos) do WhatsApp do mentor dos últimos 30 dias, transcreve os áudios e sugere respostas para ele revisar, copiar ou enviar. Desde a 0.4.0 o app envia respostas, **só com a confirmação explícita do mentor a cada envio** e em ritmo lento. Desde a 0.5.0, se o mentor ligar, envia ao Copiloto da Saga só as conversas dos mentorados cadastrados lá (contrato em `docs/superpowers/specs/2026-11-26-copiloto-integration.md`).
 
 Para instalar no Windows, veja o [guia de instalação](docs/guia-instalacao.md).
 
