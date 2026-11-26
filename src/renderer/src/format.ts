@@ -169,7 +169,9 @@ const EVENT_LABELS: Record<string, string> = {
   start_error: 'Erro ao iniciar o Saga',
   transcribe_budget: 'Teto de gasto atingido: transcrições pausadas',
   transcribe_offline: 'Sem internet: transcrição adiada',
-  update_error: 'Erro ao atualizar o Saga',
+  update_error: 'Erro ao procurar ou baixar atualização',
+  update_available: 'Nova versão do Saga disponível',
+  update_downloaded: 'Nova versão do Saga baixada',
   wa_open: 'WhatsApp conectado',
   wa_qr: 'QR Code gerado',
   wa_closed: 'Conexão com o WhatsApp caiu',
@@ -186,6 +188,31 @@ const EVENT_LABELS: Record<string, string> = {
 }
 
 export const eventLabel = (kind: string): string => EVENT_LABELS[kind] ?? 'Evento interno'
+
+/** O motivo de uma procura de atualização que falhou, em palavras simples. */
+export function updateErrorText(message: string | null): string {
+  const m = message ?? ''
+  if (/ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRE|ENETUNREACH|INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|ERR_NETWORK|net::ERR_CONNECTION|ERR_TIMED_OUT/i.test(m)) {
+    return 'sem conexão com a internet (ou o GitHub não respondeu)'
+  }
+  if (/\b(403|429)\b|rate limit/i.test(m)) return 'o GitHub recusou a consulta por enquanto (tente mais tarde)'
+  if (/\b404\b|Cannot find latest|No published versions/i.test(m)) return 'não foi encontrada uma versão publicada'
+  return m || 'erro desconhecido'
+}
+
+/** O resultado da última procura por atualização, para Configurações › Atualizações. */
+export function updateCheckText(c: AppState['updateCheck'], update: AppState['update']): string {
+  if (!c.enabled) return 'Este Saga não procura atualizações sozinho (versão de desenvolvimento).'
+  if (c.checking) return 'Procurando uma versão nova…'
+  if (c.lastCheckAt === null) return 'Ainda não procurou nesta sessão.'
+  const when = `${formatDay(c.lastCheckAt)}, ${formatTime(c.lastCheckAt)}`
+  if (c.lastResult === 'error') return `Última procura: ${when} — não foi possível verificar: ${updateErrorText(c.lastError)}.`
+  if (c.lastResult === 'available' || update.status !== 'none') {
+    const v = update.status !== 'none' ? update.version : c.latestVersion
+    return `Última procura: ${when} — nova versão disponível${v ? ` (${v})` : ''}.`
+  }
+  return `Última procura: ${when} — você já está na versão mais nova.`
+}
 
 // --- fila do dia e alertas ---
 

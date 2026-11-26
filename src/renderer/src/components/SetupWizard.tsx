@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppState, KeyKind } from '../../../shared/api'
 import { QrCode } from './QrCode'
+import { UpdateNotice } from './UpdateNotice'
 
 interface Props {
   state: AppState
@@ -20,6 +21,11 @@ export function SetupWizard({ state, onFinish }: Props) {
   return (
     <main className="wizard">
       <div className="wizard-card">
+        {state.update.status !== 'none' && (
+          <div className="wizard-update">
+            <UpdateNotice update={state.update} />
+          </div>
+        )}
         <p className="wizard-progress" aria-label={`Passo ${step} de ${STEPS}`}>
           Passo {step} de {STEPS}
         </p>

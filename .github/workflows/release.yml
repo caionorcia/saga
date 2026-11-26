@@ -26,6 +26,14 @@ jobs:
       # gera os arquivos sem publicar e depois cria o Release de uma vez só
       # (o upload paralelo do electron-builder disputava a criação do Release e perdia o .exe)
       - run: npx electron-builder --win --publish never
+      # o app instalado só procura atualizações se tiver o resources/app-update.yml (gerado a partir de `publish`
+      # no electron-builder.yml); falha aqui em vez de publicar um instalador que nunca se atualiza
+      - name: Conferir app-update.yml
+        shell: bash
+        run: |
+          cat dist/win-unpacked/resources/app-update.yml
+          grep -q 'provider: github' dist/win-unpacked/resources/app-update.yml
+          grep -q 'repo: saga' dist/win-unpacked/resources/app-update.yml
       - name: Publicar Release
         shell: bash
         env:
@@ -33,4 +41,4 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           gh release create "v$VERSION" dist/Saga-Setup-$VERSION.exe dist/Saga-Setup-$VERSION.exe.blockmap dist/latest.yml \
-            --target "$GITHUB_SHA" --title "Saga $VERSION" --notes "Saga $VERSION — instale com o arquivo Saga-Setup-$VERSION.exe"
+            --target "$GITHUB_SHA" --latest --title "Saga $VERSION" --notes "Saga $VERSION — instale com o arquivo Saga-Setup-$VERSION.exe"

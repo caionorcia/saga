@@ -28,7 +28,29 @@ export type SaveSettingsInput = SettingsPatch
  */
 export type UpdateState =
   | { status: 'none' }
-  | { status: 'available' | 'downloading' | 'ready'; version: string }
+  | { status: 'available' | 'ready'; version: string }
+  /** `percent`: quanto já foi baixado (0–100), quando o atualizador informa */
+  | { status: 'downloading'; version: string; percent?: number }
+
+/** Resultado da última procura por atualização (Configurações › Atualizações). */
+export type UpdateCheckResult = 'available' | 'up_to_date' | 'error'
+
+/** Situação da procura por atualizações: versão atual, quando procurou pela última vez e o que achou. */
+export interface UpdateCheck {
+  /** false no app de desenvolvimento ou com `SAGA_UPDATES=off`: o Saga não procura sozinho */
+  enabled: boolean
+  /** versão instalada */
+  currentVersion: string
+  /** procurando agora */
+  checking: boolean
+  /** epoch ms (relógio do PC) do fim da última procura; null = ainda não procurou */
+  lastCheckAt: number | null
+  lastResult: UpdateCheckResult | null
+  /** a versão mais nova publicada, quando a última procura respondeu */
+  latestVersion: string | null
+  /** com `lastResult === 'error'`: o motivo, curto (sem dados pessoais) */
+  lastError: string | null
+}
 
 export interface AppState {
   /**
@@ -60,6 +82,8 @@ export interface AppState {
   setupDone: boolean
   provider: Provider
   update: UpdateState
+  /** procura por atualizações (Configurações › Atualizações) */
+  updateCheck: UpdateCheck
   /** conversas (fora as escondidas) em "Para responder" e conversas com algum alerta ativo */
   triage: { awaiting: number; withAlerts: number }
   /** o início do app falhou (mensagem curta, sem dados sensíveis): mostrar com "Tentar de novo" (`manualReconnect`) */
@@ -178,6 +202,8 @@ export interface SagaApi {
   retryFailedJobs(): Promise<number>
   /** baixa a nova versão (instala ao fechar o app); sem efeito se não houver atualização */
   downloadUpdate(): Promise<void>
+  /** "Verificar agora": procura uma versão nova já e devolve o resultado (espera a procura terminar) */
+  checkForUpdates(): Promise<UpdateCheck>
   /** com a atualização baixada (`ready`): fecha o Saga com cuidado, instala e abre de novo; senão nada */
   installUpdate(): Promise<void>
 
@@ -223,6 +249,7 @@ export const INVOKE_METHODS = [
   'manualReconnect',
   'retryFailedJobs',
   'downloadUpdate',
+  'checkForUpdates',
   'installUpdate',
   'getSettings',
   'saveSettings',

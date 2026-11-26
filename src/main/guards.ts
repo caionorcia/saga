@@ -146,6 +146,7 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   manualReconnect: () => true,
   retryFailedJobs: () => true,
   downloadUpdate: () => true,
+  checkForUpdates: (a) => a.length === 0,
   installUpdate: (a) => a.length === 0,
   getSettings: () => true,
   saveSettings: ([p]) => isObj(p) && Object.entries(p).every(([k, v]) => v === undefined || (SETTINGS_FIELDS[k]?.(v) ?? false)),

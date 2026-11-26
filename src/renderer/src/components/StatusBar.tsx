@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AppState } from '../../../shared/api'
+import { UpdateNotice } from './UpdateNotice'
 import { connectionLabel, downloadProgress, formatUsd, needsManualReconnect, transcribeChip } from '../format'
 
 interface Props {
@@ -65,20 +66,7 @@ export function StatusBar({ state, onOpenSettings, settingsOpen, onShowAwaiting 
             </button>
           </span>
         )}
-        {state.update.status === 'available' && (
-          <span className="status-update">
-            Nova versão disponível — <button type="button" className="btn btn-small btn-primary" disabled={busy} onClick={() => run(() => window.saga.downloadUpdate())}>Atualizar</button>
-          </span>
-        )}
-        {state.update.status === 'downloading' && <span className="status-update">Baixando a nova versão…</span>}
-        {state.update.status === 'ready' && (
-          <span className="status-update">
-            Atualização pronta — será instalada quando você fechar o Saga.{' '}
-            <button type="button" className="btn btn-small btn-primary" disabled={busy} onClick={() => run(() => window.saga.installUpdate())}>
-              Reiniciar e atualizar
-            </button>
-          </span>
-        )}
+        <UpdateNotice update={state.update} />
         <span>Gasto hoje: {formatUsd(state.costTodayUsd)}</span>
       </div>
 

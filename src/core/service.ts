@@ -43,6 +43,7 @@ import type {
   AiErrorCode,
   AnalysisResult,
   AppState,
+  UpdateCheck,
   UpdateState,
   MessageView,
   RecentEvent,
@@ -177,6 +178,15 @@ export class SagaService extends EventEmitter {
   private pendingContacts = false
   private pendingState = false
   private update: UpdateState = { status: 'none' }
+  private updateCheck: UpdateCheck = {
+    enabled: false,
+    currentVersion: '',
+    checking: false,
+    lastCheckAt: null,
+    lastResult: null,
+    latestVersion: null,
+    lastError: null
+  }
   private emitTimer: ReturnType<typeof setTimeout> | null = null
   private stopping: Promise<void> | null = null
   /** parada definitiva lida do banco ao iniciar: não conecta até "Reconectar" */
@@ -460,6 +470,7 @@ export class SagaService extends EventEmitter {
       setupDone: s.keys.groq && this.repo.getSetting(EVER_CONNECTED) === '1',
       provider: s.provider,
       update: this.update,
+      updateCheck: this.updateCheck,
       triage: this.repo.triageCounts(),
       ...(this.startError ? { startError: this.startError } : {})
     }
@@ -473,6 +484,12 @@ export class SagaService extends EventEmitter {
   /** Chamado pelo atualizador (processo principal) quando o estado da atualização muda. */
   setUpdate(u: UpdateState): void {
     this.update = u
+    this.markState()
+  }
+
+  /** Chamado pelo atualizador: a situação da procura por atualizações (Configurações › Atualizações). */
+  setUpdateCheck(c: UpdateCheck): void {
+    this.updateCheck = c
     this.markState()
   }
 

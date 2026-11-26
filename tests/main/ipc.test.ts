@@ -100,3 +100,40 @@ describe('IPC das avaliações de alertas', () => {
     expect(showSaveDialog).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('IPC "Verificar agora" (checkForUpdates)', () => {
+  const CHECK = { enabled: true, currentVersion: '0.2.3', checking: false, lastCheckAt: 5, lastResult: 'up_to_date', latestVersion: '0.2.3', lastError: null }
+  let refused: string[]
+  let off: () => void
+  let onCheck: ReturnType<typeof vi.fn>
+  let service: Record<string, ReturnType<typeof vi.fn>>
+
+  beforeEach(() => {
+    refused = []
+    onCheck = vi.fn(async () => CHECK)
+    service = {
+      state: vi.fn(() => ({ updateCheck: { ...CHECK, enabled: false } })),
+      onState: vi.fn(() => () => {}),
+      onContactsChanged: vi.fn(() => () => {}),
+      on: vi.fn(),
+      off: vi.fn()
+    }
+  })
+  afterEach(() => off())
+
+  it('só a interface do app; sem argumentos; devolve o resultado da procura', async () => {
+    off = registerIpc(service as never, { getWindow: () => null, isTrustedSender: (u) => u === APP, onRefused: (m) => refused.push(m), onCheckForUpdates: onCheck as never })
+    await expect(call('checkForUpdates', 'https://evil.example/')).rejects.toThrow(/origem não confiável/)
+    expect(refused).toEqual(['checkForUpdates'])
+    expect(onCheck).not.toHaveBeenCalled()
+    await expect(call('checkForUpdates', APP, true)).rejects.toThrow(/argumentos inválidos/)
+    expect(onCheck).not.toHaveBeenCalled()
+    expect(await call('checkForUpdates', APP)).toEqual(CHECK)
+    expect(onCheck).toHaveBeenCalledTimes(1)
+  })
+
+  it('sem atualizador (app de desenvolvimento): devolve a situação atual, sem procurar', async () => {
+    off = registerIpc(service as never, { getWindow: () => null, isTrustedSender: (u) => u === APP })
+    expect(await call('checkForUpdates', APP)).toMatchObject({ enabled: false })
+  })
+})

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import type { AlertQuality, KeyKind, RecentEvent, SaveSettingsInput, SettingsView } from '../../../shared/api'
-import { ALERT_LABELS, eventLabel, formatDay, formatTime } from '../format'
+import type { AlertQuality, AppState, KeyKind, RecentEvent, SaveSettingsInput, SettingsView } from '../../../shared/api'
+import { ALERT_LABELS, eventLabel, formatDay, formatTime, updateCheckText } from '../format'
 import { DiagnosticsActions } from './Diagnostics'
+import { UpdateNotice } from './UpdateNotice'
 
 const KEY_LABEL: Record<KeyKind, string> = { groq: 'Groq', claude: 'Claude', openai: 'OpenAI' }
 const KEY_FIELD = { groq: 'groqKey', claude: 'claudeKey', openai: 'openaiKey' } as const
@@ -138,6 +139,8 @@ export function Settings() {
           </p>
         </section>
 
+        <UpdatesSection />
+
         <AlertQualitySection />
 
         <section>
@@ -176,6 +179,71 @@ export function Settings() {
         </section>
       </div>
     </main>
+  )
+}
+
+/** "Atualizações": versão instalada, a última procura e "Verificar agora". */
+function UpdatesSection() {
+  const [st, setSt] = useState<Pick<AppState, 'update' | 'updateCheck'> | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    const off = window.saga.onState((s) => alive && setSt({ update: s.update, updateCheck: s.updateCheck }))
+    window.saga
+      .getState()
+      .then((s) => alive && setSt((old) => old ?? { update: s.update, updateCheck: s.updateCheck }))
+      .catch(() => {})
+    return () => {
+      alive = false
+      off()
+    }
+  }, [])
+
+  const checkNow = async () => {
+    setBusy(true)
+    setFailed(false)
+    try {
+      const c = await window.saga.checkForUpdates()
+      setSt((old) => (old ? { ...old, updateCheck: c } : old))
+    } catch {
+      setFailed(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!st) return null
+  const c = st.updateCheck
+  const checking = busy || c.checking
+  return (
+    <section aria-labelledby="updates-title">
+      <h2 id="updates-title">Atualizações</h2>
+      <p>
+        Versão instalada: <strong>{c.currentVersion || '—'}</strong>
+      </p>
+      <p className="muted small" role="status" aria-live="polite">
+        {checking ? 'Procurando uma versão nova…' : failed ? 'Não foi possível verificar agora. Tente de novo.' : updateCheckText(c, st.update)}
+      </p>
+      {st.update.status !== 'none' && (
+        <p className="update-row">
+          <UpdateNotice update={st.update} />
+        </p>
+      )}
+      <div className="export-row">
+        <button type="button" className="btn" disabled={checking || !c.enabled} onClick={() => void checkNow()}>
+          {checking ? 'Verificando…' : 'Verificar agora'}
+        </button>
+      </div>
+      <p className="muted small">
+        O Saga procura sozinho a cada hora e quando você abre a janela. Se preferir, baixe a versão nova em{' '}
+        <a href="https://github.com/caionorcia/saga/releases/latest" target="_blank" rel="noreferrer">
+          github.com/caionorcia/saga/releases
+        </a>{' '}
+        e instale por cima: suas conversas e configurações são mantidas.
+      </p>
+    </section>
   )
 }
 

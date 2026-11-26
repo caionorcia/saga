@@ -151,6 +151,14 @@ describe('downloadUpdate', () => {
   })
 })
 
+describe('checkForUpdates', () => {
+  it('"Verificar agora": sem argumentos (qualquer argumento é recusado)', () => {
+    expect(() => validateIpcArgs('checkForUpdates', [])).not.toThrow()
+    expect(() => validateIpcArgs('checkForUpdates', [true])).toThrow(InvalidIpcArgsError)
+    expect(() => validateIpcArgs('checkForUpdates', [{ force: 1 }])).toThrow(InvalidIpcArgsError)
+  })
+})
+
 describe('installUpdate', () => {
   it('sem argumentos (qualquer argumento é recusado)', () => {
     expect(() => validateIpcArgs('installUpdate', [])).not.toThrow()

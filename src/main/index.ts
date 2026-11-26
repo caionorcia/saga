@@ -12,6 +12,7 @@ import { isAppUrl, isExternalHttpUrl, type AppOrigin } from './guards'
 import { registerIpc } from './ipc'
 import { createSettingsStore } from './settings'
 import { startUpdater, updatesEnabled, type Updater } from './updater'
+import { initialUpdaterModel } from './updaterState'
 
 // círculo verde 16x16 (sem arquivo de recurso para empacotar)
 const TRAY_ICON =
@@ -187,6 +188,7 @@ function main(): void {
 
     registerIpc(svc, {
       onDownloadUpdate: async () => updater?.download(),
+      onCheckForUpdates: async () => (updater ? updater.checkNow() : svc.state().updateCheck),
       onInstallUpdate: async () => {
         const u = updater
         if (!u?.isReady()) return
@@ -221,11 +223,25 @@ function main(): void {
       }
     })
     applyLoginItem(settings.get().startWithWindows)
-    if (updatesEnabled(process.env, app.isPackaged)) {
-      updater = startUpdater({ setUpdate: (u) => svc.setUpdate(u), log: (k, d) => repo.logEvent(k, d) })
+    const updates = updatesEnabled(process.env, app.isPackaged)
+    diagLog.write('update_config', updates ? 'ativas' : `desligadas (empacotado=${app.isPackaged ? 'sim' : 'não'}, SAGA_UPDATES=${process.env['SAGA_UPDATES'] ?? '-'})`)
+    svc.setUpdateCheck(initialUpdaterModel(app.getVersion(), false).check)
+    if (updates) {
+      updater = startUpdater({
+        currentVersion: app.getVersion(),
+        setModel: (m) => {
+          svc.setUpdateCheck(m.check)
+          svc.setUpdate(m.update)
+        },
+        diag: (k, d) => diagLog.write(k, d),
+        event: (k, d) => repo.logEvent(k, d)
+      })
     }
 
     win = createWindow()
+    // abrir a janela (inclusive pela bandeja) também procura uma versão nova, se a última procura foi há um tempo
+    win.on('show', () => updater?.onActivity())
+    win.on('focus', () => updater?.onActivity())
     tray = new Tray(nativeImage.createFromDataURL(TRAY_ICON))
     tray.setToolTip('Saga')
     tray.on('click', showWindow)
@@ -246,6 +262,7 @@ function main(): void {
       const slept = suspendedAt === null ? 0 : Date.now() - suspendedAt
       suspendedAt = null
       if (!quitting) svc.onResumeFromSleep(slept)
+      if (!quitting) updater?.onActivity()
     })
 
     // ao sair: desliga tudo com cuidado (shutdownOnce) e só então deixa o app fechar

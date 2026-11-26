@@ -30,6 +30,15 @@ export const DEFAULT_STATE: AppState = {
   setupDone: true,
   provider: 'groq',
   update: { status: 'none' },
+  updateCheck: {
+    enabled: true,
+    currentVersion: '0.2.3',
+    checking: false,
+    lastCheckAt: null,
+    lastResult: null,
+    latestVersion: null,
+    lastError: null
+  },
   triage: { awaiting: 0, withAlerts: 0 }
 }
 
@@ -388,6 +397,21 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     },
     installUpdate: async () => {
       record('installUpdate', [], undefined)
+    },
+    checkForUpdates: async () => {
+      record('checkForUpdates', [], undefined)
+      const at = Date.now()
+      const v = state.update.status !== 'none' ? state.update.version : null
+      state.updateCheck = {
+        ...state.updateCheck,
+        checking: false,
+        lastCheckAt: at,
+        lastResult: v ? 'available' : 'up_to_date',
+        latestVersion: v ?? state.updateCheck.currentVersion,
+        lastError: null
+      }
+      emitState()
+      return { ...state.updateCheck }
     },
     retryFailedJobs: async () => {
       const n = state.queue.failed

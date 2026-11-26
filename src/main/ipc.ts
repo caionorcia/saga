@@ -2,7 +2,7 @@ import { app, clipboard, dialog, ipcMain, type BrowserWindow } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SagaService } from '../core/service'
-import { EVENTS, INVOKE_METHODS, invokeChannel, type InvokeMethod, type SagaApi } from '../shared/api'
+import { EVENTS, INVOKE_METHODS, invokeChannel, type InvokeMethod, type SagaApi, type UpdateCheck } from '../shared/api'
 import { validateIpcArgs } from './guards'
 
 type Handlers = { [M in InvokeMethod]: (...args: Parameters<SagaApi[M]>) => ReturnType<SagaApi[M]> }
@@ -17,6 +17,8 @@ export interface IpcOptions {
   onSettingsSaved?: () => void
   /** o usuário clicou em "Atualizar" */
   onDownloadUpdate?: () => Promise<void>
+  /** "Verificar agora" (Configurações › Atualizações); sem atualizador, devolve a situação atual */
+  onCheckForUpdates?: () => Promise<UpdateCheck>
   /** o usuário clicou em "Reiniciar e atualizar" */
   onInstallUpdate?: () => Promise<void>
   /** texto do "Copiar diagnóstico" e quantas linhas do registro ele tem */
@@ -68,6 +70,7 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     downloadUpdate: async () => {
       await opts.onDownloadUpdate?.()
     },
+    checkForUpdates: async () => (await opts.onCheckForUpdates?.()) ?? service.state().updateCheck,
     installUpdate: async () => {
       await opts.onInstallUpdate?.()
     },
