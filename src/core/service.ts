@@ -53,6 +53,7 @@ import { SendConflictError, sendJobKey, type SendRow } from './db/sendRepo'
 import { SendGate, type SendBinding } from './send/gate'
 import { CopilotoSync } from './copiloto/sync'
 import {
+  FOLLOWUP_AUTO,
   FOLLOWUP_LIMITS,
   FOLLOWUP_REASON,
   FOLLOWUP_TEXT,
@@ -66,6 +67,7 @@ import {
 } from '../shared/copiloto'
 import { followupView, type FollowupRow } from './db/followupRepo'
 import { shortReason } from './copiloto/followups'
+import { FollowupAutoSender } from './copiloto/autoSend'
 import { chatHash, hasRecentContactMessage, pickQuote, sendAddress, textHash } from './send/logic'
 import { verifyUnknownSend } from './send/verify'
 import {
@@ -250,6 +252,10 @@ export class SagaService extends EventEmitter {
   readonly backup: BackupManager
   /** Copiloto da Saga (v0.5.0): fila de saída e envio por HTTPS, fora da fila do WhatsApp */
   readonly copiloto: CopilotoSync
+  /** v0.8.0 (contrato v1.2): envio automático dos follow-ups marcados pelo Copiloto, com a opção ligada */
+  readonly autoFollowups: FollowupAutoSender
+  /** desde quando a conexão está aberta (null = fechada): o envio automático só sai com ela estável */
+  private connOpenSince: number | null = null
   private readonly wa: WaClientLike
   private readonly repo: Repo
   private readonly settings: SettingsStore
@@ -334,6 +340,20 @@ export class SagaService extends EventEmitter {
       pnForLid: (lid) => this.wa?.pnForLid?.(lid) ?? null,
       diag: (k, d) => this.diag(k, d),
       onFollowups: () => this.markFollowups()
+    })
+
+    this.autoFollowups = new FollowupAutoSender({
+      repo,
+      clock,
+      rng,
+      active: () => this.autoActive(),
+      schedule: () => this.settings.sendOptions().schedule,
+      ready: () => this.autoReady(),
+      busy: () => this.repo.sends.listByStatus('queued', 'typing', 'sending').length > 0,
+      limiterAt: (now) => this.limiters.wa_send.nextAllowedAt(now),
+      dispatch: (f) => this.autoDispatch(f),
+      diag: (k, d) => this.diag(k, d),
+      changed: () => this.markFollowups()
     })
 
     const lim = (name: LimiterName) => new RateLimiter(LIMITS[name], clock, rng, { repo, key: `limiter:${name}` })
@@ -455,7 +475,8 @@ export class SagaService extends EventEmitter {
       hasFreeSpace: opts.hasFreeSpace ?? defaultHasFreeSpace,
       ...(opts.fetchWaVersion ? { fetchWaVersion: opts.fetchWaVersion } : {}),
       ...(opts.diag ? { diag: opts.diag } : {}),
-      sendOptions: () => this.settings.sendOptions()
+      sendOptions: () => this.settings.sendOptions(),
+      sendGuard: (s) => this.autoSendGuard(s)
     })
     this.wa.on('send', (jid: string) => this.markSends(jid))
     this.wa.on('qr', (dataUrl: string) => {
@@ -465,6 +486,8 @@ export class SagaService extends EventEmitter {
     this.wa.on('status', (s: ConnState) => {
       if (s !== 'needs_qr') this.qr = null
       if (s === 'open') repo.setSetting(EVER_CONNECTED, '1')
+      if (s !== 'open') this.connOpenSince = null
+      else this.connOpenSince ??= clock.now()
       if (PERSISTED_STOPS.has(s)) repo.setSetting(STOPPED_STATE, s)
       this.markState()
     })
@@ -553,6 +576,7 @@ export class SagaService extends EventEmitter {
       this.sendSweepTimer = setInterval(() => {
         try {
           this.expireStaleSends()
+          this.autoTick()
         } catch {
           // banco fechado
         }
@@ -726,6 +750,8 @@ export class SagaService extends EventEmitter {
           // banco fechado
         }
       }
+      // um envio terminou ou chegou follow-up: o próximo envio automático pode sair (sempre um por vez)
+      if (sendJids.length > 0 || this.pendingFollowups) this.autoTick()
       const followups = this.pendingFollowups
       this.pendingFollowups = false
       this.pendingJids.clear()
@@ -1201,6 +1227,10 @@ export class SagaService extends EventEmitter {
    * a confirmação da mensagem avulsa (sem citação; só vale no `sendAvulsa`).
    */
   async prepareSend(input: PrepareSendInput): Promise<PrepareSendResult> {
+    return this.prepareSendNow(input)
+  }
+
+  private prepareSendNow(input: PrepareSendInput): PrepareSendResult {
     const jid = input.jid
     const text = input.text.trim()
     const forced = input.forced === true
@@ -1272,6 +1302,15 @@ export class SagaService extends EventEmitter {
    * envios: a chave é conversa + rascunho + impressão do texto.
    */
   async sendAvulsa(input: SendAvulsaInput): Promise<SendReplyResult> {
+    // pela interface, nunca automático: só a confirmação do mentor
+    return this.sendAvulsaNow(input, false)
+  }
+
+  /**
+   * O corpo do `sendAvulsa`. `auto` (v0.8.0) só vem do envio automático de um follow-up, que fez a confirmação aqui
+   * dentro com o mesmo `prepareSend` (token de uso único, nunca "Forçar envio"); fica marcado no envio.
+   */
+  private sendAvulsaNow(input: SendAvulsaInput, auto: boolean): SendReplyResult {
     const jid = input.jid
     const text = input.text.trim()
     if (typeof input.draftId !== 'string' || !DRAFT_ID_RE.test(input.draftId)) {
@@ -1296,11 +1335,12 @@ export class SagaService extends EventEmitter {
       this.diag('send_refused', `send #${prev.id} chat=${chatHash(jid)} in_flight`)
       return { ok: false, code: 'in_flight', message: SEND_REFUSAL_TEXT.in_flight }
     }
-    const r = this.enqueueConfirmed({ idemKey, kind: 'avulsa', replyId: null, jid, text, bind: gate.bind, outside: gate.outside })
+    if (auto && (!followup || gate.bind.forced)) return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
+    const r = this.enqueueConfirmed({ idemKey, kind: 'avulsa', replyId: null, jid, text, bind: gate.bind, outside: gate.outside, auto })
     if (r.ok && followup) {
       // a ligação fica gravada (o id do rascunho também está na chave do envio): reiniciar no meio ainda relata certo
       if (this.repo.followups.transition(followup.id, ['waiting', 'sending'], 'sending', { sendId: r.send.id, sendError: null })) this.markFollowups()
-      this.sendDiag('send_followup', this.repo.sends.get(r.send.id)!, 'follow-up do Copiloto')
+      this.sendDiag('send_followup', this.repo.sends.get(r.send.id)!, auto ? 'follow-up do Copiloto, automático' : 'follow-up do Copiloto')
     }
     return r
   }
@@ -1333,12 +1373,72 @@ export class SagaService extends EventEmitter {
     return null
   }
 
+  // --- follow-up com envio automático (v0.8.0, contrato v1.2) ---
+
+  /** A opção ligada, a integração ligada e o envio direto ligado. */
+  private autoActive(): boolean {
+    return this.copiloto.enabled() && this.copiloto.autoFollowups() && this.settings.sendOptions().enabled
+  }
+
+  /** WhatsApp conectado e estável (de pé há 1 min), sem "Pausar tudo" nem parada guardada. */
+  private autoReady(): boolean {
+    if (this.persistedStop || this.queue.isPaused() || this.wa.getStatus() !== 'open' || this.connOpenSince === null) return false
+    return this.clock.now() - this.connOpenSince >= FOLLOWUP_AUTO.stableMs
+  }
+
+  private autoTick(): void {
+    if (this.stopping) return
+    try {
+      this.autoFollowups.tick()
+    } catch (e) {
+      this.repo.logEvent('copiloto_error', `envio automático: ${e instanceof Error ? e.name : 'Error'}`)
+    }
+  }
+
+  /**
+   * A confirmação que o mentor daria, feita aqui dentro: o mesmo `prepareSend` (todas as regras; nunca "Forçar envio")
+   * e o mesmo token de uso único gasto no `sendAvulsa`, com o id do follow-up como id do rascunho. A regra dos 30 dias
+   * barrando → o follow-up vai ao Copiloto como `fora_30_dias`.
+   */
+  private autoDispatch(f: FollowupRow & { jid: string }): { ok: true; sendId: number } | { ok: false; code: string } {
+    const prep = this.prepareSendNow({ jid: f.jid, text: f.text, kind: 'avulsa' })
+    if (!prep.ok) {
+      if (prep.code === 'no_recent_contact') this.copiloto.finishFollowup(f.id, 'failed', FOLLOWUP_REASON.outside30)
+      return { ok: false, code: prep.code }
+    }
+    const r = this.sendAvulsaNow({ token: prep.preview.token, jid: f.jid, text: prep.preview.text, draftId: f.id }, true)
+    return r.ok ? { ok: true, sendId: r.send.id } : { ok: false, code: r.code }
+  }
+
+  /**
+   * Conferido pelo `executeSend` antes do "digitando…" e logo antes de enviar: um envio automático só sai se a opção, a
+   * integração e o envio direto continuam ligados e o follow-up dele ainda está saindo (não foi cancelado nem apagado).
+   */
+  private autoSendGuard(s: SendRow): string | null {
+    if (!s.auto) return null
+    if (!this.autoActive()) return 'envio automático desligado'
+    const f = this.repo.followups.bySendId(s.id)
+    if (!f || f.status !== 'sending' || !f.autoSend || f.autoOff) return 'o follow-up não está mais para envio automático'
+    return null
+  }
+
+  /** O que está na fila de envio automático não sai (vira "não enviada"; o follow-up volta ao cartão ou a esperar). */
+  private expireAutoSends(why: string): void {
+    for (const s of this.repo.sends.listByStatus('queued')) {
+      if (s.auto && this.repo.sends.transition(s.id, s.attempt, ['queued'], 'expired', { error: why })) {
+        this.sendDiag('send_expired', s, why)
+        this.markSends(s.jid)
+      }
+    }
+  }
+
   // --- follow-up do Copiloto (v0.7.0) ---
 
   /** Os follow-ups que a interface mostra (esperando, saindo, e por algumas horas os enviados e os sem envio). */
   async listFollowups(): Promise<FollowupView[]> {
     this.copiloto.reconcileFollowups()
-    return this.repo.followups.listVisible(FOLLOWUP_LIMITS.recentMs).map(followupView)
+    this.autoTick()
+    return this.repo.followups.listVisible(FOLLOWUP_LIMITS.recentMs).map((f) => ({ ...followupView(f), auto: this.autoFollowups.view(f) }))
   }
 
   /**
@@ -1361,6 +1461,13 @@ export class SagaService extends EventEmitter {
   /** "Recusar": vai ao Copiloto como recusado, com o motivo digitado (até 200 caracteres) ou `recusado_pelo_mentor`. */
   async followupDecline(id: string, reason: string | null): Promise<boolean> {
     this.copiloto.reconcileFollowups()
+    // v0.8.0 "Não enviar" de um envio automático ainda na fila: cancela o envio (só na fila; depois não dá mais)
+    const f = this.repo.followups.get(id)
+    if (f?.status === 'sending' && f.autoSend && f.sendId !== null) {
+      const s = this.repo.sends.get(f.sendId)
+      if (!s?.auto || !(await this.cancelSend(s.id))) return false
+      this.copiloto.reconcileFollowups()
+    }
     return this.copiloto.finishFollowup(id, 'declined', shortReason(reason) ?? FOLLOWUP_REASON.declined)
   }
 
@@ -1402,11 +1509,22 @@ export class SagaService extends EventEmitter {
     text: string
     bind: SendBinding
     outside: SendHoursInfo | null
+    auto?: boolean
   }): SendReplyResult {
     const { jid, text, bind, outside } = a
     let enq: ReturnType<Repo['sends']['enqueue']>
     try {
-      enq = this.repo.sends.enqueue({ idemKey: a.idemKey, kind: a.kind, replyId: a.replyId, jid, text, address: bind.address, quotedId: bind.quotedId, forced: bind.forced })
+      enq = this.repo.sends.enqueue({
+        idemKey: a.idemKey,
+        kind: a.kind,
+        replyId: a.replyId,
+        jid,
+        text,
+        address: bind.address,
+        quotedId: bind.quotedId,
+        forced: bind.forced,
+        auto: a.auto === true
+      })
     } catch (e) {
       if (!(e instanceof SendConflictError)) throw e
       this.diag('send_refused', `chat=${chatHash(jid)} conflito de chave`)
@@ -1416,7 +1534,7 @@ export class SagaService extends EventEmitter {
     if (created) {
       // a geração da conexão vai junto: se a conexão cair antes da vez, este envio nunca sai
       this.queue.enqueue('send_message', sendJobKey(send), { sendId: send.id, attempt: send.attempt, gen: this.wa.connGen?.() ?? 0 }, SEND_PRIORITY)
-      this.sendDiag('send_queued', send, [send.kind === 'avulsa' ? 'avulsa' : '', send.attempt > 1 ? `tentativa ${send.attempt}` : ''].filter(Boolean).join(' '))
+      this.sendDiag('send_queued', send, [send.kind === 'avulsa' ? 'avulsa' : '', send.auto ? 'automático' : '', send.attempt > 1 ? `tentativa ${send.attempt}` : ''].filter(Boolean).join(' '))
       if (send.forced && outside) this.sendDiag('send_forced', send, 'fora do horário de envio')
     }
     this.markSends(jid)
@@ -1609,7 +1727,11 @@ export class SagaService extends EventEmitter {
   }
 
   async copilotoSave(patch: CopilotoPatch): Promise<CopilotoSaveResult> {
-    return this.copiloto.save(patch)
+    const r = this.copiloto.save(patch)
+    // envio automático desligado (ou a integração): o automático que está na fila não sai
+    if (!this.autoActive()) this.expireAutoSends('envio automático desligado')
+    else this.autoTick()
+    return r
   }
 
   /** O código aparece só nesta resposta; depois a interface só sabe que ele existe. */

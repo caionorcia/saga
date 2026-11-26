@@ -35,7 +35,7 @@ describe('migração v17 (v0.6.0): envios avulsos', () => {
 
     db = openDb(file)
     const repo = new Repo(db)
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(18)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(19)
     expect(repo.sends.get(7)).toMatchObject({ kind: 'reply', replyId: 3, quotedId: 'Q1', msgIds: ['3EB0AA'], status: 'sent', forced: true, waMsgId: '3EB0AA' })
     // avulsa: sem resposta aprovada e sem citação (mesmo se pedirem)
     const { send } = repo.sends.enqueue({ idemKey: `avulsa:${JID}:d1:x`, kind: 'avulsa', replyId: null, jid: JID, text: 'Aviso', address: JID, quotedId: 'Q1' })

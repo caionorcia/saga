@@ -196,7 +196,8 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     copilotoSave: (patch) =>
       service.copilotoSave({
         ...(patch.enabled !== undefined ? { enabled: patch.enabled === true } : {}),
-        ...(patch.url !== undefined ? { url: String(patch.url) } : {})
+        ...(patch.url !== undefined ? { url: String(patch.url) } : {}),
+        ...(patch.autoFollowups !== undefined ? { autoFollowups: patch.autoFollowups === true } : {})
       }),
     copilotoGenerateCode: () => service.copilotoGenerateCode(),
     copilotoTest: () => service.copilotoTest(),

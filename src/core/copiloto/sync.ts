@@ -60,7 +60,9 @@ export const COPILOTO_KEYS = {
   lastSentAt: 'copiloto.lastSentAt',
   lastError: 'copiloto.lastError',
   lastErrorAt: 'copiloto.lastErrorAt',
-  authFailed: 'copiloto.authFailed'
+  authFailed: 'copiloto.authFailed',
+  /** v0.8.0: "Enviar follow-ups do Copiloto automaticamente" ('1' = ligado; padrão desligado) */
+  autoFollowups: 'copiloto.autoFollowups'
 } as const
 
 const K = COPILOTO_KEYS
@@ -109,6 +111,11 @@ export class CopilotoSync {
 
   enabled(): boolean {
     return this.repo.getSetting(K.enabled) === '1'
+  }
+
+  /** v0.8.0: a opção "Enviar follow-ups do Copiloto automaticamente" (desligada por padrão). */
+  autoFollowups(): boolean {
+    return this.repo.getSetting(K.autoFollowups) === '1'
   }
 
   private url(): string | null {
@@ -165,12 +172,23 @@ export class CopilotoSync {
       authFailed: this.repo.getSetting(K.authFailed) === '1',
       rosterSize: r?.phones.length ?? 0,
       rosterAt: r?.at ?? null,
-      chats: this.repo.copiloto.chatCount()
+      chats: this.repo.copiloto.chatCount(),
+      autoFollowups: this.autoFollowups()
     }
   }
 
   /** Liga/desliga e o endereço. Ligar exige endereço e código; desligar apaga a fila local. */
   save(patch: CopilotoPatch): CopilotoSaveResult {
+    if (patch.autoFollowups !== undefined && patch.autoFollowups !== this.autoFollowups()) {
+      if (patch.autoFollowups) this.repo.setSetting(K.autoFollowups, '1')
+      else {
+        this.repo.setSetting(K.autoFollowups, '0')
+        // ligada de novo, escolhe outros horários (com as mesmas regras)
+        this.repo.followups.clearAutoSchedule()
+      }
+      this.repo.logEvent('copiloto_auto', patch.autoFollowups ? 'envio automático dos follow-ups ligado' : 'envio automático dos follow-ups desligado')
+      this.deps.onFollowups?.()
+    }
     if (patch.url !== undefined) {
       const url = typeof patch.url === 'string' ? patch.url.trim() : ''
       if (url && !isCopilotoUrl(url)) return { ok: false, message: COPILOTO_TEXT.invalidUrl }

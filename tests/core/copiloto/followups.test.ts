@@ -42,6 +42,14 @@ describe('follow-ups: leitura da fila do Copiloto', () => {
     expect(parseFollowup(item(F1, individual([ANA_PHONE]), 'oi', { author: null }))?.author).toBeNull()
   })
 
+  it('v1.2 auto_send: só true vale; ausente, null ou outro tipo = false (o item continua valendo)', () => {
+    const base = item(F1, individual([ANA_PHONE]))
+    expect(parseFollowup(base)?.autoSend).toBe(false)
+    expect(parseFollowup({ ...base, auto_send: true })?.autoSend).toBe(true)
+    expect(parseFollowup({ ...base, auto_send: false })?.autoSend).toBe(false)
+    for (const v of [null, 'true', 1, {}]) expect(parseFollowup({ ...base, auto_send: v })?.autoSend).toBe(false)
+  })
+
   it('envelope: version 1 e a lista; ids repetidos valem uma vez; inválidos contados', () => {
     expect(parsePending({ version: 2, followups: [] })).toBeNull()
     expect(parsePending({ version: 1 })).toBeNull()

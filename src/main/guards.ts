@@ -194,10 +194,17 @@ function isSendAvulsa(i: unknown): boolean {
   return isUuid(i.token) && nonEmpty(i.jid) && i.jid.length <= 200 && isSendText(i.text) && isStr(i.draftId) && DRAFT_ID_RE.test(i.draftId)
 }
 
-/** Copiloto: só `enabled` (sim/não) e/ou `url` (texto curto; o formato é conferido no serviço, com mensagem). */
+/**
+ * Copiloto: só `enabled` e `autoFollowups` (sim/não, v0.8.0) e/ou `url` (texto curto; o formato é conferido no
+ * serviço, com mensagem).
+ */
 function isCopilotoPatch(p: unknown): boolean {
-  if (!isObj(p) || Object.keys(p).length === 0 || !Object.keys(p).every((k) => k === 'enabled' || k === 'url')) return false
-  return (p.enabled === undefined || isBool(p.enabled)) && (p.url === undefined || (isStr(p.url) && p.url.length <= COPILOTO_URL_MAX))
+  if (!isObj(p) || Object.keys(p).length === 0 || !Object.keys(p).every((k) => k === 'enabled' || k === 'url' || k === 'autoFollowups')) return false
+  return (
+    (p.enabled === undefined || isBool(p.enabled)) &&
+    (p.autoFollowups === undefined || isBool(p.autoFollowups)) &&
+    (p.url === undefined || (isStr(p.url) && p.url.length <= COPILOTO_URL_MAX))
+  )
 }
 
 const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {

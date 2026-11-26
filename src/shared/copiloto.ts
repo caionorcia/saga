@@ -48,10 +48,14 @@ export interface CopilotoStatus {
   rosterAt: number | null
   /** conversas deste computador que são de mentorados (individuais e grupos) */
   chats: number
+  /** v0.8.0 (contrato v1.2): "Enviar follow-ups do Copiloto automaticamente" (padrão: desligado) */
+  autoFollowups: boolean
 }
 
 export interface CopilotoPatch {
   enabled?: boolean
+  /** v0.8.0: "Enviar follow-ups do Copiloto automaticamente" */
+  autoFollowups?: boolean
   /** `''` apaga o endereço */
   url?: string
 }
@@ -90,6 +94,38 @@ export const FOLLOWUP_LIMITS = {
   recentMs: 12 * 60 * 60_000
 } as const
 
+/**
+ * v0.8.0 (contrato v1.2): envio automático dos follow-ups marcados `auto_send: true`, com a opção ligada. Sai pelo mesmo
+ * caminho da mensagem avulsa (todas as travas), sem a tela de confirmação e nunca com "Forçar envio".
+ */
+export const FOLLOWUP_AUTO = {
+  /** envios automáticos por dia (dia do computador); o excedente fica para o dia seguinte */
+  perDay: 30,
+  /** fora do horário: sai no próximo horário permitido + um atraso sorteado entre 7 e 25 min (nunca na abertura) */
+  jitterMinMs: 7 * 60_000,
+  jitterMaxMs: 25 * 60_000,
+  /** a conexão precisa estar de pé há este tempo (estável) */
+  stableMs: 60_000,
+  /** tentativas automáticas de um mesmo item que não chegaram a sair (conexão caiu antes etc.); depois, o cartão */
+  maxAttempts: 3,
+  /** um limitador do WhatsApp (hora/dia) que só libera depois disso: espera, sem pôr na fila (expiraria lá) */
+  limiterSlackMs: 2 * 60_000
+} as const
+
+/** Por que um envio automático ainda não saiu (a linha de estado na conversa). */
+export type FollowupAutoWait = 'connection' | 'daily_cap' | 'no_hours' | 'busy' | null
+
+/** v0.8.0: o envio automático de um follow-up, como a interface vê; null no follow-up = cartão da v1.1. */
+export interface FollowupAuto {
+  /** `scheduled`: espera o horário (`at`) · `sending`: na fila/digitando/enviando · `sent`: saiu */
+  state: 'scheduled' | 'sending' | 'sent'
+  /** epoch ms do envio escolhido (em `scheduled`); null = ainda sem horário (ex.: nenhum dia liberado) */
+  at: number | null
+  wait: FollowupAutoWait
+  /** em `sending`: ainda na fila (dá para "Não enviar") */
+  canCancel: boolean
+}
+
 /** Motivos curtos do contrato (`reason` do `followup_update`). */
 export const FOLLOWUP_REASON = {
   declined: 'recusado_pelo_mentor',
@@ -116,6 +152,8 @@ export interface FollowupView {
   reason: string | null
   /** o último envio deste follow-up não saiu (falhou, expirou, cancelado): o motivo; o aviso volta a esperar */
   sendError: string | null
+  /** v0.8.0: envio automático (opção ligada e item marcado pelo Copiloto); null = cartão "Abrir para enviar" */
+  auto: FollowupAuto | null
 }
 
 export const FOLLOWUP_TEXT = {

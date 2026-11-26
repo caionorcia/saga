@@ -87,6 +87,11 @@ export interface FakeOptions {
   outsideHours?: boolean
   /** v0.7.0: dois follow-ups do Copiloto de exemplo (uma conversa individual e um grupo); padrão: nenhum */
   followups?: boolean
+  /**
+   * v0.8.0: Copiloto ligado com "Enviar follow-ups do Copiloto automaticamente" e o follow-up da conversa individual
+   * marcado para envio automático (agendado para a próxima abertura do horário + alguns minutos); padrão: desligado
+   */
+  autoFollowups?: boolean
 }
 
 const EXTRA_SUGGESTION = 'Combinado! Qualquer coisa me avisa por aqui.'
@@ -246,7 +251,8 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
           finalText: null,
           sentAt: null,
           reason: null,
-          sendError: null
+          sendError: null,
+          auto: null
         },
         {
           id: '8e2f3d4c-5b6a-4f7e-9d8c-0b1c2d3e4f5a',
@@ -259,10 +265,23 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
           finalText: null,
           sentAt: null,
           reason: null,
-          sendError: null
+          sendError: null,
+          auto: null
         }
       ]
     : []
+  /** v0.8.0: quais follow-ups o Copiloto marcou para envio automático (na demonstração, só o da conversa individual) */
+  const autoMarked = new Set<string>(opts.autoFollowups ? [followups[0]?.id].filter((x): x is string => !!x) : [])
+  /** o horário de demonstração do envio automático: amanhã às 09:14 */
+  const autoAt = (() => {
+    const d = new Date(now)
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 9, 14).getTime()
+  })()
+  const applyAuto = () => {
+    for (const f of followups) {
+      f.auto = copiloto.autoFollowups && copiloto.enabled && autoMarked.has(f.id) && f.status === 'waiting' ? { state: 'scheduled', at: autoAt, wait: null, canCancel: true } : null
+    }
+  }
   const followupListeners = new Set<() => void>()
   const notifyFollowups = () => {
     followupListeners.forEach((l) => l())
@@ -467,8 +486,11 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     authFailed: false,
     rosterSize: 0,
     rosterAt: null,
-    chats: 0
+    chats: 0,
+    autoFollowups: false
   }
+  if (opts.autoFollowups) Object.assign(copiloto, { enabled: true, url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook', hasCode: true, rosterSize: 24, rosterAt: now, chats: 5, autoFollowups: true })
+  applyAuto()
 
   const api: SagaApi = {
     get initialTheme() {
@@ -868,6 +890,9 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
         if (!copiloto.url || !copiloto.hasCode) return { ok: false, message: COPILOTO_TEXT.needsSetup }
         Object.assign(copiloto, { enabled: true, rosterSize: 24, rosterAt: now, chats: 5, pending: 37, lastSentAt: now - 60_000 })
       } else if (patch.enabled === false) Object.assign(copiloto, { enabled: false, pending: 0, chats: 0, lastError: null, lastErrorAt: null })
+      if (patch.autoFollowups !== undefined) copiloto.autoFollowups = patch.autoFollowups
+      applyAuto()
+      notifyFollowups()
       return { ok: true, status: { ...copiloto } }
     },
     copilotoGenerateCode: async () => {
@@ -894,7 +919,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       record('followupDecline', [id, reason], undefined)
       const f = followups.find((x) => x.id === id)
       if (!f || f.status !== 'waiting') return false
-      Object.assign(f, { status: 'declined', reason: reason?.trim() ? reason.trim().slice(0, FOLLOWUP_LIMITS.reasonChars) : FOLLOWUP_REASON.declined })
+      Object.assign(f, { status: 'declined', reason: reason?.trim() ? reason.trim().slice(0, FOLLOWUP_LIMITS.reasonChars) : FOLLOWUP_REASON.declined, auto: null })
       notifyFollowups()
       return true
     },
@@ -958,6 +983,7 @@ declare global {
  * Instala o falso em `window.saga`. Na pré-visualização, `?state={"conn":"waiting_retry"}` mexe no estado inicial,
  * `?setup=1` mostra o assistente com um QR Code, `?qr=1` mostra o QR na tela principal (vincular de novo) e
  * `?theme=dark|light|system` escolhe o tema salvo e `?hours=outside` põe o relógio do horário de envio fora dele.
+ * `?auto=1` (v0.8.0) liga o envio automático dos follow-ups do Copiloto (o da conversa individual aparece agendado).
  */
 export async function installFakeSaga(): Promise<void> {
   const params = new URLSearchParams(location.search)
@@ -975,7 +1001,7 @@ export async function installFakeSaga(): Promise<void> {
   if (patch.conn === 'waiting_retry' && patch.retryAt === undefined) patch.retryAt = Date.now() + 2 * 60_000
   const t = params.get('theme')
   const theme = t === 'light' || t === 'dark' || t === 'system' ? t : undefined
-  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside', followups: params.get('followups') !== '0' })
+  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside', followups: params.get('followups') !== '0', autoFollowups: params.get('auto') === '1' })
   window.saga = ctl.api
   window.__sagaFake = ctl
 }

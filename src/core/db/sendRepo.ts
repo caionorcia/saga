@@ -23,6 +23,8 @@ export interface SendRow {
   status: SendStatus
   /** v0.4.1: confirmado com "Forçar envio" (pode sair fora do horário de envio) */
   forced: boolean
+  /** v0.8.0: follow-up do Copiloto enviado automaticamente (sem a tela de confirmação; nunca forçado) */
+  auto: boolean
   /** 1 na primeira confirmação; cada nova confirmação depois de falha/expiração/desconhecido soma 1 */
   attempt: number
   queuedAt: number
@@ -55,6 +57,7 @@ function toSend(r: Row): SendRow {
     msgIds: ids(r.msg_ids_json),
     status: r.status,
     forced: r.forced === 1,
+    auto: r.auto === 1,
     attempt: r.attempt,
     queuedAt: r.queued_at,
     startedAt: r.started_at ?? null,
@@ -130,7 +133,18 @@ export class SendRepo {
    * chama). A chave de outra conversa (ou de outro tipo/resposta) lança `SendConflictError`. A avulsa (`replyId`
    * null) nunca leva citação.
    */
-  enqueue(a: { idemKey: string; kind?: SendKind; replyId: number | null; jid: string; text: string; address: string; quotedId: string | null; forced?: boolean }): {
+  enqueue(a: {
+    idemKey: string
+    kind?: SendKind
+    replyId: number | null
+    jid: string
+    text: string
+    address: string
+    quotedId: string | null
+    forced?: boolean
+    /** v0.8.0: envio automático de um follow-up do Copiloto (só avulsa, nunca forçado) */
+    auto?: boolean
+  }): {
     send: SendRow
     created: boolean
   } {
@@ -138,12 +152,14 @@ export class SendRepo {
     if ((kind === 'reply') !== (a.replyId !== null)) throw new Error('envio: resposta sem resposta aprovada ou avulsa com resposta aprovada')
     const quotedId = kind === 'avulsa' ? null : a.quotedId
     const forced = a.forced ? 1 : 0
+    if (a.auto && (kind !== 'avulsa' || forced)) throw new Error('envio: o automático é só mensagem avulsa e nunca forçado')
+    const auto = a.auto ? 1 : 0
     const now = this.clock.now()
     const cur = this.byIdemKey(a.idemKey)
     if (!cur) {
       const res = this.db
-        .prepare(`INSERT INTO sends(idem_key, kind, reply_id, jid, text, address, quoted_id, forced, status, queued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`)
-        .run(a.idemKey, kind, a.replyId, a.jid, a.text, a.address, quotedId, forced, now)
+        .prepare(`INSERT INTO sends(idem_key, kind, reply_id, jid, text, address, quoted_id, forced, auto, status, queued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`)
+        .run(a.idemKey, kind, a.replyId, a.jid, a.text, a.address, quotedId, forced, auto, now)
       return { send: this.get(Number(res.lastInsertRowid))!, created: true }
     }
     if (cur.jid !== a.jid || cur.kind !== kind || cur.replyId !== a.replyId) throw new SendConflictError()
@@ -153,10 +169,10 @@ export class SendRepo {
     this.db
       .prepare(
         `UPDATE sends SET status = 'queued', attempt = attempt + 1, queued_at = ?, started_at = NULL, sent_at = NULL, wa_msg_id = NULL,
-           error = NULL, address = ?, quoted_id = ?, forced = ?
+           error = NULL, address = ?, quoted_id = ?, forced = ?, auto = ?
          WHERE id = ? AND attempt = ?`
       )
-      .run(now, a.address, quotedId, forced, cur.id, cur.attempt)
+      .run(now, a.address, quotedId, forced, auto, cur.id, cur.attempt)
     return { send: this.get(cur.id)!, created: true }
   }
 
@@ -186,6 +202,18 @@ export class SendRepo {
         JSON.stringify(from)
       )
     return Number(res.changes) > 0
+  }
+
+  /**
+   * v0.8.0: envios automáticos que contam no limite do dia desde `since` (epoch ms): os que saíram, estão saindo ou
+   * ficaram de estado desconhecido (o que expirou, falhou ou foi cancelado não saiu e não conta).
+   */
+  autoCountSince(since: number): number {
+    return (
+      this.db
+        .prepare("SELECT COUNT(*) AS n FROM sends WHERE auto = 1 AND queued_at >= ? AND status IN ('queued', 'typing', 'sending', 'sent', 'unknown')")
+        .get(since) as Row
+    ).n
   }
 
   /** Quantos envios há em cada estado (painel de status e testes). */

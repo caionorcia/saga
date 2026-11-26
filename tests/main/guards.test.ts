@@ -70,6 +70,17 @@ describe('validateIpcArgs', () => {
     bad('followupDecline', '../x', null)
   })
 
+  it('Copiloto (v0.8.0): "Enviar follow-ups automaticamente" só sim/não; nenhum campo estranho (nem "forçar")', () => {
+    ok('copilotoSave', { autoFollowups: true })
+    ok('copilotoSave', { autoFollowups: false, enabled: true })
+    bad('copilotoSave', { autoFollowups: 'sim' })
+    bad('copilotoSave', { autoFollowups: 1 })
+    bad('copilotoSave', { autoFollowups: true, forced: true })
+    bad('copilotoSave', {})
+    // o envio pela interface nunca é automático: o campo não existe no "Enviar" da avulsa
+    bad('sendAvulsa', { token: '11111111-1111-4111-8111-111111111111', jid: '5547999998888@s.whatsapp.net', text: 'oi', draftId: '7d1e2c3b-4a5f-4e6d-8c7b-9a0b1c2d3e4f', auto: true })
+  })
+
   it('recentEvents: inteiro entre 1 e 200', () => {
     ok('recentEvents', 20)
     bad('recentEvents', 0)

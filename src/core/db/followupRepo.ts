@@ -26,6 +26,13 @@ export interface FollowupRow {
   nextReportAt: number
   lastResult: string | null
   updatedAt: number
+  /** v0.8.0 (contrato v1.2): o Copiloto marcou para envio automático */
+  autoSend: boolean
+  /** o horário escolhido para o envio automático (epoch ms; gravado: reiniciar não sorteia de novo); null = ainda não */
+  autoAt: number | null
+  /** o envio automático deste item acabou (desconhecido, falhou, tentativas demais): segue como na v1.1 */
+  autoOff: boolean
+  autoAttempts: number
 }
 
 function toRow(r: Row): FollowupRow {
@@ -47,7 +54,11 @@ function toRow(r: Row): FollowupRow {
     reportAttempts: r.report_attempts,
     nextReportAt: r.next_report_at,
     lastResult: r.last_result ?? null,
-    updatedAt: r.updated_at
+    updatedAt: r.updated_at,
+    autoSend: r.auto_send === 1,
+    autoAt: r.auto_at ?? null,
+    autoOff: r.auto_off === 1,
+    autoAttempts: r.auto_attempts ?? 0
   }
 }
 
@@ -63,7 +74,8 @@ export function followupView(f: FollowupRow & { jid: string }): FollowupView {
     finalText: f.finalText,
     sentAt: f.sentAt,
     reason: f.reason,
-    sendError: f.sendError
+    sendError: f.sendError,
+    auto: null
   }
 }
 
@@ -92,10 +104,10 @@ export class FollowupRepo {
     const now = this.clock.now()
     const res = this.db
       .prepare(
-        `INSERT OR IGNORE INTO copiloto_followups(id, target_json, text, author, created_at, received_at, jid, local_status, reason, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO copiloto_followups(id, target_json, text, author, created_at, received_at, jid, local_status, reason, updated_at, auto_send)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(f.id, JSON.stringify(f.target), f.text, f.author, f.createdAt, now, jid, status, extra.reason ?? null, now)
+      .run(f.id, JSON.stringify(f.target), f.text, f.author, f.createdAt, now, jid, status, extra.reason ?? null, now, f.autoSend ? 1 : 0)
     return Number(res.changes) > 0
   }
 
@@ -194,6 +206,49 @@ export class FollowupRepo {
     this.tx(() => {
       for (const id of ids) st.run(at, result, id)
     })
+  }
+
+  // --- v0.8.0: envio automático (contrato v1.2) ---
+
+  /** Os que esperam e estão marcados para envio automático (ainda valendo), mais antigos primeiro. */
+  listAutoWaiting(): Array<FollowupRow & { jid: string }> {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM copiloto_followups
+            WHERE local_status = 'waiting' AND jid IS NOT NULL AND auto_send = 1 AND auto_off = 0
+            ORDER BY created_at, id`
+        )
+        .all() as Row[]
+    ).map((r) => toRow(r) as FollowupRow & { jid: string })
+  }
+
+  /** Grava o horário escolhido para o envio automático (null = escolher de novo na próxima volta). */
+  setAutoAt(id: string, at: number | null): boolean {
+    const res = this.db.prepare('UPDATE copiloto_followups SET auto_at = ? WHERE id = ?').run(at, id)
+    return Number(res.changes) > 0
+  }
+
+  /** Mais uma tentativa automática posta na fila. */
+  addAutoAttempt(id: string): void {
+    this.db.prepare('UPDATE copiloto_followups SET auto_attempts = auto_attempts + 1 WHERE id = ?').run(id)
+  }
+
+  /** O envio automático deste item acabou: daqui em diante é o cartão da v1.1 (o mentor confirma). `true` se mudou. */
+  setAutoOff(id: string): boolean {
+    const res = this.db.prepare('UPDATE copiloto_followups SET auto_off = 1, auto_at = NULL, updated_at = ? WHERE id = ? AND auto_off = 0').run(this.clock.now(), id)
+    return Number(res.changes) > 0
+  }
+
+  /** A opção foi desligada: os horários escolhidos deixam de valer (ligada de novo, escolhe outros). */
+  clearAutoSchedule(): void {
+    this.db.exec("UPDATE copiloto_followups SET auto_at = NULL WHERE local_status = 'waiting' AND auto_at IS NOT NULL")
+  }
+
+  /** O follow-up que um envio leva (pelo `send_id` gravado), ou null. */
+  bySendId(sendId: number): FollowupRow | null {
+    const r = this.db.prepare('SELECT * FROM copiloto_followups WHERE send_id = ? ORDER BY updated_at DESC LIMIT 1').get(sendId) as Row | undefined
+    return r ? toRow(r) : null
   }
 
   /** Os envios (mensagem avulsa) deste follow-up: o id dele é o id do rascunho, dentro da chave de idempotência. */

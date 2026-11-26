@@ -16,6 +16,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys'
 import type { Clock } from '../clock'
 import { NAME_RANK, type Repo } from '../db/repo'
+import type { SendRow } from '../db/sendRepo'
 import { ONE_GB, hasFreeSpace } from '../disk'
 import { audioFileId } from '../media'
 import type { RateLimiter } from '../queue/limiter'
@@ -92,6 +93,11 @@ export interface WhatsAppClientDeps {
   diag?: (kind: string, detail: string) => void
   /** opções do envio direto, lidas na hora de cada envio (padrão: tudo ligado) */
   sendOptions?: () => SendOptions
+  /**
+   * v0.8.0: conferência extra de um envio, antes do "digitando…" e logo antes de enviar (ex.: o envio automático de um
+   * follow-up só sai se a opção e a integração continuam ligadas). Devolve o motivo para não enviar, ou null.
+   */
+  sendGuard?: (s: SendRow) => string | null
 }
 
 /** outro envio ainda em andamento: este espera 15 s, sem gastar tentativa (o envio expira se passar de 10 min na fila) */
@@ -1135,6 +1141,17 @@ export class WhatsAppClient extends EventEmitter {
     // confirmado numa conexão que não existe mais: nunca sai depois de reconectar
     if (payload?.gen !== this.gen) return expire(['queued'], CONN_LOST_REASON)
     if (!opts.enabled) return expire(['queued'], 'envio direto desligado')
+    const guarded = (from: Array<'queued' | 'typing'>) => {
+      let why: string | null
+      try {
+        why = this.deps.sendGuard?.(s) ?? null
+      } catch {
+        why = 'conferência do envio falhou'
+      }
+      if (why) expire(from, why)
+      return why !== null
+    }
+    if (guarded(['queued'])) return
     if (clock.now() - s.queuedAt > SEND_LIMITS.queuedMaxMs) return expire(['queued'], 'mais de 10 min na fila')
     // fora do horário de envio (sem "Forçar envio"): expira, nunca espera para sair depois
     const outsideHours = (from: Array<'queued' | 'typing'>) => {
@@ -1175,6 +1192,7 @@ export class WhatsAppClient extends EventEmitter {
       if (signal?.aborted) return fail(['typing'], 'tempo esgotado antes de enviar')
       if (queue.isPaused()) return expire(['typing'], PAUSED_REASON)
       if (outsideHours(['typing'])) return
+      if (guarded(['typing'])) return
       // nova tentativa: uma anterior pode ter chegado (o eco veio depois); nesse caso não envia de novo
       if (s.attempt > 1) {
         const echo = findSentEcho(s.msgIds, (mid) => repo.getMessage(mid))

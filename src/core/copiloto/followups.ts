@@ -20,6 +20,11 @@ export interface PendingFollowup {
   author: string | null
   /** epoch ms */
   createdAt: number
+  /**
+   * v1.2: o Copiloto marcou para envio automático (só quando o autor é administrador). Só vale com a opção "Enviar
+   * follow-ups do Copiloto automaticamente" ligada; ausente ou outro valor que não `true` = `false`.
+   */
+  autoSend: boolean
 }
 
 /** Hashes de telefone por follow-up: as duas formas de cada número (mais que isso é engano do servidor). */
@@ -39,7 +44,7 @@ function parseTarget(v: unknown): FollowupTarget | null {
 
 /** Um item da fila; null se fora do contrato (fica de fora, sem quebrar os outros). */
 export function parseFollowup(v: unknown): PendingFollowup | null {
-  const f = v as { id?: unknown; target?: unknown; text?: unknown; author?: unknown; created_at?: unknown } | null
+  const f = v as { id?: unknown; target?: unknown; text?: unknown; author?: unknown; created_at?: unknown; auto_send?: unknown } | null
   if (!f || typeof f !== 'object') return null
   // o id vira o id do rascunho da mensagem avulsa: precisa caber no formato dele (o uuid do Copiloto cabe)
   if (typeof f.id !== 'string' || !DRAFT_ID_RE.test(f.id)) return null
@@ -53,7 +58,7 @@ export function parseFollowup(v: unknown): PendingFollowup | null {
   if (typeof f.created_at !== 'string') return null
   const createdAt = Date.parse(f.created_at)
   if (!Number.isFinite(createdAt)) return null
-  return { id: f.id, target, text, author, createdAt }
+  return { id: f.id, target, text, author, createdAt, autoSend: f.auto_send === true }
 }
 
 /**
