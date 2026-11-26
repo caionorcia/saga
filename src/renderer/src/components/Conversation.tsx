@@ -14,11 +14,15 @@ interface Props {
   onDismissAlert?: (kind: AlertKind) => void
   /** abrir outra conversa (ex.: o grupo onde o mentor respondeu) */
   onOpenChat?: (jid: string) => void
+  /** a conversa não precisa de resposta e a IA não foi chamada (sem resumo) */
+  summarySkipped?: boolean
+  /** v0.3.1 (busca geral): rolar até esta mensagem e destacá-la; `seq` novo = novo pedido */
+  focusMessage?: { id: string; seq: number } | null
 }
 
 const HIGHLIGHT_MS = 2_500
 
-export function Conversation({ contact, analysis, alerts = [], onDismissAlert, onOpenChat }: Props) {
+export function Conversation({ contact, analysis, alerts = [], onDismissAlert, onOpenChat, summarySkipped, focusMessage }: Props) {
   const [messages, setMessages] = useState<MessageView[] | null>(null)
   const [highlight, setHighlight] = useState<string | null>(null)
   /** avaliações feitas agora (antes de a lista de alertas voltar do processo principal) */
@@ -77,6 +81,15 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert, o
     el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
     setHighlight(id)
   }
+
+  // resultado da busca: quando as mensagens chegarem, rola até a mensagem e destaca (uma vez por pedido)
+  const focused = useRef<number | null>(null)
+  useEffect(() => {
+    if (!focusMessage || !messages || focused.current === focusMessage.seq) return
+    if (!messages.some((m) => m.id === focusMessage.id)) return
+    focused.current = focusMessage.seq
+    showMessage(focusMessage.id)
+  }, [focusMessage?.seq, messages])
 
   const thank = (text = THANKS) => setToast((t) => ({ text, seq: (t?.seq ?? 0) + 1 }))
   const failed = () => thank('Não foi possível salvar a avaliação. Tente de novo.')
@@ -225,7 +238,15 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert, o
 
       <div className="summary-card" aria-live="polite">
         <h3>{contact.isGroup ? 'O que pedem a você' : 'O que a pessoa quer'}</h3>
-        <p>{analysis && analysis.jid === jid ? analysis.summary : <span className="muted">Resumo a caminho…</span>}</p>
+        <p>
+          {analysis && analysis.jid === jid ? (
+            analysis.summary
+          ) : summarySkipped ? (
+            <span className="muted">Esta conversa não precisa de resposta agora: o resumo não foi gerado.</span>
+          ) : (
+            <span className="muted">Resumo a caminho…</span>
+          )}
+        </p>
         {analysis && analysis.jid === jid && analysis.pendingAudios > 0 && (
           <p className="small pending-note">
             {analysis.pendingAudios === 1 ? '1 áudio ainda sendo transcrito' : `${analysis.pendingAudios} áudios ainda sendo transcritos`}

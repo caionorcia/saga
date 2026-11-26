@@ -137,3 +137,30 @@ describe('IPC "Verificar agora" (checkForUpdates)', () => {
     expect(await call('checkForUpdates', APP)).toMatchObject({ enabled: false })
   })
 })
+
+describe('IPC da busca geral', () => {
+  let off: () => void
+  afterEach(() => off())
+
+  it('só a interface do app; valida e repassa ao serviço', async () => {
+    const refused: string[] = []
+    const service = {
+      searchMessages: vi.fn(async () => ({ mode: 'and', terms: ['preco'], total: 0, groups: [], tookMs: 1 })),
+      summarizeSearch: vi.fn(async () => ({ ok: true, answer: 'x', refs: [], used: 1 })),
+      onState: vi.fn(() => () => {}),
+      onContactsChanged: vi.fn(() => () => {}),
+      on: vi.fn(),
+      off: vi.fn()
+    }
+    off = registerIpc(service as never, { getWindow: () => null, isTrustedSender: (u) => u === APP, onRefused: (m) => refused.push(m) })
+    await expect(call('searchMessages', 'https://evil.example/', 'preço')).rejects.toThrow(/origem não confiável/)
+    await expect(call('summarizeSearch', null, 'preço')).rejects.toThrow(/origem não confiável/)
+    expect(refused).toEqual(['searchMessages', 'summarizeSearch'])
+    await expect(call('searchMessages', APP, 'preço', { kind: 'nada' })).rejects.toThrow(/argumentos inválidos/)
+    expect(service.searchMessages).not.toHaveBeenCalled()
+    await call('searchMessages', APP, 'preço', { period: '7d' })
+    expect(service.searchMessages).toHaveBeenCalledWith('preço', { period: '7d' })
+    await call('summarizeSearch', APP, 'preço')
+    expect(service.summarizeSearch).toHaveBeenCalledWith('preço', {})
+  })
+})

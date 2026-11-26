@@ -5,6 +5,7 @@ import { formatListTime, initials } from '../format'
 import { AlertChips, WaitBadge } from './Alerts'
 import { NoReplyDialog, NoReplyIcon, THANKS, Toast } from './AlertFeedback'
 import { GroupIcon } from './GroupIcon'
+import { SearchBox, SearchResults } from './GlobalSearch'
 
 /** Recorte da lista: todas, só as que esperam resposta ("Para responder") ou só as com alerta. */
 export type ContactView = 'all' | 'awaiting' | 'alerts'
@@ -14,6 +15,8 @@ interface Props {
   onSelect: (jid: string | null) => void
   /** pedido de fora (contador da barra de status): muda o recorte e volta o tipo para "Todos"; `seq` novo = novo pedido */
   request?: { view: ContactView; seq: number }
+  /** busca geral: abrir a conversa nesta mensagem (rolar e destacar) */
+  onOpenHit?: (jid: string, msgId: string) => void
 }
 
 type Editing = { jid: string; mode: 'rename' | 'notes' } | null
@@ -129,7 +132,7 @@ const VIEW_EMPTY: Record<Exclude<ContactView, 'all'>, string> = {
   alerts: 'Nenhum alerta agora. Os alertas aparecem aqui quando alguém precisar de atenção.'
 }
 
-export function ContactList({ selected, onSelect, request }: Props) {
+export function ContactList({ selected, onSelect, request, onOpenHit }: Props) {
   const [contacts, setContacts] = useState<Contact[] | null>(null)
   const [kind, setKindState] = useState<ContactKind>(readKind)
   const [view, setViewState] = useState<ContactView>(readView)
@@ -143,6 +146,28 @@ export function ContactList({ selected, onSelect, request }: Props) {
   /** tiradas da lista agora (antes de a lista voltar do processo principal) */
   const [removed, setRemoved] = useState<Set<string>>(new Set())
   const [toast, setToast] = useState<{ text: string; seq: number } | null>(null)
+  /** busca geral: o texto digitado e o procurado (null = mostrando a lista normal) */
+  const [searchText, setSearchText] = useState('')
+  const [searched, setSearched] = useState<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const clearSearch = () => {
+    setSearchText('')
+    setSearched(null)
+  }
+
+  // Ctrl+F / Ctrl+K: vai para a busca geral (só com a tela de conversas à vista)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || (e.key.toLowerCase() !== 'f' && e.key.toLowerCase() !== 'k')) return
+      const el = searchRef.current
+      if (!el || el.closest('[hidden]')) return
+      e.preventDefault()
+      el.focus()
+      el.select()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -252,6 +277,16 @@ export function ContactList({ selected, onSelect, request }: Props) {
             Foco
           </button>
         </div>
+        <SearchBox
+          ref={searchRef}
+          value={searchText}
+          active={searched !== null}
+          onChange={setSearchText}
+          onSubmit={(q) => setSearched(q.trim())}
+          onClear={clearSearch}
+        />
+        {searched === null && (
+        <>
         <div className="view-filter" role="group" aria-label="Fila do dia">
           <button
             type="button"
@@ -296,9 +331,18 @@ export function ContactList({ selected, onSelect, request }: Props) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        </>
+        )}
       </div>
 
-      <ul className="contacts-list">
+      {searched !== null && (
+        <SearchResults
+          query={searched}
+          onOpenChat={(jid) => onSelect(jid)}
+          onOpenHit={(jid, msgId) => (onOpenHit ? onOpenHit(jid, msgId) : onSelect(jid))}
+        />
+      )}
+      <ul className="contacts-list" hidden={searched !== null}>
         {contacts === null && <li className="empty">Carregando…</li>}
         {contacts !== null && visible.length === 0 && (
           <li className="empty">{query ? 'Nada encontrado.' : view === 'all' ? EMPTY[kind] : VIEW_EMPTY[view]}</li>

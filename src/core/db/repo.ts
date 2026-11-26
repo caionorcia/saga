@@ -395,6 +395,30 @@ export function formatPhone(jid: string): string {
   return digits ? `+${digits}` : jid
 }
 
+/** Filtros da busca geral, já resolvidos (período virou horário mínimo). */
+export interface MessageSearchFilter {
+  kind: ContactKind
+  /** epoch ms (horário do WhatsApp); null = tudo */
+  sinceTs: number | null
+  audioOnly: boolean
+  /** uma conversa só; null = todas */
+  jid: string | null
+}
+
+export interface MessageSearchRow {
+  message: MessageRow
+  contactName: string
+  isGroup: boolean
+  /** bm25 (menor = mais relevante) */
+  rank: number
+}
+
+/** ?2 tipo, ?3 desde, ?4 só áudios, ?5 conversa */
+const searchWhere = `AND (?2 = 'all' OR (?2 = 'group') = (c.is_group = 1))
+              AND (?3 IS NULL OR m.ts >= ?3)
+              AND (?4 = 0 OR m.kind = 'audio')
+              AND (?5 IS NULL OR m.jid = ?5)`
+
 export class Repo {
   /** base de conhecimento (v0.3.0) */
   readonly kb: KbRepo
@@ -939,6 +963,65 @@ export class Repo {
 
   setTranscript(id: string, text: string | null, status: TranscriptStatus): void {
     this.db.prepare('UPDATE messages SET transcript = ?, transcript_status = ? WHERE id = ?').run(text, status, id)
+  }
+
+  // --- busca geral (v0.3.1) ---
+
+  /**
+   * Mensagens que combinam com a expressão do FTS5 (`messages_fts`), mais relevantes primeiro (bm25; o texto pesa
+   * mais que o nome de quem mandou). Expressão inválida = nenhuma.
+   */
+  searchMessages(match: string, f: MessageSearchFilter, limit: number): MessageSearchRow[] {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT m.id, m.jid, m.ts, m.from_me, m.kind, m.text, m.transcript, m.transcript_status, m.sender_jid, m.sender_name,
+                  ${SENDER_COLS}, c.custom_name AS c_custom, c.push_name AS c_push, c.is_group AS c_group,
+                  bm25(messages_fts, 1.0, 0.4) AS rank
+             FROM messages_fts
+             JOIN messages m ON m.rowid = messages_fts.rowid
+             JOIN contacts c ON c.jid = m.jid
+             LEFT JOIN contacts sc ON sc.jid = m.sender_jid
+            WHERE messages_fts MATCH ?1 AND c.hidden = 0
+              ${searchWhere}
+            ORDER BY rank, m.ts DESC LIMIT ?6`
+        )
+        .all(match, f.kind, f.sinceTs, f.audioOnly ? 1 : 0, f.jid, limit) as Row[]
+      return rows.map((r) => ({
+        message: toMessage(r),
+        contactName: r.c_custom ?? r.c_push ?? (r.c_group === 1 ? UNNAMED_GROUP : formatPhone(r.jid)),
+        isGroup: r.c_group === 1,
+        rank: r.rank
+      }))
+    } catch {
+      return []
+    }
+  }
+
+  /** Quantas mensagens combinam, por conversa (mesmos filtros de `searchMessages`). */
+  searchCounts(match: string, f: MessageSearchFilter): Map<string, number> {
+    const out = new Map<string, number>()
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT m.jid, COUNT(*) AS n FROM messages_fts
+             JOIN messages m ON m.rowid = messages_fts.rowid
+             JOIN contacts c ON c.jid = m.jid
+            WHERE messages_fts MATCH ?1 AND c.hidden = 0
+              ${searchWhere}
+            GROUP BY m.jid`
+        )
+        .all(match, f.kind, f.sinceTs, f.audioOnly ? 1 : 0, f.jid) as Row[]
+      for (const r of rows) out.set(r.jid, r.n)
+    } catch {
+      // expressão inválida: nada
+    }
+    return out
+  }
+
+  /** Quantas mensagens estão no índice da busca (diagnóstico e testes). */
+  searchIndexCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get() as Row).n as number
   }
 
   // --- análises ---

@@ -6,6 +6,8 @@ type View =
   | { kind: 'loading' }
   | { kind: 'ready'; analysis: Analysis }
   | { kind: 'error'; code: AiErrorCode | 'exception'; message: string }
+  /** v0.3.1: a conversa não precisa de resposta; nada foi gerado (só com "Gerar sugestões mesmo assim") */
+  | { kind: 'not_needed' }
 
 const REFRESH_DEBOUNCE_MS = 2_000
 const COPIED_MS = 2_000
@@ -60,9 +62,11 @@ interface Props {
   drafts?: DraftStore
   /** botão "Abrir Configurações" nos erros de chave */
   onOpenSettings?: () => void
+  /** avisa quando a conversa não precisa de resposta e nada foi gerado (o resumo mostra isso) */
+  onSkipped?: (skipped: boolean) => void
 }
 
-export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSettings }: Props) {
+export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSettings, onSkipped }: Props) {
   const [view, setView] = useState<View>({ kind: 'loading' })
   const [busy, setBusy] = useState(false)
   const [newMessage, setNewMessage] = useState(false)
@@ -81,6 +85,8 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
   const current = useRef<Analysis | null>(null)
   const onAnalysisRef = useRef(onAnalysis)
   onAnalysisRef.current = onAnalysis
+  const onSkippedRef = useRef(onSkipped)
+  onSkippedRef.current = onSkipped
   const seq = useRef(0)
 
   const apply = useCallback(
@@ -117,6 +123,13 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
             setShowOthers(false)
             setView({ kind: 'ready', analysis: r.analysis })
             onAnalysisRef.current?.(r.analysis)
+            onSkippedRef.current?.(false)
+          } else if (r.code === 'not_needed') {
+            // nada gerado: na atualização silenciosa, os cartões gerados "mesmo assim" continuam
+            if (!silent || viewRef.current.kind !== 'ready') {
+              setView({ kind: 'not_needed' })
+              onSkippedRef.current?.(true)
+            }
           } else if (!silent || viewRef.current.kind === 'loading') {
             setView({ kind: 'error', code: r.code, message: r.message })
           }
@@ -135,7 +148,10 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
     [jid]
   )
 
-  const load = useCallback(() => apply(() => window.saga.getAnalysis(jid), false), [apply, jid])
+  /** abrir a conversa: só gera se ela precisa de resposta (senão mostra o que já havia, ou o convite para gerar) */
+  const load = useCallback(() => apply(() => window.saga.getAnalysis(jid, { onlyIfNeeded: true }), false), [apply, jid])
+  /** "Gerar sugestões mesmo assim" e "Tentar de novo": pedido do mentor, gera de qualquer jeito */
+  const loadAnyway = useCallback(() => apply(() => window.saga.getAnalysis(jid), false), [apply, jid])
 
   /** chegou algo com a janela escondida (bandeja): atualizar uma vez quando ela voltar a aparecer */
   const staleWhileHidden = useRef(false)
@@ -159,7 +175,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
         // sem a lista, segue: o serviço decide pelo cache
       }
     }
-    apply(() => window.saga.getAnalysis(jid), true)
+    apply(() => window.saga.getAnalysis(jid, { onlyIfNeeded: true }), true)
   }, [apply, jid])
 
   useEffect(() => {
@@ -192,6 +208,18 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
     )
   }
 
+  if (view.kind === 'not_needed') {
+    return (
+      <div className="sug-state sug-not-needed" role="status">
+        <p>Esta conversa não precisa de resposta agora.</p>
+        <p className="muted small">O Saga só escreve sugestões quando você pede, para não gastar à toa.</p>
+        <button type="button" className="btn btn-primary" disabled={busy} onClick={loadAnyway}>
+          Gerar sugestões mesmo assim
+        </button>
+      </div>
+    )
+  }
+
   if (view.kind === 'error') {
     return (
       <div className="sug-state sug-error" role="alert">
@@ -202,7 +230,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
           </button>
         )}
         {!NO_RETRY.has(view.code) && (
-          <button type="button" className="btn btn-primary" onClick={load}>
+          <button type="button" className="btn btn-primary" onClick={loadAnyway}>
             Tentar de novo
           </button>
         )}

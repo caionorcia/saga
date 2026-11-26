@@ -6,6 +6,7 @@ import { ALERT_KINDS, CONTACT_KINDS, type InvokeMethod } from '../shared/api'
 import { REASON_CODES, REASON_TEXT_MAX, REPLY_REASON_CODES } from '../shared/feedback'
 import { AI_ALERT_KINDS } from '../shared/triage'
 import { KB_LIMITS, KB_ROLES } from '../shared/kb'
+import { SEARCH_KINDS, SEARCH_LIMITS, SEARCH_PERIODS } from '../shared/search'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -120,6 +121,22 @@ function isKbPatch(p: unknown): boolean {
   return (p.role === undefined || (KB_ROLES as readonly unknown[]).includes(p.role)) && (p.enabled === undefined || isBool(p.enabled))
 }
 
+const SEARCH_FIELDS: Record<string, (v: unknown) => boolean> = {
+  kind: (v) => (SEARCH_KINDS as readonly unknown[]).includes(v),
+  period: (v) => (SEARCH_PERIODS as readonly unknown[]).includes(v),
+  audioOnly: isBool,
+  jid: (v) => v === null || (nonEmpty(v) && v.length <= 200)
+}
+
+/** Busca geral: texto (até 200 caracteres) e filtros conhecidos (opcionais). */
+function isSearch(a: unknown[]): boolean {
+  if (a.length < 1 || a.length > 2) return false
+  if (!isStr(a[0]) || a[0].length > SEARCH_LIMITS.queryChars) return false
+  const f = a[1]
+  if (f === undefined) return true
+  return isObj(f) && Object.entries(f).every(([k, v]) => v === undefined || (SEARCH_FIELDS[k]?.(v) ?? false))
+}
+
 const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   getState: () => true,
   listContacts: ([h, k]) => isBool(h) && (k === undefined || (CONTACT_KINDS as readonly unknown[]).includes(k)),
@@ -137,7 +154,11 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   confirmNoReply: (a) => a.length === 1 && nonEmpty(a[0]),
   alertQuality: (a) => a.length === 0,
   exportAlertFeedback: (a) => a.length === 1 && isObj(a[0]) && Object.keys(a[0]).every((k) => k === 'anonymize') && isBool(a[0].anonymize),
-  getAnalysis: ([j]) => nonEmpty(j),
+  getAnalysis: (a) =>
+    a.length >= 1 &&
+    a.length <= 2 &&
+    nonEmpty(a[0]) &&
+    (a[1] === undefined || (isObj(a[1]) && Object.keys(a[1]).every((k) => k === 'onlyIfNeeded') && (a[1].onlyIfNeeded === undefined || isBool(a[1].onlyIfNeeded)))),
   regenerate: ([j]) => nonEmpty(j),
   saveReply: ([i]) =>
     isObj(i) &&
@@ -171,7 +192,9 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   kbUpdateFile: (a) => a.length === 2 && isId(a[0]) && isKbPatch(a[1]),
   kbSetPackageEnabled: (a) => a.length === 2 && isId(a[0]) && isBool(a[1]),
   kbRemovePackage: (a) => a.length === 1 && isId(a[0]),
-  kbGetChunk: (a) => a.length === 1 && isId(a[0])
+  kbGetChunk: (a) => a.length === 1 && isId(a[0]),
+  searchMessages: isSearch,
+  summarizeSearch: isSearch
 }
 
 /** Lança `InvalidIpcArgsError` se os argumentos vindos da interface não tiverem o formato esperado. */

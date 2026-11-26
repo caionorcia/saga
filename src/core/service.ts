@@ -35,6 +35,9 @@ import { reconcileSaved, reconcileSent, saveApproved } from './memory/memory'
 import { KbImportError, importArchive, importFolder, importPastedText, importSingleFile, type KbPackageDraft } from './kb/importer'
 import { KB_LIMITS, type KbChunkView, type KbFilePatch, type KbImportResult, type KbPackageView } from '../shared/kb'
 import { audioUrlFor } from './media'
+import { runSearch } from './search/search'
+import { summarizeHits } from './ai/searchSummary'
+import type { SearchFilters, SearchResult, SearchSummaryResult } from '../shared/search'
 import { LIMITS, RateLimiter, type LimiterName } from './queue/limiter'
 import { JobQueue, type JobType } from './queue/queue'
 import { EncryptionUnavailableError, SettingsStore, testKey, type KeyKind, type Provider, type SettingsPatch } from './settings'
@@ -155,7 +158,8 @@ const AI_MESSAGES: Record<AiErrorCode, string> = {
   no_messages: 'Ainda não há mensagens deste contato.',
   model_unavailable:
     'Nenhum modelo de IA da Groq está disponível para a sua chave agora (os modelos que o app conhece foram aposentados). Tente de novo mais tarde ou escolha o Claude nas configurações.',
-  unknown: 'Não foi possível gerar as sugestões agora. Tente de novo.'
+  unknown: 'Não foi possível gerar as sugestões agora. Tente de novo.',
+  not_needed: 'Esta conversa não precisa de resposta agora.'
 }
 
 /**
@@ -739,8 +743,23 @@ export class SagaService extends EventEmitter {
 
   // --- IA ---
 
-  getAnalysis(jid: string): Promise<AnalysisResult> {
+  /**
+   * `onlyIfNeeded` (abertura automática da conversa e atualização silenciosa): se a conversa não precisa da resposta do
+   * mentor agora (ele falou por último, "Não precisa responder", respondido no grupo…), não chama a IA: devolve a
+   * análise guardada se ela ainda vale, senão `not_needed`. Sem a opção (botão "Gerar sugestões mesmo assim"), gera.
+   */
+  getAnalysis(jid: string, opts: { onlyIfNeeded?: boolean } = {}): Promise<AnalysisResult> {
+    if (opts.onlyIfNeeded && !this.inflight.has(jid) && !this.needsReplyNow(jid)) {
+      if (this.cacheFresh(jid)) return Promise.resolve({ ok: true, analysis: this.repo.getAnalysis(jid)! })
+      return Promise.resolve({ ok: false, code: 'not_needed', message: AI_MESSAGES.not_needed, provider: this.settings.get().provider })
+    }
     return this.analyze(jid, false)
+  }
+
+  /** A conversa pede a resposta do mentor agora (está em "Para responder")? Sem mensagens: não. */
+  private needsReplyNow(jid: string): boolean {
+    const c = this.repo.listContacts({ includeHidden: true }).find((x) => x.jid === jid)
+    return !!c && c.needsReply && !c.hidden
   }
 
   regenerate(jid: string): Promise<AnalysisResult> {
@@ -776,6 +795,52 @@ export class SagaService extends EventEmitter {
   /** A análise guardada ainda vale (mesma última mensagem e mesmas transcrições)? */
   private cacheFresh(jid: string): boolean {
     return isAnalysisFresh(this.repo, jid)
+  }
+
+  // --- busca geral (v0.3.1) ---
+
+  /** Procura em todas as conversas e transcrições (local). O registro de diagnóstico só leva contagens e o tempo. */
+  async searchMessages(query: string, filters: SearchFilters = {}): Promise<SearchResult> {
+    const { result } = runSearch(this.repo, query, filters, this.clock.now())
+    this.diag('search', `palavras=${result.terms.length} modo=${result.mode} conversas=${result.groups.length} mensagens=${result.total} ms=${result.tookMs}`)
+    return result
+  }
+
+  /**
+   * "Resumir com IA" (só quando o mentor clica): no máximo os 30 trechos mais relevantes vão para a IA das sugestões,
+   * dentro do teto diário de gasto.
+   */
+  async summarizeSearch(query: string, filters: SearchFilters = {}): Promise<SearchSummaryResult> {
+    const s = this.settings.get()
+    const provider = s.provider
+    const fail = (code: AiErrorCode): SearchSummaryResult => ({ ok: false, code, message: AI_MESSAGES[code] })
+    const { result, ranked } = runSearch(this.repo, query, filters, this.clock.now())
+    if (ranked.length === 0) {
+      return { ok: false, code: 'no_results', message: result.mode === 'empty' ? 'Escreva o assunto que você procura.' : 'Nenhuma mensagem encontrada para resumir.' }
+    }
+    const key = this.settings.getKey(provider)
+    if (!key) return fail('missing_key')
+    try {
+      const out = await summarizeHits(
+        {
+          llm: this.llmFactory(provider, key, { repo: this.repo, clock: this.clock, diag: (k, d) => this.diag(k, d) }),
+          limiter: this.limiters.llm,
+          cost: this.cost,
+          capUsd: s.dailyCapUsd,
+          clock: this.clock,
+          diag: (k, d) => this.diag(k, d)
+        },
+        query,
+        ranked
+      )
+      return { ok: true, ...out }
+    } catch (e) {
+      const code = aiErrorCode(e)
+      this.repo.logEvent('ai_error', `${provider}: resumo da busca: ${code}`)
+      return fail(code)
+    } finally {
+      this.markState()
+    }
   }
 
   private async doAnalyze(jid: string, force: boolean): Promise<AnalysisResult> {

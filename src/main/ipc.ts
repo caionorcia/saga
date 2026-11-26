@@ -57,7 +57,7 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
       await writeFile(r.filePath, csv, 'utf8')
       return { status: 'saved', rows }
     },
-    getAnalysis: (jid) => service.getAnalysis(String(jid)),
+    getAnalysis: (jid, o) => service.getAnalysis(String(jid), { onlyIfNeeded: o?.onlyIfNeeded === true }),
     regenerate: (jid) => service.regenerate(String(jid)),
     saveReply: (input) => service.saveReply(input),
     copyToClipboard: async (text) => clipboard.writeText(String(text)),
@@ -122,7 +122,9 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     kbUpdateFile: (id, patch) => service.kbUpdateFile(Number(id), patch),
     kbSetPackageEnabled: (id, enabled) => service.kbSetPackageEnabled(Number(id), enabled === true),
     kbRemovePackage: (id) => service.kbRemovePackage(Number(id)),
-    kbGetChunk: (id) => service.kbGetChunk(Number(id))
+    kbGetChunk: (id) => service.kbGetChunk(Number(id)),
+    searchMessages: (q, f) => service.searchMessages(String(q), f ?? {}),
+    summarizeSearch: (q, f) => service.summarizeSearch(String(q), f ?? {})
   }
 
   for (const m of INVOKE_METHODS) {

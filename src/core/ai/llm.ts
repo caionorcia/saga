@@ -20,7 +20,7 @@ export interface LlmResult {
 export interface LlmProvider {
   name: 'groq' | 'claude'
   /** `temperature`: só a Groq usa (padrão 0,7); a classificação de alertas pede uma baixa */
-  complete(p: { system: string; user: string; temperature?: number }): Promise<LlmResult>
+  complete(p: { system: string; user: string; temperature?: number; schema?: Record<string, unknown> }): Promise<LlmResult>
 }
 
 /** 429: o provedor pediu para esperar. */
@@ -133,7 +133,7 @@ export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateL
   const client = opts.client ?? new Anthropic({ apiKey, maxRetries: 0, fetch: opts.fetchImpl })
   return {
     name: 'claude',
-    async complete({ system, user }) {
+    async complete({ system, user, schema }) {
       const model = opts.model ?? opts.repo?.getSetting(SETTING_CLAUDE_MODEL) ?? DEFAULT_CLAUDE_MODEL
       let msg
       try {
@@ -142,7 +142,7 @@ export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateL
           max_tokens: 4000,
           betas: ['server-side-fallback-2026-07-01'],
           fallbacks: 'default',
-          output_config: { effort: 'medium', format: { type: 'json_schema', schema: CLAUDE_SCHEMA } },
+          output_config: { effort: 'medium', format: { type: 'json_schema', schema: schema ?? CLAUDE_SCHEMA } },
           system,
           messages: [{ role: 'user', content: user }]
         })

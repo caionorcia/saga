@@ -115,6 +115,10 @@ function Main({
   const [contact, setContact] = useState<Contact | null>(null)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [alerts, setAlerts] = useState<Alert[]>([])
+  /** a conversa não precisa de resposta e a IA não foi chamada (sem resumo) */
+  const [skipped, setSkipped] = useState(false)
+  /** busca geral: a mensagem para rolar e destacar na conversa aberta */
+  const [focusMsg, setFocusMsg] = useState<{ jid: string; id: string; seq: number } | null>(null)
 
   // mantém o cabeçalho da conversa em dia (renomear, notas)
   useEffect(() => {
@@ -142,12 +146,23 @@ function Main({
     }
   }, [selected])
 
-  useEffect(() => setAnalysis(null), [selected])
+  useEffect(() => {
+    setAnalysis(null)
+    setSkipped(false)
+  }, [selected])
   const cols = useColumnWidths()
 
   return (
     <div className="columns" hidden={hidden} style={cols.style}>
-      <ContactList selected={selected} onSelect={onSelect} request={viewRequest} />
+      <ContactList
+        selected={selected}
+        onSelect={onSelect}
+        request={viewRequest}
+        onOpenHit={(jid, id) => {
+          setFocusMsg((f) => ({ jid, id, seq: (f?.seq ?? 0) + 1 }))
+          onSelect(jid)
+        }}
+      />
       <ColumnDivider {...cols.divider('left')} />
       {contact ? (
         <Conversation
@@ -156,6 +171,8 @@ function Main({
           analysis={analysis}
           alerts={alerts.filter((a) => a.jid === contact.jid)}
           onOpenChat={onSelect}
+          summarySkipped={skipped}
+          focusMessage={focusMsg && focusMsg.jid === contact.jid ? focusMsg : null}
           onDismissAlert={(kind) => {
             setAlerts((l) => l.filter((a) => a.kind !== kind))
             void window.saga.dismissAlert(contact.jid, kind).catch(() => {})
@@ -174,7 +191,7 @@ function Main({
             ? 'Mensagens para você postar no grupo. Edite como quiser, depois copie e cole no grupo do WhatsApp. O Saga não envia nada.'
             : 'Edite como quiser, depois copie e cole no WhatsApp. O Saga não envia nada.'}
         </p>
-        {contact ? <Suggestions key={contact.jid} jid={contact.jid} drafts={drafts.current} onAnalysis={setAnalysis} onOpenSettings={onOpenSettings} /> : <p className="empty">As sugestões aparecem aqui.</p>}
+        {contact ? <Suggestions key={contact.jid} jid={contact.jid} drafts={drafts.current} onAnalysis={setAnalysis} onSkipped={setSkipped} onOpenSettings={onOpenSettings} /> : <p className="empty">As sugestões aparecem aqui.</p>}
       </aside>
     </div>
   )

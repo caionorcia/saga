@@ -19,12 +19,13 @@ describe('migração v11 (v0.3.0): sem conversas escondidas', () => {
     repo.setHidden('c@s.whatsapp.net', true)
     // volta ao esquema v10: tira as colunas da v12 para a migração poder rodar de novo
     db.exec('ALTER TABLE analyses DROP COLUMN chosen_index; ALTER TABLE analyses DROP COLUMN chosen_reply_id; ALTER TABLE approved_replies DROP COLUMN rejected_json')
+    db.exec('DROP TRIGGER messages_fts_ai; DROP TRIGGER messages_fts_au; DROP TRIGGER messages_fts_ad; DROP TABLE messages_fts; DROP INDEX idx_messages_ts')
     db.exec('PRAGMA user_version = 10')
     db.close()
 
     db = openDb(file)
     repo = new Repo(db)
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(12)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(13)
     expect(repo.listContacts({ includeHidden: true }).filter((c) => c.hidden)).toEqual([])
     expect(JSON.parse(repo.getSetting('migration.unhidden_jids')!).sort()).toEqual(['a@s.whatsapp.net', 'c@s.whatsapp.net'])
     db.close()

@@ -324,4 +324,23 @@ describe('base de conhecimento', () => {
     bad('kbGetChunk', 1.5)
     bad('kbGetChunk')
   })
+
+  it('busca geral: texto até 200 caracteres e filtros conhecidos', () => {
+    for (const m of ['searchMessages', 'summarizeSearch']) {
+      ok(m, 'quem falou sobre precificação?')
+      ok(m, 'preço', { kind: 'group', period: '7d', audioOnly: true, jid: 'j@s.whatsapp.net' })
+      ok(m, 'preço', { kind: 'all', period: 'all', audioOnly: false, jid: null })
+      ok(m, '')
+      bad(m)
+      bad(m, 42)
+      bad(m, 'x'.repeat(201))
+      bad(m, 'preço', { kind: 'todos' })
+      bad(m, 'preço', { period: '1y' })
+      bad(m, 'preço', { audioOnly: 'sim' })
+      bad(m, 'preço', { jid: '' })
+      bad(m, 'preço', { sql: 'DROP TABLE' })
+      bad(m, 'preço', [])
+      bad(m, 'preço', {}, 'extra')
+    }
+  })
 })

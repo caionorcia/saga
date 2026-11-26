@@ -8,11 +8,13 @@ import type { QueueStats } from '../core/queue/queue'
 import type { ConnState } from '../core/wa/client'
 import type { KeyKind, Provider, Settings, SettingsPatch, ThemePref, TranscriberKind } from '../core/settings'
 import type { KbChunkView, KbFilePatch, KbImportResult, KbPackageView, KbRole, KbSource } from './kb'
+import type { SearchFilters, SearchResult, SearchSummaryResult } from './search'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind, ThemePref }
 export type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason }
 export type { KbChunkView, KbFilePatch, KbImportResult, KbPackageView, KbRole, KbSource }
+export type { SearchFilters, SearchResult, SearchSummaryResult }
 export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
@@ -123,6 +125,8 @@ export type AiErrorCode =
   | 'no_messages'
   | 'model_unavailable'
   | 'unknown'
+  /** v0.3.1: abertura automática de uma conversa que não precisa de resposta: a IA não foi chamada */
+  | 'not_needed'
 
 export type AnalysisResult =
   | { ok: true; analysis: Analysis }
@@ -195,8 +199,11 @@ export interface SagaApi {
   alertQuality(): Promise<AlertQuality>
   /** abre "Salvar como" e grava o CSV das avaliações (UTF-8 com BOM, ";"); o arquivo traz trechos das mensagens */
   exportAlertFeedback(opts: ExportFeedbackOptions): Promise<ExportFeedbackResult>
-  /** gera se necessário (usa o cache quando a última mensagem não mudou) */
-  getAnalysis(jid: string): Promise<AnalysisResult>
+  /**
+   * gera se necessário (usa o cache quando a última mensagem não mudou). `onlyIfNeeded` (v0.3.1, o caminho automático
+   * da interface): conversa que não precisa de resposta não gera nada (devolve o cache válido ou `not_needed`)
+   */
+  getAnalysis(jid: string, opts?: { onlyIfNeeded?: boolean }): Promise<AnalysisResult>
   regenerate(jid: string): Promise<AnalysisResult>
 
   /** grava em `approved_replies`; devolve o id */
@@ -252,6 +259,12 @@ export interface SagaApi {
   kbRemovePackage(packageId: number): Promise<void>
   /** o texto de um trecho ("Baseado em"); null se ele não existe mais (pacote reimportado ou removido) */
   kbGetChunk(chunkId: number): Promise<KbChunkView | null>
+
+  // --- busca geral (v0.3.1) ---
+  /** procura em todas as conversas e transcrições (só neste computador); agrupa por conversa */
+  searchMessages(query: string, filters?: SearchFilters): Promise<SearchResult>
+  /** "Resumir com IA": só quando o mentor clica; manda no máximo 30 trechos à IA das sugestões (dentro do teto diário) */
+  summarizeSearch(query: string, filters?: SearchFilters): Promise<SearchSummaryResult>
 }
 
 /** Métodos chamados por `ipcRenderer.invoke('saga:<nome>')`. */
@@ -294,7 +307,9 @@ export const INVOKE_METHODS = [
   'kbUpdateFile',
   'kbSetPackageEnabled',
   'kbRemovePackage',
-  'kbGetChunk'
+  'kbGetChunk',
+  'searchMessages',
+  'summarizeSearch'
 ] as const satisfies ReadonlyArray<keyof SagaApi>
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]

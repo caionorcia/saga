@@ -6,6 +6,8 @@ import { loadDemo, loadDemoFeedback, loadDemoReplyFeedback, type DemoContact, ty
 import type { GroupAnswer, ReplyDecision } from '../../../shared/feedback'
 import { GROUP_ANSWER_MAX_MEMBERS } from '../../../shared/triage'
 import { createFakeKb } from './fakeKb'
+import { buildSnippet, isEmptyQuery, matchedPieces, parseQuery } from '../../../core/search/query'
+import { SEARCH_LIMITS, SEARCH_PERIOD_DAYS, type SearchFilters, type SearchGroup, type SearchResult } from '../../../shared/search'
 import { AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../../shared/triage'
 import type {
   Alert,
@@ -219,11 +221,14 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   })
   const find = (jid: string) => demo.find((c) => c.jid === jid)
 
+  /** para qual última mensagem já houve uma geração (o "cache" válido) */
+  const generatedFor = new Map<string, string>()
   async function analysisFor(jid: string, fresh: boolean): Promise<AnalysisResult> {
     const c = find(jid)
     if (!c) return { ok: false, code: 'no_messages', message: 'Ainda não há mensagens deste contato.', provider: state.provider }
     if (opts.aiDelayMs) await wait(opts.aiDelayMs)
     const lastMsgId = c.messages[c.messages.length - 1].id
+    generatedFor.set(jid, lastMsgId)
     const pendingAudios = c.messages.filter((m) => m.kind === 'audio' && m.transcriptStatus === null).length
     let a = analyses.get(jid)
     if (!a || fresh) {
@@ -246,6 +251,46 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       ok: true,
       analysis: { jid, lastMsgId, provider: a.provider, summary: a.summary, suggestions: a.suggestions, createdAt: generation, transcriptFp: '', pendingAudios, sources, chosenIndex: chosen.get(jid)?.index ?? null, chosenReplyId: chosen.get(jid)?.replyId ?? null }
     }
+  }
+
+  /** busca geral em memória (mesmas regras do app: perguntas e palavras vazias saem; todas as palavras, senão qualquer uma) */
+  function searchDemo(query: string, f: SearchFilters = {}): SearchResult & { ranked: Array<{ jid: string; name: string; text: string; ts: number }> } {
+    const p = parseQuery(query.slice(0, SEARCH_LIMITS.queryChars))
+    if (isEmptyQuery(p)) return { mode: 'empty', terms: [], total: 0, groups: [], tookMs: 0, ranked: [] }
+    const days = SEARCH_PERIOD_DAYS[f.period ?? 'all']
+    const since = days === null ? -Infinity : Date.now() - days * 86_400_000
+    const pieces = p.prefixes.length + p.phrases.length
+    const run = (need: number) => {
+      const groups: SearchGroup[] = []
+      for (const c of demo) {
+        if (hidden.has(c.jid) || (f.kind === 'group' && !c.isGroup) || (f.kind === 'individual' && c.isGroup)) continue
+        if (f.jid && f.jid !== c.jid) continue
+        const hits = c.messages
+          .filter((m) => m.ts >= since && (!f.audioOnly || m.kind === 'audio'))
+          .map((m) => ({ m, body: [m.text, m.transcript].filter(Boolean).join(' ') }))
+          .filter(({ body, m }) => matchedPieces(`${body} ${c.isGroup ? (m.senderName ?? '') : ''}`, p) >= need)
+          .sort((a, b) => b.m.ts - a.m.ts)
+          .map(({ m, body }) => ({
+            id: m.id,
+            jid: c.jid,
+            ts: m.ts,
+            fromMe: m.fromMe,
+            kind: m.kind,
+            senderName: c.isGroup && !m.fromMe ? (m.senderName ?? null) : null,
+            snippet: buildSnippet(body || (m.senderName ?? ''), p)
+          }))
+        if (hits.length) groups.push({ jid: c.jid, name: displayName(c), isGroup: c.isGroup, count: hits.length, hits })
+      }
+      return groups.sort((a, b) => b.count - a.count || b.hits[0].ts - a.hits[0].ts)
+    }
+    let mode: 'and' | 'or' = 'and'
+    let groups = run(pieces)
+    if (!groups.length && pieces > 1) {
+      mode = 'or'
+      groups = run(1)
+    }
+    const ranked = groups.flatMap((g) => g.hits.map((h) => ({ jid: g.jid, name: g.name, text: h.snippet.text, ts: h.ts })))
+    return { mode, terms: [...p.terms, ...p.phrases.map((x) => x.join(' '))], total: ranked.length, groups, tookMs: 3, ranked }
   }
 
   const api: SagaApi = {
@@ -389,7 +434,15 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       if (rows === 0) return { status: 'empty' }
       return exportOutcome === 'canceled' ? { status: 'canceled' } : { status: 'saved', rows }
     },
-    getAnalysis: (jid) => analysisFor(jid, false),
+    getAnalysis: async (jid, o) => {
+      record('getAnalysis', [jid, o], undefined)
+      const c = find(jid)
+      // v0.3.1: abrir uma conversa que não precisa de resposta não gera nada (só mostra o que já foi gerado para ela)
+      if (o?.onlyIfNeeded && c && !needsReplyOf(c) && generatedFor.get(jid) !== lastOf(c)?.id) {
+        return { ok: false, code: 'not_needed', message: 'Esta conversa não precisa de resposta agora.', provider: state.provider }
+      }
+      return analysisFor(jid, false)
+    },
     regenerate: (jid) => analysisFor(jid, true),
 
     saveReply: async (input) => {
@@ -486,7 +539,26 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     kbUpdateFile: async (id, patch) => record('kbUpdateFile', [id, patch], await kb.kbUpdateFile(id, patch)),
     kbSetPackageEnabled: async (id, enabled) => record('kbSetPackageEnabled', [id, enabled], await kb.kbSetPackageEnabled(id, enabled)),
     kbRemovePackage: async (id) => record('kbRemovePackage', [id], await kb.kbRemovePackage(id)),
-    kbGetChunk: (id) => kb.kbGetChunk(id)
+    kbGetChunk: (id) => kb.kbGetChunk(id),
+    searchMessages: async (query, filters) => {
+      const { ranked: _, ...r } = searchDemo(query, filters)
+      return record('searchMessages', [query, filters], r)
+    },
+    summarizeSearch: async (query, filters) => {
+      record('summarizeSearch', [query, filters], undefined)
+      const r = searchDemo(query, filters)
+      if (!r.ranked.length) return { ok: false, code: 'no_results', message: 'Nenhuma mensagem encontrada para resumir.' }
+      if (opts.aiDelayMs) await wait(opts.aiDelayMs)
+      const refs = r.groups.slice(0, 3).map((g) => ({ jid: g.jid, name: g.name }))
+      const names = refs.map((x) => x.name)
+      const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} e ${names[names.length - 1]}` : names[0]
+      return {
+        ok: true,
+        answer: `O assunto apareceu em ${list}. ${refs.length > 1 ? 'Nas duas primeiras conversas' : 'Lá'} pedem ajuda para definir o preço sem perder clientes; vale levar o tema para a próxima aula.`,
+        refs,
+        used: Math.min(r.ranked.length, SEARCH_LIMITS.summarySnippets)
+      }
+    }
   }
 
   return {
