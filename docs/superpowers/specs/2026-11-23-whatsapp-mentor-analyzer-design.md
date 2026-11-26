@@ -1,6 +1,6 @@
-# Saga — Assistente de respostas para mentorados (WhatsApp)
+# SagaZap (antes Saga) — Assistente de respostas para mentorados (WhatsApp)
 
-Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.4.0, envio direto)
+Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.4.2, novo nome SagaZap)
 
 ## Intenção e o porquê
 
@@ -736,3 +736,28 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 - Tratamento de reconexão e de erros das APIs.
 - Testes: lógica de memória/seleção de exemplos e parsing de mensagens
   com testes automatizados; conexão WhatsApp verificada manualmente.
+
+## v0.4.2 — novo nome: SagaZap
+
+O mentor batizou o app de **SagaZap** e pediu um ícone novo. Só a marca muda; quem já usa a 0.4.1 atualiza sem perder nada.
+
+- **Marca:** `productName`/atalhos/instalador `SagaZap` (`SagaZap-Setup-<versão>.exe`, `SagaZap.exe`), título da janela,
+  bandeja, assistente, Configurações, diagnóstico, guia. "SAGA" (o método da mentoria) não muda. Identificadores
+  internos (`SagaService`, `window.saga`, `saga.db`, `saga.log`, `saga-media:`) continuam.
+- **Ícone:** azulejo verde-azulado (as cores do app) com uma bolha de conversa branca e um raio vazado; uma variante
+  mais simples para 16–32 px (bandeja, barra de tarefas). Fonte em `build/icon.svg`/`build/icon-small.svg`, gerado por
+  `scripts/make-icon.mjs` (png 1024/512, .ico 16–256, favicon, ícone da bandeja). Não lembra o logo do WhatsApp.
+- **Invariantes da atualização:** `appId` igual (`br.com.saga.mentoria`: mesma chave de desinstalação, o NSIS acha a
+  instalação antiga e instala na mesma pasta `%LOCALAPPDATA%\Programs\Saga`; instalações novas vão para
+  `…\Programs\SagaZap`). Pasta de dados fixada em `%APPDATA%\saga` (`app.setPath('userData', …)` antes de qualquer
+  leitura; é a que o Electron derivava do `name` do package.json, que nunca teve `productName`): banco, sessão do
+  WhatsApp, `Local State` do `safeStorage`, registros e trava de instância única ficam onde estavam. O package.json não
+  ganha `productName` e o app não chama `app.setName` (teste em `tests/main/appPaths.test.ts`).
+- **Atalhos e "Iniciar com o Windows":** como o `SagaZap.exe` ainda não existe na pasta, o instalador roda o
+  desinstalador antigo sem `--keep-shortcuts` e ele apaga os atalhos "Saga"; o `build/installer.nsh` (`customInstall`)
+  ainda apaga `Saga.lnk` que tenha sobrado, aponta um `Saga.lnk` fixado na barra de tarefas para o exe novo e reescreve
+  o valor `electron.app.saga` de `HKCU\…\Run` com o caminho novo (vale mesmo quando a atualização é instalada ao sair).
+  O app grava o item de login sempre com esse nome e `process.execPath` a cada início.
+- **Cópias de segurança:** o arquivo novo é `SagaZap-copia-AAAA-MM-DD.sagabackup`; o rodízio da cópia automática
+  reconhece os dois prefixos e ordena pela data.
+

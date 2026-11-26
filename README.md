@@ -1,4 +1,4 @@
-# Saga
+# SagaZap
 
 Aplicativo de desktop (Windows) que lê as conversas (individuais e grupos) do WhatsApp do mentor dos últimos 30 dias, transcreve os áudios e sugere respostas para ele revisar, copiar ou enviar. Desde a 0.4.0 o app envia respostas, **só com a confirmação explícita do mentor a cada envio** e em ritmo lento.
 
@@ -27,7 +27,7 @@ npm run typecheck
 
 ```bash
 npm run build
-npx electron-builder --win --publish never   # gera dist/Saga-Setup-<versão>.exe
+npx electron-builder --win --publish never   # gera dist/SagaZap-Setup-<versão>.exe
 ```
 
 O CI (`.github/workflows/ci.yml`) faz isso em `windows-latest` a cada push e guarda o `.exe` como artefato. Não há módulos nativos.
