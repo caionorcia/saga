@@ -1,6 +1,6 @@
 # Saga — Assistente de respostas para mentorados (WhatsApp)
 
-Data: 2026-11-23 · Status: aprovado
+Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.4.0, envio direto)
 
 ## Intenção e o porquê
 
@@ -14,7 +14,8 @@ tempo lendo conversas, ouvindo áudios e escrevendo respostas. O app deve:
 4. Ao salvar, guardar a resposta aprovada como "memória", para que as
    sugestões seguintes fiquem cada vez mais parecidas com o jeito do mentor
    responder.
-5. Ter um botão **Copiar** para o mentor colar a resposta no WhatsApp.
+5. Ter um botão **Copiar** para o mentor colar a resposta no WhatsApp e, desde a v0.4.0, um botão **Enviar** que
+   envia a resposta pelo próprio app, sempre com a confirmação explícita do mentor a cada envio (ver "Envio direto").
 
 O sucesso é o mentor responder mais rápido, com sugestões que precisam de
 cada vez menos correção.
@@ -312,6 +313,44 @@ Cada mentorado costuma ter o próprio grupo, onde o mentor responde.
   deles sem transcrição (baixar, ou só transcrever se o arquivo já existe), apaga a lista e registra só contagens
   (`unhidden_requeue`). A coluna e os caminhos do núcleo que olham `hidden` continuam, inofensivos (sempre 0).
 
+### Envio direto (v0.4.0, a pedido do mentor; era a "v2")
+
+O mentor pediu para responder sem sair do Saga. Decisões dele: mostrar "digitando…" antes de enviar (sim); marcar como
+lidas as mensagens da conversa respondida (sim, só dessa conversa); nos grupos citar a mensagem respondida, nas
+individuais não citar.
+
+- **Interface:** botão **Enviar** em cada cartão de sugestão (ao lado de Salvar/Copiar). Abre a confirmação: para quem
+  (nome e número, ou o nome do grupo), nos grupos a prévia da mensagem citada ("Respondendo a …"), o texto final
+  (editável) e **Enviar** / **Cancelar** (Ctrl+Enter confirma, Esc cancela). Enviar = escolher a sugestão (como
+  Copiar/Salvar: grava na memória com as não escolhidas) + pôr o envio na fila. O cartão mostra o estado: "Na fila —
+  envia em 42 s" (contagem regressiva, com "Cancelar envio"; "pausado" ou "esperando o WhatsApp conectar" quando for o
+  caso), "Digitando…", "Enviada ✓ às HH:MM", "Não enviada — tentar de novo", "Não enviada — aguardando confirmação"
+  (expirou) e "Não sei se foi enviada — conferir" (Conferir procura na conversa; sem achar, "Enviar de novo" pede nova
+  confirmação). Enquanto o envio não termina, o texto do cartão fica só leitura.
+- **Configurações › Envio direto:** "Mostrar o botão Enviar nas sugestões" (ligado por padrão; desligado, o botão some
+  e o que estava na fila expira) e as três opções (digitando / marcar como lida / citar nos grupos), ligadas por padrão.
+- **Fila:** job `send_message` na fila única, com limitador próprio `wa_send`: intervalo sorteado de 30 a 90 s (o dobro
+  no aquecimento), teto de 40 por hora e 200 por dia; o primeiro envio sai na hora se os tetos permitem. Prioridade
+  acima dos áudios e alertas (cada tipo tem o seu ritmo). Só roda com a conexão `open` (o tipo fica pausado fora disso)
+  e para com "Pausar tudo". Nunca tenta de novo sozinho (`NO_AUTO_RETRY`): falha, prazo estourado ou queda são
+  definitivos, e o "Tentar de novo" da barra de status não inclui envios.
+- **Execução (`executeSend` no `WhatsAppClient`, o único lugar que chama métodos de escrita do socket):** confere de
+  novo as regras, `sendPresenceUpdate('composing', jid)` por 1,5 s + 35 ms por caractere (no máximo 8 s, mais até
+  0,5 s de sorteio), `'paused'`, `sendMessage(jid, { text }, grupo ? { quoted } : undefined)`, `readMessages` com as
+  chaves das mensagens do contato daquela conversa depois da última resposta do mentor, e `sendPresenceUpdate
+  ('unavailable')`. Citação nos grupos: entre as mensagens do contato depois da última do mentor, a mais recente que
+  menciona ou cita o mentor; senão a mais recente. A chave original de cada mensagem do contato (`remoteJid` como veio,
+  `id`, `participant`) fica em `messages.wa_key_json` desde a v0.4.0; mensagens antigas usam uma chave reconstruída.
+  `markOnlineOnConnect` continua `false`.
+- **Depois do envio:** `sent_text` da resposta aprovada é gravado na hora; a conversa sai de "Para responder" quando a
+  mensagem do mentor chega pela ingestão normal, e os alertas se resolvem como hoje.
+- **Registro de diagnóstico:** uma linha por etapa (`send_queued`, `send_typing`, `send_sent`, `send_failed`,
+  `send_unknown`, `send_expired`, `send_canceled`, `send_refused`) com o id do envio e do job e uma impressão (hash) da
+  conversa; nunca o texto nem o jid.
+- **Tabela `sends`:** um envio por resposta aprovada + impressão do texto (`idem_key` único); estados `queued`,
+  `typing`, `sending`, `sent`, `failed`, `unknown`, `expired`, `canceled`; `attempt` soma 1 a cada nova confirmação
+  depois de falha/expiração/desconhecido, e cada tentativa tem o seu job (`send:<id>:<tentativa>`).
+
 ### Versão 0.3.1 (a pedido do mentor)
 
 **Foco mais forte.** "A diferença não ficou tão grande": as conversas que não pedem resposta ficam com opacidade 0,28 e
@@ -380,21 +419,24 @@ antes.
 
 ## Não-objetivos (v1)
 
-- Enviar mensagens pelo app (fica para a v2).
-- Integração com o Claude Code ("responde o Michael") — v2, via servidor MCP
-  que expõe: listar respostas aprovadas, ver resposta de um contato, enviar.
+- ~~Enviar mensagens pelo app (fica para a v2).~~ Entrou na v0.4.0, sempre com confirmação explícita a cada envio
+  (ver "Envio direto").
+- Integração com o Claude Code ("responde o Michael") — futura, via servidor MCP
+  que expõe: listar respostas aprovadas, ver resposta de um contato, enviar (também só com confirmação).
 - ~~Grupos do WhatsApp.~~ Entraram na v0.1.5 a pedido do mentor (ver "Grupos").
 - Rodar em servidor na nuvem / acesso pelo celular (possível v3).
 - Multiusuário, login.
 
 ## Anti-objetivos (seria fracasso mesmo funcionando)
 
-- Enviar qualquer mensagem sem ação explícita do mentor (risco de bloqueio
-  do número e de constrangimento com mentorados).
+- Enviar qualquer mensagem sem a confirmação explícita do mentor para aquele envio (risco de bloqueio do número e de
+  constrangimento com mentorados). Isso inclui envio em lote, envio automático ao religar ou reconectar, reenvio sem
+  perguntar e puxar conversa com quem não escreveu nos últimos 30 dias.
 - Mandar dados das conversas para lugares além das APIs de IA necessárias.
 - Marcar mensagens como lidas ou mostrar o mentor "online" de forma diferente
-  do normal por causa do app (o app deve se conectar sem marcar como lido e
-  sem anunciar presença).
+  do normal por causa do app. O app se conecta sem marcar como lido e sem anunciar presença; só durante um envio
+  confirmado mostra "digitando…" naquela conversa, marca como lidas as mensagens daquela conversa (opções do mentor) e
+  volta a "indisponível".
 - Sugestões genéricas que não soam como o mentor.
 
 ## Restrições
@@ -402,7 +444,11 @@ antes.
 - **Conexão não oficial:** a API oficial do WhatsApp não lê o histórico de um
   número pessoal. Usaremos a biblioteca **Baileys** (protocolo do WhatsApp Web
   multi-dispositivo). Viola os termos do WhatsApp; risco pequeno de bloqueio,
-  mitigado por só ler na v1. O mentor está ciente.
+  mitigado pelo ritmo lento e, desde a v0.4.0, por só enviar com confirmação a cada envio, só para quem escreveu nos
+  últimos 30 dias, com 30–90 s entre envios e tetos por hora e por dia. O mentor está ciente.
+- **Escrita no WhatsApp só por um caminho:** o job `send_message`, criado depois da confirmação do mentor (token de
+  uso único do `prepareSend` para exatamente aquele jid + texto, válido por 5 min). Nenhum outro código chama métodos de
+  escrita do socket; os testes verificam isso.
 - **Histórico:** depende do que o WhatsApp envia ao vincular o aparelho;
   normalmente cobre 30 dias, mas não é garantido. Áudios antigos podem não
   estar mais disponíveis para download — nesse caso, mostrar "áudio
@@ -514,7 +560,7 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 ### Princípios
 
 1. **Uma única porta para o WhatsApp.** Toda ação do app que vai para o
-   WhatsApp (baixar áudio, buscar nome/foto, reconectar e, na v2, enviar)
+   WhatsApp (baixar áudio, buscar nome/foto, reconectar e enviar)
    passa por uma **fila única com limite de ritmo**. Nada fala com o
    WhatsApp por fora dela.
 2. **Ritmo humano, com variação.** Intervalo mínimo entre ações com sorteio
@@ -528,11 +574,11 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
    O app só grava o texto. Os áudios entram na fila e são baixados aos
    poucos, primeiro os das conversas mais recentes e "aguardando resposta".
 5. **Nada é feito sozinho na volta.** Ao reiniciar, nenhuma ação pendente de
-   envio (v2) é executada automaticamente, e nenhuma geração de sugestões em
+   envio é executada automaticamente (volta a "aguardando confirmação"), e nenhuma geração de sugestões em
    lote é disparada (as sugestões já são geradas só ao abrir a conversa).
-6. **Invisível.** O app não marca mensagens como lidas, não envia "digitando"
-   e não aparece como online (`markOnlineOnConnect: false`, sem recibos de
-   leitura).
+6. **Invisível fora dos envios.** O app não aparece como online (`markOnlineOnConnect: false`) e não manda recibos
+   de leitura nem "digitando" por conta própria. Só durante um envio confirmado: "digitando…" naquela conversa, as
+   mensagens dela marcadas como lidas (opções ligadas por padrão) e depois de volta a "indisponível".
 7. **Botão de pausa geral.** Um botão no topo para a fila inteira na hora.
    Um painel de status mostra a conexão, o tamanho da fila, o ritmo atual
    e a última ação.
@@ -557,23 +603,36 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 | Falha ou limite das APIs de IA (transcrição/Claude) | Gastos repetidos e tentativas em rajada | Até 3 tentativas com espera crescente, depois marca como "falhou" com botão "Tentar de novo". Teto de gasto diário configurável: ao atingir, pausa a IA e avisa. |
 | Mentor fecha a janela ou o app no meio da fila (fechar a janela deixa o app na bandeja; "Sair" encerra) | Retomar com tudo de uma vez | A fila é salva no banco. Ao abrir, retoma no mesmo ritmo lento, com aquecimento. |
 
-### Regras extras para a v2 (envio de mensagens)
+### Regras do envio de mensagens (v0.4.0; antes "regras extras para a v2")
 
 - **Nenhum envio é automático após religar.** Envio pendente que não saiu
-  antes de fechar ou cair expira e volta para "aguardando confirmação".
-- Confirmação explícita a cada envio (no app ou no Claude Code).
-- Intervalo entre envios de 30 a 90 s, com sorteio. Teto por hora e por dia.
-  "Digitando…" proporcional ao tamanho do texto.
+  antes de fechar ou cair expira e volta para "aguardando confirmação": ao abrir, os da fila e os que estavam no
+  "digitando…" (ainda não tinham saído) viram `expired`; o job pendente é concluído sem rodar. Envio que espera mais de
+  10 min na fila (pausa, sem conexão) também expira. Nunca sai depois de reconectar sem nova confirmação.
+- Confirmação explícita a cada envio (no app; no futuro também no Claude Code): `sendReply` só aceita o token de uso
+  único que o `prepareSend` emitiu para exatamente aquele jid + texto, válido por 5 min (tokens só na memória: nenhum
+  vale depois de reiniciar). Os guardas do IPC validam o formato.
+- Intervalo entre envios de 30 a 90 s, com sorteio (o dobro no aquecimento). Teto de 40 por hora e 200 por dia.
+  "Digitando…" proporcional ao tamanho do texto (1,5 s + 35 ms/caractere, até 8 s).
 - **Nunca reenviar no escuro:** se o estado de um envio ficou desconhecido
-  (caiu no meio), o app verifica se a mensagem já aparece na conversa antes
-  de oferecer reenviar, e sempre pergunta.
-- Só envia para quem mandou mensagem antes (responder, nunca iniciar
-  conversa em massa).
+  (o app fechou ou o socket caiu com o pedido de envio em andamento, ou o WhatsApp não confirmou), ele fica `unknown`
+  e o app procura na conversa uma mensagem do mentor com o mesmo texto (±10 min do começo do envio): achou, vira
+  enviada; senão mostra "Não sei se foi enviada — conferir" e só reenvia com um clique do mentor (nova confirmação).
+  Também confere a cada mensagem do mentor que chega e ao abrir o app.
+- **Idempotência:** uma chave por resposta aprovada + impressão do texto; um pedido repetido para um envio na fila, em
+  andamento ou enviado devolve o mesmo envio.
+- Só envia para quem mandou mensagem nos últimos 30 dias (responder, nunca iniciar conversa nem em massa); conferido
+  no `prepareSend`, no `sendReply` e de novo na hora do envio.
 
 ### Como testar a trava
 
 - Testes automáticos da fila: ritmo, teto, aquecimento, retomada após
   "queda" (matar o processo no meio), sem duplicar e expiração de envios.
+- Testes do envio: nenhuma escrita sem token confirmado (token de outro texto, outra conversa, vencido ou reutilizado),
+  expiração ao reiniciar, estado desconhecido (achado e não achado na conversa), escolha da citação nos grupos, marcar
+  como lida só a conversa respondida, espaçamento e tetos do limitador, pausa e cancelamento. O socket falso dos testes
+  tem espiões para `sendMessage`, `sendPresenceUpdate` e `readMessages`; fora do bloco de envio, todos os métodos de
+  escrita continuam proibidos.
 - Build do instalador e testes em Windows feitos por GitHub Actions (máquina Windows).
 - Teste manual: desligar a internet, suspender o notebook, abrir o app duas
   vezes e puxar a tomada (ou matar o processo) durante downloads.
@@ -591,6 +650,8 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 - `messages_fts` (FTS5 de texto + transcrição + remetente, mantido por gatilhos) — busca geral, v0.3.1
 - `settings_kv`: `window.state` (janela) e `backup.*` (última cópia, cópia automática) — v0.3.1
 - `approved_replies` (como acima)
+- `messages.wa_key_json` (chave original da mensagem do contato) e `sends` (envios confirmados: resposta, conversa,
+  texto, estado, tentativa, horários, id da mensagem no WhatsApp) — v0.4.0
 - `jobs` (fila única: tipo, chave única, status, tentativas, próxima_execução)
 - `rate_state` e `events` (histórico de ações e de desconexões, para o painel)
 - Sessão do Baileys na pasta de dados do app (`%APPDATA%`), com cópia de segurança.

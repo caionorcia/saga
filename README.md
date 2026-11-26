@@ -1,6 +1,6 @@
 # Saga
 
-Aplicativo de desktop (Windows) que lê, **somente leitura**, as conversas individuais do WhatsApp do mentor dos últimos 30 dias, transcreve os áudios e sugere respostas para ele revisar e copiar. Nenhuma mensagem é enviada pelo app.
+Aplicativo de desktop (Windows) que lê as conversas (individuais e grupos) do WhatsApp do mentor dos últimos 30 dias, transcreve os áudios e sugere respostas para ele revisar, copiar ou enviar. Desde a 0.4.0 o app envia respostas, **só com a confirmação explícita do mentor a cada envio** e em ritmo lento.
 
 Para instalar no Windows, veja o [guia de instalação](docs/guia-instalacao.md).
 
@@ -50,12 +50,14 @@ O modelo de texto padrão é `llama-3.3-70b-versatile` (constante `DEFAULT_GROQ_
 - Downloads de mídia: intervalo sorteado de 4 a 12 s, até 300 por hora e 2.000 por dia. Aquecimento de 15 min com intervalos dobrados ao iniciar ou ao acordar de suspensão de mais de 1 h.
 - Reconexão: esperas de 10 s, 30 s, 2 min, 5 min, 15 min e 30 min (±20%); no máximo 6 tentativas por hora, depois só manual.
 - IA: até 3 tentativas com espera crescente; depois "falhou" com botão "Tentar de novo". Teto de gasto diário configurável (padrão US$ 1,00).
+- Envio direto: intervalo sorteado de 30 a 90 s entre envios (o dobro no aquecimento), até 40 por hora e 200 por dia; o primeiro sai na hora se os tetos permitem. Envio na fila há mais de 10 min volta a "aguardando confirmação".
 - Menos de 1 GB livre pausa a fila.
 - Histórico: 30 dias, pelo horário da mensagem no WhatsApp.
 
 ## Princípios de segurança
 
-- Somente leitura: não existe chamada a `sendMessage`; nunca se chama `readMessages`, `sendReceipt(s)` ou `sendPresenceUpdate`; o socket usa `markOnlineOnConnect: false` (sem confirmação de leitura nem "online").
+- Um único caminho de escrita: `sendPresenceUpdate`, `sendMessage` e `readMessages` só são chamados por `executeSend` (handler do job `send_message` em `src/core/wa/client.ts`), que só existe depois de o mentor confirmar o envio (token de uso único do `prepareSend` para exatamente aquele jid + texto, válido por 5 min). Nunca `sendReceipt(s)`, `chatModify` nem métodos de grupo; o socket usa `markOnlineOnConnect: false`. `readMessages` marca só as mensagens do contato daquela conversa.
+- Envio: só para conversas em que o contato mandou mensagem nos últimos 30 dias; nada é enviado sozinho depois de reiniciar ou reconectar; queda no meio do envio fica "desconhecido" e é conferida na conversa (mesmo texto, ±10 min) antes de oferecer reenviar, sempre com nova confirmação; idempotência por resposta aprovada + impressão do texto. O registro de diagnóstico tem uma linha por etapa (`send_queued`, `send_typing`, `send_sent`, `send_failed`, `send_unknown`, `send_expired`) com o id do envio/job e uma impressão da conversa, nunca o texto nem o número.
 - Conversas individuais e grupos (só leitura: nenhum método que altere grupos é chamado; os nomes dos grupos vêm de eventos e de uma consulta `groupFetchAllParticipating` pela fila, no máximo 1 vez por dia). Status, newsletters e listas de transmissão são ignorados.
 - Toda ação de rede para o WhatsApp passa pela fila com limites de ritmo.
 - Chaves de API só em `safeStorage`, nunca em texto puro nem em logs.

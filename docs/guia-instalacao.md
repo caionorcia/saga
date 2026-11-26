@@ -28,7 +28,7 @@ O Saga mostra um assistente em 5 passos.
 
 ![Tela de boas-vindas](img/01-boas-vindas.png)
 
-Leia o aviso e clique em **Entendi, vamos começar**. O Saga usa o WhatsApp como um aparelho vinculado (como o WhatsApp Web). Esse uso não é oficial e há um pequeno risco de o WhatsApp limitar a conta; por isso o Saga só lê, vai devagar e nunca marca nada como lido.
+Leia o aviso e clique em **Entendi, vamos começar**. O Saga usa o WhatsApp como um aparelho vinculado (como o WhatsApp Web). Esse uso não é oficial e há um pequeno risco de o WhatsApp limitar a conta; por isso o Saga vai devagar, só responde a quem falou com você nos últimos 30 dias, só envia o que você confirma e só marca como lida a conversa que você respondeu.
 
 ### Passo 2: Chave do Groq (grátis)
 
@@ -70,7 +70,7 @@ O Saga traz os últimos 30 dias de conversas e baixa os áudios aos poucos, de p
 
 - **Esquerda:** as conversas, pessoas e grupos. O selo "há 3 h" indica que alguém está aguardando a sua resposta e há quanto tempo (num grupo: a última mensagem não é sua). No topo, escolha **Todos**, **Individuais** ou **Grupos**; o Saga lembra a escolha. A busca procura pessoas e grupos.
 - **Meio:** a conversa, com os áudios já transcritos e o resumo "O que a pessoa quer". Nos grupos, cada mensagem mostra o nome de quem mandou, as que mencionam você aparecem marcadas, e o resumo se chama "O que pedem a você": perguntas e pedidos para você, não um resumo do grupo inteiro.
-- **Direita:** sugestões de resposta (num grupo, mensagens para você postar no grupo). Edite como quiser, clique em **Copiar** e cole no WhatsApp. **Copiar** e **Salvar** escolhem a resposta: as outras sugestões somem e ela fica marcada como "✓ Resposta escolhida" (**Mostrar as outras sugestões** traz elas de volta). Escolher guarda a sua versão final, e também o que você deixou de lado, para o Saga aprender o seu jeito. **Gerar novas** pede outras sugestões.
+- **Direita:** sugestões de resposta (num grupo, mensagens para você postar no grupo). Edite como quiser e clique em **Enviar** (você confirma cada envio; veja "Enviar pelo Saga" abaixo), ou clique em **Copiar** e cole no WhatsApp. **Enviar**, **Copiar** e **Salvar** escolhem a resposta: as outras sugestões somem e ela fica marcada como "✓ Resposta escolhida" (**Mostrar as outras sugestões** traz elas de volta). Escolher guarda a sua versão final, e também o que você deixou de lado, para o Saga aprender o seu jeito. **Gerar novas** pede outras sugestões.
 
 ### Fila do dia e alertas (versão 0.2.0)
 
@@ -188,6 +188,53 @@ Para não perder o que o Saga aprendeu se trocar de computador, abra **Configura
 
 ![Configurações › Cópia de segurança](img/copia-de-seguranca.png)
 
+### Enviar pelo Saga (versão 0.4.0)
+
+Agora dá para responder sem sair do Saga.
+
+1. No cartão da sugestão, ajuste o texto e clique em **Enviar**.
+2. Abre a confirmação: **para quem** vai (o nome e o número, ou o nome do grupo), nos grupos **a mensagem que vai ser citada** ("Respondendo a …") e o **texto final**, que ainda dá para mudar. Clique em **Enviar** (ou aperte **Ctrl+Enter**). **Cancelar** fecha sem enviar nada.
+3. A resposta fica escolhida e guardada na memória (como no Copiar/Salvar), e o cartão mostra como está o envio.
+
+![Confirmação do envio](img/enviar-confirmacao.png)
+
+Nos grupos, a resposta sai **citando** a mensagem que você está respondendo: a mais recente que te marcou ou respondeu uma mensagem sua; se ninguém te marcou, a última mensagem depois da sua. Nas conversas individuais ela sai sem citação.
+
+![Confirmação num grupo, com a mensagem citada](img/enviar-grupo.png)
+
+**O que cada estado do cartão quer dizer:**
+
+| No cartão | O que significa | O que fazer |
+|---|---|---|
+| **Na fila — envia em 42 s** | Confirmada, esperando a vez. O Saga envia no máximo uma mensagem a cada 30 a 90 segundos. | Nada. Mudou de ideia? **Cancelar envio**. |
+| **Na fila — pausado** / **esperando o WhatsApp conectar** | Você clicou em **Pausar tudo**, ou o WhatsApp está desconectado. | **Retomar** no topo, ou espere conectar. Se passar de 10 minutos, o envio é cancelado sozinho (veja abaixo). |
+| **Digitando…** | O Saga está mostrando "digitando…" para a pessoa, por alguns segundos (mais tempo para textos longos), e já vai enviar. | Nada. |
+| **Enviada ✓ às 14:07** | O WhatsApp recebeu a mensagem. A conversa sai de "Para responder" assim que ela aparece no histórico, e os alertas se resolvem como quando você responde pelo celular. | Nada. |
+| **Não enviada — tentar de novo** | Não saiu (por exemplo, a internet caiu antes de enviar). Nada chegou para a pessoa. | **Tentar de novo** abre a confirmação outra vez. |
+| **Não enviada — aguardando confirmação** | Ficou mais de 10 minutos na fila, ou o Saga foi fechado antes de enviar. **O Saga nunca envia sozinho depois de reabrir ou reconectar.** | **Tentar de novo** e confirme, se ainda fizer sentido. |
+| **Não sei se foi enviada — conferir** | A conexão caiu bem na hora do envio. O Saga procura a mensagem na conversa e, se ela aparecer, marca como enviada sozinho. | Clique em **Conferir**. Se ela não aparecer, olhe no celular: se não chegou, clique em **Enviar de novo** (o Saga pede a confirmação de novo, para não mandar duas vezes). |
+
+![Envio na fila, com a contagem regressiva](img/envio-na-fila.png)
+
+![Não sei se foi enviada: conferir e enviar de novo](img/envio-nao-sei.png)
+
+**Configurações › Envio direto** (tudo ligado por padrão):
+
+- **Mostrar o botão Enviar nas sugestões**: desligado, o botão some e o Saga volta a ser só copiar e colar (o que estava na fila não sai).
+- **Mostrar "digitando…" antes de enviar**.
+- **Marcar como lidas as mensagens da conversa respondida**: só daquela conversa, nunca das outras.
+- **Nos grupos, citar a mensagem que está sendo respondida**.
+
+![Configurações › Envio direto](img/config-envio-direto.png)
+
+**Para não arriscar a sua conta (leia com atenção):** enviar por um aparelho vinculado não é um uso oficial do WhatsApp, e mandar muitas mensagens parecidas, rápido, é o que mais faz o WhatsApp limitar contas. Por isso o Saga:
+
+- só envia para quem **mandou mensagem nos últimos 30 dias** (responde, nunca puxa conversa);
+- pede a sua **confirmação em cada envio**, um por um;
+- espera **30 a 90 segundos** entre um envio e outro (o dobro nos primeiros 15 minutos depois de abrir) e envia no máximo **40 por hora e 200 por dia**.
+
+E você pode ajudar: responda de verdade a cada pessoa (evite mandar o mesmo texto para muita gente), não tente "zerar" dezenas de conversas de uma vez e continue usando o WhatsApp normalmente pelo celular. Se aparecer **Conta restrita pelo WhatsApp**, pare de enviar pelo Saga por alguns dias.
+
 ## 5. O que significa a faixa de cima
 
 A faixa no topo mostra como o Saga está.
@@ -221,7 +268,7 @@ Se o passo do QR Code fica em "Preparando o QR Code…":
 
 ### Botão Pausar
 
-**Pausar tudo** interrompe os downloads de áudio na hora (útil se o computador ou a internet estiver lento). **Retomar** continua de onde parou. O Saga também pausa sozinho quando o espaço em disco acaba.
+**Pausar tudo** interrompe os downloads de áudio e os envios na hora (útil se o computador ou a internet estiver lento). **Retomar** continua de onde parou; um envio que ficou mais de 10 minutos parado não sai mais sozinho e pede a sua confirmação de novo. O Saga também pausa sozinho quando o espaço em disco acaba.
 
 ## 6. Atualizações
 
@@ -244,7 +291,7 @@ Se o aviso não aparecer mesmo com uma versão nova publicada, clique em **Confi
 - Suas conversas, áudios e configurações ficam **neste computador** (pasta de dados do Saga no seu usuário do Windows). Não existe servidor do Saga.
 - A chave de acesso é guardada com a criptografia do Windows.
 - Só saem do computador: o **texto das conversas** e os **áudios**, enviados para a IA que você escolheu (Groq e, se configurado, Claude ou OpenAI) para transcrever e gerar sugestões, e, se você importou uma **base de conhecimento**, o resumo das regras e os trechos usados em cada sugestão.
-- O Saga lê conversas individuais e grupos, sem nunca escrever nem mudar nada neles. Status, canais e listas de transmissão são ignorados.
+- O Saga lê conversas individuais e grupos. Ele só escreve no WhatsApp quando você confirma um envio (a mensagem, o "digitando…" e marcar como lida aquela conversa) e nunca muda nada nos grupos. Status, canais e listas de transmissão são ignorados.
 
 ## 8. Desinstalar
 
