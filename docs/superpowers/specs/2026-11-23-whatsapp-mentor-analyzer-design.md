@@ -595,6 +595,54 @@ confirmação dele. Contrato: adendo v1.2 de `2026-11-26-copiloto-integration.md
   opção** (`copiloto.autoFollowupsAt`): o que já estava como cartão continua cartão.
 - **Registro:** `copiloto_auto` e as linhas `send_*` de sempre ("automático" no `send_queued`); nunca texto nem jid.
 
+### Grupos no Copiloto e nomes dos grupos (v0.8.1, a pedido do mentor)
+
+Relato: as conversas individuais chegaram ao Copiloto com 30 dias de histórico, os grupos só com o que aconteceu depois
+de ligar, e vários grupos sem mensagem nova nunca apareceram (o follow-up, que vai sempre ao grupo, ficava travado).
+Muitos grupos antigos com assunto apareciam como "Grupo sem nome".
+
+- **Causa (grupos):** um grupo só era conferido contra o roster no roster (ao ligar e a cada 6 h) e numa mudança dentro
+  dele (`applyRoster` e `processDirty` em `src/core/copiloto/sync.ts`). Na carga inicial, muitos grupos ainda não
+  casavam: os participantes vêm da consulta dos grupos (pela fila, uma vez por dia), o telefone de um @lid só existe
+  na memória do cliente (`pnForLid`) e as mensagens antigas guardam o remetente como @lid. Quando a participação ficava
+  conhecida depois, nada conferia o grupo de novo: com mensagem nova, a carga dele ia junto; sem mensagem nova, nunca.
+  E uma carga anotada quando o grupo casava se perdia se, na hora de virar evento, ele não casasse mais (o mapa do @lid
+  ainda vazio depois de reiniciar), com o grupo marcado como "carga feita".
+- **Correção:** os grupos sem carga são conferidos de novo a cada 10 min e logo que a participação muda (evento
+  `membership` do cliente: consulta dos grupos, `groups.upsert` com participantes, `group-participants.update`, um @lid
+  que ganhou telefone). Grupo que passa a casar ganha a carga dos 30 dias na hora. Um @lid que ganha telefone grava o
+  telefone como mais uma forma do participante em `group_members` (nos grupos em que ele está ou já escreveu), então
+  vale depois de reiniciar. Conversa que deixa de casar antes de a carga virar evento perde a marca de "carga feita" e
+  é refeita quando voltar a casar. Grupo sem mensagem nos últimos 30 dias leva a mais recente guardada aqui (seja de
+  quando for), para o Copiloto saber que ele existe; nunca se inventa mensagem.
+- **Grupo novo:** `groups.upsert` (grupo criado, ou o mentor entrou nele) já traz os participantes; `group-participants.update`
+  acrescenta ou tira gente (sem consulta). Mensagem num grupo que apareceu depois da última consulta de todos e de que
+  não se sabe quem participa → uma consulta só daquele grupo (`groupMetadata`, leitura), pela fila, uma vez por grupo e
+  no máximo 20 por execução. O grupo novo de um mentorado aparece no Copiloto na volta seguinte da integração depois de
+  a participação ficar conhecida (segundos, até ~15 s; com o mentorado só como @lid, assim que o telefone dele ficar
+  conhecido), com a mensagem do mentor e o que houver dos últimos 30 dias.
+- **Reenvio único (`copiloto.groupRepairV081`):** depois da atualização, com o WhatsApp de pé há 1 min e a consulta dos
+  grupos feita nesta execução (para os eventos levarem o nome; no máximo 15 min de conexão), para cada grupo que casa:
+  as mensagens dos últimos 30 dias (ou a mais recente), os envios, os alertas, o "Para responder" e o resumo, com os
+  mesmos ids e o mesmo formato da captura normal, de volta a pendentes mesmo já aceitos (`upsert` com `force`; uma linha
+  por id, o servidor faz upsert pelo id). Contagens em `copiloto.groupRepairResult` e no registro (`copiloto_groups`),
+  nunca nomes ou texto. Grupos de mentorados sem nenhuma mensagem aqui só são contados (mandar a existência deles
+  pediria mudar o contrato). Ligar a integração depois da atualização marca o reenvio como feito (a carga já segue a
+  regra nova).
+- **Botão "Reenviar histórico dos grupos"** (Configurações › Copiloto da Saga, com a integração ligada): pede a consulta
+  dos grupos de novo e faz o reenvio (sem roster ainda: assim que ele chegar). A linha "Grupos: X grupo(s) e Y
+  mensagem(ns) colocados na fila para o Copiloto (Z grupo(s) sem nenhuma mensagem neste computador)" fica na tela.
+- **Causa (nomes):** o assunto vindo da consulta dos grupos só era gravado se a conversa do grupo já existisse
+  (`setContactName` só atualiza); senão ficava só na memória, perdida ao fechar o app, e a consulta não se repetia por
+  24 h. Além disso, um job da consulta que falhasse 3 vezes ficava falho para sempre (`requeueJob` só reabria job
+  concluído) e uma resposta vazia contava como feita. A consulta tinha prioridade 0 e sem horário, a última da fila.
+- **Correção (nomes):** `group_subjects` (schema v20) guarda o assunto mesmo sem a conversa; a conversa do grupo nasce
+  com ele. A consulta tem prioridade 15 (na frente dos downloads, atrás dos envios; mesmo ritmo do limitador), resposta
+  vazia com grupos aqui não conta como feita, e um grupo sem nome visto (ou conectar com grupos sem nome) pede a
+  consulta de novo, no máximo uma vez por hora, reabrindo o job falho. Nome novo de um grupo (gatilho
+  `copiloto_group_name_au`) põe a mensagem mais recente dele de novo na fila, com o `chat.name` novo. Grupo de que o
+  mentor saiu não volta na consulta: continua sem nome (ou com o nome personalizado).
+
 ### Versão 0.3.1 (a pedido do mentor)
 
 **Foco mais forte.** "A diferença não ficou tão grande": as conversas que não pedem resposta ficam com opacidade 0,28 e

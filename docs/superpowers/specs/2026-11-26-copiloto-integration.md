@@ -269,3 +269,17 @@ limitador do WhatsApp nem ocupar a fila dele), uma consulta nova na fila de uma 
 sai. Só põe na fila com o limitador já livre, então o "digitando…" vem segundos depois da consulta (não há outra
 consulta dentro do `executeSend`). Sem resposta válida (rede, 5xx) → nada sai e todos os automáticos esperam 5 → 10 →
 20 → 30 min (volta ao começo na primeira resposta boa). Código recusado (401) → o automático para.
+
+---
+
+# Nota de implementação v0.8.1 (sem mudança no contrato)
+
+- Grupo que passa a ter um mentorado entre os participantes depois da carga inicial (participação conhecida depois,
+  @lid que ganhou telefone, grupo novo) ganha a carga dos últimos 30 dias na hora, não só no roster de 6 h.
+- Grupo sem mensagem nos últimos 30 dias: vai a mensagem mais recente guardada no computador (com o `sent_at` dela), para o
+  Copiloto saber que o grupo existe.
+- Reenvio único do histórico dos grupos depois da atualização (e pelo botão "Reenviar histórico dos grupos"): os mesmos
+  eventos `message`, `alert`, `reply_state` e `summary`, com os mesmos ids; o Copiloto faz upsert pelo id.
+- Grupos de mentorados sem nenhuma mensagem neste computador só são contados na tela. Informar a existência deles
+  pediria um evento novo no contrato (não implementado).
+- Nome novo de um grupo: a mensagem mais recente dele vai de novo (mesmo id) com o `chat.name` novo.

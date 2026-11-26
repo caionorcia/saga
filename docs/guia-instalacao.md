@@ -313,6 +313,19 @@ A linha embaixo mostra quantos eventos estão **pendentes**, o **último envio**
 
 Ao desligar, a fila deste computador é apagada. O que já foi enviado continua no Copiloto.
 
+#### Grupos e nomes dos grupos (versão 0.8.1)
+
+- Um grupo entra no Copiloto assim que o SagaZap fica sabendo que um mentorado participa dele (também num grupo novo,
+  em poucos segundos depois da sua primeira mensagem lá), com os últimos 30 dias. Grupo sem mensagem nos últimos 30 dias
+  leva a mensagem mais recente que estiver neste computador.
+- Depois de atualizar para a 0.8.1, o SagaZap reenvia uma vez o histórico dos grupos dos mentorados (sozinho, uns
+  minutos depois de conectar). Em **Configurações › Copiloto da Saga** aparece a linha **Grupos: X grupo(s) e Y
+  mensagem(ns) colocados na fila para o Copiloto (Z grupo(s) sem nenhuma mensagem neste computador)**; os pendentes
+  vão baixando sozinhos. Nada fica duplicado no Copiloto.
+- O botão **Reenviar histórico dos grupos** faz isso de novo quando você quiser e também pede ao WhatsApp os nomes dos
+  grupos (os que apareciam como "Grupo sem nome"). Grupo de que você saiu pode continuar sem nome: dê um nome a ele na
+  conversa, se quiser.
+
 ### Mensagens do Copiloto (versão 0.7.0)
 
 Com o Copiloto da Saga ligado, a equipe pode escrever no Copiloto uma mensagem para um mentorado (ou um grupo). O SagaZap busca essas mensagens a cada 5 minutos:
