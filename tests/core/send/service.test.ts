@@ -216,7 +216,7 @@ describe('envio direto no serviço', () => {
     service.onSends(JID, () => events.push('sends'))
     await drain()
     expect(last().spies.sendMessage).toHaveBeenCalledTimes(1)
-    expect(last().spies.sendMessage).toHaveBeenCalledWith(JID, { text }, undefined)
+    expect(last().spies.sendMessage).toHaveBeenCalledWith(JID, { text }, { messageId: repo.sends.get(r.send.id)!.msgIds[0] })
     const [view] = await service.listSends(JID)
     expect(view).toMatchObject({ id: r.send.id, status: 'sent', etaAt: null })
     expect(repo.getApproved(r.send.replyId)!.sentText).toBe(text)
@@ -297,15 +297,76 @@ describe('envio direto no serviço', () => {
     expect(repo.sends.get(r.send.id)).toMatchObject({ status: 'expired', error: 'envio direto desligado' })
   })
 
+  describe('conexão e pedidos em andamento', () => {
+    it('sem o WhatsApp conectado: confirmar é recusado (o envio só vale para a conexão em que foi confirmado)', async () => {
+      await service.start()
+      await emit('messaging-history.set', { chats: [], contacts: [], messages: [wamsg({ id: 'a1', ts: NOW - 60_000 })] })
+      expect(await service.prepareSend({ jid: JID, text: 'Oi' })).toMatchObject({ ok: false, code: 'offline' })
+    })
+
+    it('o job leva a tentativa e a geração da conexão; a conexão cai com o envio na fila → expira e não sai depois', async () => {
+      await startOpen()
+      await service.pauseAll()
+      const p = await prepare(JID, 'Na fila')
+      const r = await service.sendReply({ token: p.token, jid: JID, text: 'Na fila' })
+      if (!r.ok) throw new Error(r.code)
+      const job = repo.listJobs('pending').find((j) => j.type === 'send_message')!
+      expect(job.payload).toEqual({ sendId: r.send.id, attempt: 1, gen: client().connGen() })
+      await emit('connection.update', { connection: 'close', lastDisconnect: { error: Object.assign(new Error('x'), { output: { statusCode: 408 } }) } })
+      expect(repo.sends.get(r.send.id)).toMatchObject({ status: 'expired', error: 'a conexão caiu antes de enviar' })
+      await drain(15_000)
+      await emit('connection.update', { connection: 'open' })
+      await service.resumeAll()
+      await drain()
+      expect(writes()).toBe(0)
+      expect((await service.listSends(JID))[0].status).toBe('expired')
+    })
+
+    it('prazo do job esgotado com o pedido ainda em andamento: fica "enviando" (não desconhecido); nova tentativa recusada até terminar', async () => {
+      await startOpen()
+      let release: (v: unknown) => void = () => {}
+      last().spies.sendMessage.mockImplementation(() => new Promise((res) => (release = res)))
+      const text = 'Demorou'
+      const p = await prepare(JID, text)
+      const r = await service.sendReply({ token: p.token, jid: JID, text })
+      if (!r.ok) throw new Error(r.code)
+      await drain(30_000)
+      expect(repo.sends.get(r.send.id)!.status).toBe('sending')
+      // o prazo do job (180 s) passa e o WhatsApp ainda não respondeu
+      await drain(200_000)
+      expect(repo.sends.get(r.send.id)!.status).toBe('sending')
+      expect(diag.some(([k]) => k === 'send_slow')).toBe(true)
+      expect(repo.jobCounts('send_message').failed).toBe(0)
+      // a conexão cai (fica desconhecido) e volta: "Enviar de novo" é recusado enquanto o pedido não terminar
+      await emit('connection.update', { connection: 'close', lastDisconnect: { error: Object.assign(new Error('x'), { output: { statusCode: 408 } }) } })
+      expect(repo.sends.get(r.send.id)!.status).toBe('unknown')
+      await drain(15_000)
+      await emit('connection.update', { connection: 'open' })
+      const p2 = await prepare(JID, text)
+      expect(await service.sendReply({ token: p2.token, jid: JID, text, replyId: r.send.replyId })).toMatchObject({ ok: false, code: 'in_flight' })
+      release({ key: { id: 'OK-LATE' } })
+      await drain(1_000)
+      expect(repo.sends.get(r.send.id)).toMatchObject({ status: 'sent', attempt: 1, waMsgId: 'OK-LATE' })
+      expect(writes(['sendMessage'])).toBe(1)
+    })
+
+    it('chave de idempotência de outra conversa: recusado, nada na fila', async () => {
+      await startOpen()
+      const replyId = repo.insertApproved({ jid: OLD, contextText: 'c', originalSuggestion: null, finalText: 'Oi!', provider: 'groq' })
+      repo.sends.enqueue({ idemKey: `${replyId}:x`, replyId, jid: OLD, text: 'Oi!', address: OLD, quotedId: null })
+      expect(() => repo.sends.enqueue({ idemKey: `${replyId}:x`, replyId, jid: JID, text: 'Oi!', address: JID, quotedId: null })).toThrow(/outra conversa/)
+    })
+  })
+
   describe('depois de reiniciar: nada sai sozinho, nunca reenviar no escuro', () => {
     /** envios deixados no banco por uma execução que caiu */
     function seed(status: 'queued' | 'typing' | 'sending', text: string): number {
       repo.upsertContact({ jid: JID, pushName: 'Ana' })
       const replyId = repo.insertApproved({ jid: JID, contextText: 'c', originalSuggestion: null, finalText: text, provider: 'groq' })
-      const { send } = repo.sends.enqueue({ idemKey: `${replyId}:h`, replyId, jid: JID, text })
-      repo.insertJobIgnore('send_message', sendJobKey(send), { sendId: send.id }, 20)
-      if (status !== 'queued') repo.sends.transition(send.id, ['queued'], 'typing', { startedAt: NOW - 60_000 })
-      if (status === 'sending') repo.sends.transition(send.id, ['typing'], 'sending')
+      const { send } = repo.sends.enqueue({ idemKey: `${replyId}:h`, replyId, jid: JID, text, address: JID, quotedId: null })
+      repo.insertJobIgnore('send_message', sendJobKey(send), { sendId: send.id, attempt: 1, gen: 0 }, 20)
+      if (status !== 'queued') repo.sends.transition(send.id, 1, ['queued'], 'typing', { startedAt: NOW - 60_000 })
+      if (status === 'sending') repo.sends.transition(send.id, 1, ['typing'], 'sending', { newMsgId: `3EB0SEED${send.id}` })
       if (status !== 'queued') repo.markJobRunning(repo.jobIdByKey(sendJobKey(send))!)
       return send.id
     }
@@ -325,11 +386,13 @@ describe('envio direto no serviço', () => {
       expect((await service.checkSend(s))!.status).toBe('unknown')
     })
 
-    it('desconhecido e a mensagem já está na conversa (±10 min): vira enviada, com o texto enviado na memória', async () => {
+    it('desconhecido e a mensagem (pelo id gerado) já está na conversa: vira enviada, com o texto enviado na memória', async () => {
       const s = seed('sending', 'Combinado!')
-      repo.insertMessage({ id: 'echo', jid: JID, fromMe: true, ts: NOW - 30_000, kind: 'text', text: 'Combinado!', mediaKeyJson: null, durationSec: null })
+      // mesmo texto mas outro id (o mentor digitou no celular): não conta
+      repo.insertMessage({ id: 'manual', jid: JID, fromMe: true, ts: NOW - 40_000, kind: 'text', text: 'Combinado!', mediaKeyJson: null, durationSec: null })
+      repo.insertMessage({ id: `3EB0SEED${s}`, jid: JID, fromMe: true, ts: NOW - 30_000, kind: 'text', text: 'Combinado!', mediaKeyJson: null, durationSec: null })
       await startOpen()
-      expect(repo.sends.get(s)).toMatchObject({ status: 'sent', waMsgId: 'echo', sentAt: NOW - 30_000 })
+      expect(repo.sends.get(s)).toMatchObject({ status: 'sent', waMsgId: `3EB0SEED${s}`, sentAt: NOW - 30_000 })
       expect(repo.getApproved(repo.sends.get(s)!.replyId)!.sentText).toBe('Combinado!')
       expect(writes()).toBe(0)
     })
@@ -338,8 +401,10 @@ describe('envio direto no serviço', () => {
       const s = seed('sending', 'Combinado!')
       await startOpen()
       expect(repo.sends.get(s)!.status).toBe('unknown')
-      await emit('messages.upsert', { messages: [wamsg({ id: 'late-echo', fromMe: true, ts: NOW + 60_000, text: 'Combinado!' })] })
-      expect(repo.sends.get(s)).toMatchObject({ status: 'sent', waMsgId: 'late-echo' })
+      await emit('messages.upsert', { messages: [wamsg({ id: 'other-id', fromMe: true, ts: NOW + 50_000, text: 'Combinado!' })] })
+      expect(repo.sends.get(s)!.status).toBe('unknown')
+      await emit('messages.upsert', { messages: [wamsg({ id: `3EB0SEED${s}`, fromMe: true, ts: NOW + 60_000, text: 'Combinado!' })] })
+      expect(repo.sends.get(s)).toMatchObject({ status: 'sent', waMsgId: `3EB0SEED${s}` })
     })
   })
 })

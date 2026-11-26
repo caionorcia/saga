@@ -86,15 +86,22 @@ export interface SendPreview {
   options: SendOptions
 }
 
-export type SendRefusal = 'disabled' | 'empty' | 'too_long' | 'no_recent_contact' | 'unknown_chat'
+export type SendRefusal = 'disabled' | 'empty' | 'too_long' | 'no_recent_contact' | 'unknown_chat' | 'offline' | 'in_flight'
 
 export const SEND_REFUSAL_TEXT: Record<SendRefusal, string> = {
   disabled: 'O envio direto está desligado nas Configurações.',
   empty: 'A resposta está vazia.',
   too_long: 'A resposta é longa demais para enviar de uma vez.',
   no_recent_contact: 'O Saga só envia para quem mandou mensagem nos últimos 30 dias (responder, nunca iniciar conversa).',
-  unknown_chat: 'Conversa não encontrada.'
+  unknown_chat: 'Conversa não encontrada.',
+  offline: 'O WhatsApp não está conectado. Envie quando ele voltar (a faixa de cima mostra "Conectado").',
+  in_flight: 'O envio anterior desta resposta ainda está em andamento. Espere um pouco e clique em Conferir.'
 }
+
+/** Motivo gravado quando a conexão cai (ou é refeita) com o envio ainda na fila ou no "digitando…". */
+export const CONN_LOST_REASON = 'a conexão caiu antes de enviar'
+/** Motivo gravado quando "Pausar tudo" é clicado durante o "digitando…". */
+export const PAUSED_REASON = 'pausado'
 
 export type PrepareSendResult = { ok: true; preview: SendPreview } | { ok: false; code: SendRefusal; message: string }
 

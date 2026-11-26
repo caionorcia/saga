@@ -34,6 +34,8 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
   const [refused, setRefused] = useState(false)
   const [busy, setBusy] = useState(false)
   const textRef = useRef<HTMLTextAreaElement>(null)
+  /** um envio em andamento (Ctrl+Enter repetido ou clique duplo antes de o estado atualizar não envia duas vezes) */
+  const inFlight = useRef(false)
 
   useEffect(() => {
     let alive = true
@@ -58,7 +60,8 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
   }, [preview])
 
   const confirm = async () => {
-    if (!preview || busy || !text.trim()) return
+    if (!preview || inFlight.current || !text.trim()) return
+    inFlight.current = true
     setBusy(true)
     setError(null)
     try {
@@ -87,6 +90,7 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
     } catch {
       setError(GENERIC)
     } finally {
+      inFlight.current = false
       setBusy(false)
     }
   }
@@ -206,7 +210,7 @@ export function SendStatus({ send, onResend }: StatusProps) {
       )}
       {(send.status === 'failed' || send.status === 'expired') && (
         <button type="button" className="btn btn-small" onClick={onResend}>
-          Tentar de novo
+          {send.status === 'expired' ? 'Enviar de novo' : 'Tentar de novo'}
         </button>
       )}
       {send.status === 'unknown' && !checked && (

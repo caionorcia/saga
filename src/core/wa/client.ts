@@ -25,9 +25,9 @@ import { useAtomicAuthState, type AtomicAuthState } from './authState'
 import { isGroupJid, normalize, participantJids, stripDevice, toPhoneJid, type ParticipantLike } from './normalize'
 import { ReconnectPolicy, classifyDisconnect } from './reconnect'
 import { WaVersionResolver, formatWaVersion, type WaVersionFetcher } from './version'
-import { chatHash, hasRecentContactMessage, pickQuote, quotedMessage, unreadKeys, type WaKey } from '../send/logic'
+import { chatHash, errCode, findSentEcho, hasRecentContactMessage, newMessageId, quotedMessage, unreadKeys, type WaKey } from '../send/logic'
 import { verifyUnknownSend } from '../send/verify'
-import { DEFAULT_SEND_OPTIONS, SEND_LIMITS, typingMs, type SendOptions } from '../../shared/send'
+import { CONN_LOST_REASON, DEFAULT_SEND_OPTIONS, PAUSED_REASON, SEND_LIMITS, typingMs, type SendOptions } from '../../shared/send'
 
 export type ConnState =
   | 'connecting'
@@ -56,7 +56,7 @@ export interface WaSocket {
   /** só `executeSend`: "digitando…" na conversa, "parou" e, no fim, de volta a indisponível */
   sendPresenceUpdate?(type: 'composing' | 'paused' | 'unavailable', toJid?: string): Promise<void>
   /** só `executeSend`: a resposta confirmada pelo mentor */
-  sendMessage?(jid: string, content: { text: string }, options?: { quoted?: unknown }): Promise<{ key?: { id?: string | null } | null } | undefined>
+  sendMessage?(jid: string, content: { text: string }, options?: { quoted?: unknown; messageId?: string }): Promise<{ key?: { id?: string | null } | null } | undefined>
   /** só `executeSend`: as mensagens do contato nessa conversa (e só nela) ficam lidas ao responder */
   readMessages?(keys: WaKey[]): Promise<void>
 }
@@ -252,8 +252,11 @@ export class WhatsAppClient extends EventEmitter {
    */
   private knownNames = new Map<string, { name: string; rank: number }>()
   private work: Promise<void> = Promise.resolve()
-  /** o envio com o pedido ao WhatsApp em andamento (o socket caindo agora deixa o estado desconhecido) */
-  private sendingId: number | null = null
+  /**
+   * envios com o pedido ao WhatsApp em andamento (id → tentativa): o socket caindo agora deixa o estado desconhecido,
+   * e enquanto o pedido não termina nenhuma nova tentativa do mesmo envio é aceita
+   */
+  private inFlight = new Map<number, number>()
   private readonly rng: () => number
 
   constructor(private readonly deps: WhatsAppClientDeps) {
@@ -267,7 +270,7 @@ export class WhatsAppClient extends EventEmitter {
     this.baileysLogger = makeBaileysLogger(deps.diag)
     deps.queue.register('download_audio', (p, signal) => this.downloadAudio(p, signal))
     deps.queue.register('fetch_profile', (p) => this.fetchProfile(p))
-    deps.queue.register('send_message', (p) => this.executeSend(p))
+    deps.queue.register('send_message', (p, signal) => this.executeSend(p, signal))
     this.rng = deps.rng ?? Math.random
     // downloads, consultas e envios ao WhatsApp só com a conexão aberta
     deps.queue.pauseType('download_audio')
@@ -277,6 +280,16 @@ export class WhatsAppClient extends EventEmitter {
 
   getStatus(): ConnState | null {
     return this.status
+  }
+
+  /** A geração da conexão atual: vai no job de cada envio; uma conexão nova invalida os envios confirmados antes. */
+  connGen(): number {
+    return this.gen
+  }
+
+  /** O pedido deste envio ao WhatsApp ainda não terminou (não aceitar outra tentativa nem dar como desconhecido). */
+  isSendInFlight(sendId: number): boolean {
+    return this.inFlight.has(sendId)
   }
 
   /** quando a próxima tentativa de reconexão está agendada (epoch ms), ou null */
@@ -373,6 +386,8 @@ export class WhatsAppClient extends EventEmitter {
       this.deps.queue.pauseType('fetch_profile')
       this.deps.queue.pauseType('send_message')
       this.clearDiskTimer()
+      // nunca sai depois de reconectar sem nova confirmação
+      this.expireUnsent()
     }
     if (this.status === s) return
     this.status = s
@@ -441,6 +456,7 @@ export class WhatsAppClient extends EventEmitter {
   /** Invalida o socket atual (os eventos dele passam a ser ignorados) e o fecha. */
   private dropSocket(): void {
     this.sendInterrupted('a conexão foi refeita durante o envio')
+    this.expireUnsent()
     this.gen++
     const s = this.sock
     this.sock = null
@@ -653,6 +669,7 @@ export class WhatsAppClient extends EventEmitter {
     if (!this.running) return
     // um socket fecha uma vez só: eventos seguintes dele são ignorados
     this.sendInterrupted('a conexão caiu durante o envio')
+    this.expireUnsent()
     this.gen++
     this.sock = null
     this.clearStable()
@@ -861,6 +878,11 @@ export class WhatsAppClient extends EventEmitter {
       const lid = n.jid
       n.jid = await this.resolveJid(n.jid)
       if (n.senderJid) n.senderJid = await this.resolveJid(n.senderJid)
+      // eco de uma resposta enviada pelo app (id gerado aqui): fica na conversa de onde ela saiu, mesmo enviada ao @lid
+      if (n.fromMe) {
+        const sent = repo.sends.byMsgId(n.id)
+        if (sent) n.jid = sent.jid
+      }
       // menções e citação das minhas mensagens de grupo: guarda o @lid e o telefone (casa com a conversa individual)
       if (n.targets?.length) {
         const all = new Set(n.targets)
@@ -1026,15 +1048,36 @@ export class WhatsAppClient extends EventEmitter {
 
   /** O socket caiu (ou foi refeito) com o pedido de envio em andamento: o estado fica desconhecido até conferir. */
   private sendInterrupted(reason: string): void {
-    const id = this.sendingId
-    if (id === null) return
-    try {
-      const s = this.deps.repo.sends.get(id)
-      if (s && this.deps.repo.sends.transition(id, ['sending'], 'unknown', { error: reason })) {
-        this.diag('send_unknown', `send #${id} chat=${chatHash(s.jid)} ${reason}`)
-        verifyUnknownSend(this.deps.repo, { ...s, status: 'unknown' })
-        this.emitSend(s.jid)
+    for (const [id, attempt] of this.inFlight) {
+      try {
+        const s = this.deps.repo.sends.get(id)
+        if (s && this.deps.repo.sends.transition(id, attempt, ['sending'], 'unknown', { error: reason })) {
+          this.diag('send_unknown', `send #${id} chat=${chatHash(s.jid)} ${reason}`)
+          verifyUnknownSend(this.deps.repo, { ...s, status: 'unknown' })
+          this.emitSend(s.jid)
+        }
+      } catch {
+        // banco fechado: a recuperação ao abrir cuida disso
       }
+    }
+  }
+
+  /**
+   * A conexão caiu, foi refeita ou o app está parando: o que ainda não saiu (na fila ou no "digitando…") volta a
+   * "aguardando confirmação" e os jobs pendentes são concluídos sem rodar. Nunca sai depois de reconectar.
+   */
+  private expireUnsent(): void {
+    try {
+      const { repo } = this.deps
+      const rows = repo.sends.listByStatus('queued', 'typing')
+      if (!rows.length) return
+      for (const s of rows) {
+        if (repo.sends.transition(s.id, s.attempt, ['queued', 'typing'], 'expired', { error: CONN_LOST_REASON })) {
+          this.diag('send_expired', `send #${s.id} chat=${chatHash(s.jid)} ${CONN_LOST_REASON}`)
+          this.emitSend(s.jid)
+        }
+      }
+      repo.finishPendingJobs('send_message')
     } catch {
       // banco fechado: a recuperação ao abrir cuida disso
     }
@@ -1045,42 +1088,48 @@ export class WhatsAppClient extends EventEmitter {
   }
 
   /**
-   * Job `send_message` (`{ sendId }`): um envio que o mentor confirmou. Confere de novo as regras (ainda na fila há menos
-   * de 10 min, envio direto ligado, o contato falou nos últimos 30 dias, conexão aberta) e então:
-   * "digitando…" proporcional ao texto → "parou" → envia (nos grupos, citando a mensagem respondida) → marca como lidas
-   * as mensagens do contato SÓ dessa conversa → volta a indisponível. Nunca tenta de novo sozinho: uma falha antes do
-   * envio fica `failed`; uma queda durante o envio fica `unknown` (e é conferida na conversa).
+   * Job `send_message` (`{ sendId, attempt, gen }`): um envio que o mentor confirmou nesta conexão. Confere de novo as
+   * regras (mesma tentativa, mesma conexão, ainda na fila há menos de 10 min, envio direto ligado, o contato falou nos
+   * últimos 30 dias, conexão aberta) e então: "digitando…" proporcional ao texto → "parou" → envia para o destino
+   * confirmado (nos grupos citando a mensagem confirmada, com um id de mensagem gerado aqui) → marca como lidas as
+   * mensagens do contato SÓ dessa conversa → volta a indisponível. Nunca tenta de novo sozinho: uma falha antes do envio
+   * fica `failed`/`expired`; uma queda durante o envio fica `unknown` (e é conferida pelo id).
    */
-  private async executeSend(payload: { sendId?: unknown }): Promise<void> {
-    const { repo, clock } = this.deps
+  private async executeSend(payload: { sendId?: unknown; attempt?: unknown; gen?: unknown }, signal?: AbortSignal): Promise<void> {
+    const { repo, clock, queue } = this.deps
     const id = Number(payload?.sendId)
     const s = Number.isSafeInteger(id) ? repo.sends.get(id) : null
-    if (!s || s.status !== 'queued') return
+    if (!s || s.status !== 'queued' || s.attempt !== payload?.attempt) return
     const tag = `send #${s.id} chat=${chatHash(s.jid)}`
     const opts = this.sendOptions()
-    const expire = (why: string) => {
-      if (repo.sends.transition(s.id, ['queued'], 'expired', { error: why })) {
+    const expire = (from: Array<'queued' | 'typing'>, why: string) => {
+      if (repo.sends.transition(s.id, s.attempt, from, 'expired', { error: why })) {
         this.diag('send_expired', `${tag} ${why}`)
         this.emitSend(s.jid)
       }
     }
     const fail = (from: Array<'queued' | 'typing'>, why: string) => {
-      if (repo.sends.transition(s.id, from, 'failed', { error: why })) {
+      if (repo.sends.transition(s.id, s.attempt, from, 'failed', { error: why })) {
         this.diag('send_failed', `${tag} ${why}`)
         this.emitSend(s.jid)
       }
     }
-    if (!opts.enabled) return expire('envio direto desligado')
-    if (clock.now() - s.queuedAt > SEND_LIMITS.queuedMaxMs) return expire('mais de 10 min na fila')
+    // confirmado numa conexão que não existe mais: nunca sai depois de reconectar
+    if (payload?.gen !== this.gen) return expire(['queued'], CONN_LOST_REASON)
+    if (!opts.enabled) return expire(['queued'], 'envio direto desligado')
+    if (clock.now() - s.queuedAt > SEND_LIMITS.queuedMaxMs) return expire(['queued'], 'mais de 10 min na fila')
     const sock = this.sock
     const gen = this.gen
-    if (!sock || this.status !== 'open' || !sock.sendMessage) throw new DeferJobError('sem conexão aberta para enviar', SEND_DEFER_MS)
+    if (!sock || this.status !== 'open' || !sock.sendMessage) return expire(['queued'], CONN_LOST_REASON)
+    if (signal?.aborted) return fail(['queued'], 'tempo esgotado antes de enviar')
     const messages = repo.listMessages(s.jid, 300)
     // responder, nunca iniciar conversa
     if (!hasRecentContactMessage(messages, clock.now())) return fail(['queued'], 'sem mensagem do contato nos últimos 30 dias')
-    const quote = isGroupJid(s.jid) && opts.quoteInGroups ? pickQuote(messages) : null
+    // a citação é a que o mentor viu na confirmação; se ela sumiu, vai sem citação
+    const quoteRow = s.quotedId ? repo.getMessage(s.quotedId) : null
+    const quote = quoteRow && quoteRow.jid === s.jid && !quoteRow.fromMe ? quoteRow : null
     const keys = opts.markRead ? unreadKeys(messages) : []
-    if (!repo.sends.transition(s.id, ['queued'], 'typing', { startedAt: clock.now() })) return
+    if (!repo.sends.transition(s.id, s.attempt, ['queued'], 'typing', { startedAt: clock.now() })) return
     this.diag('send_typing', tag)
     this.emitSend(s.jid)
     let presence = false
@@ -1088,32 +1137,47 @@ export class WhatsAppClient extends EventEmitter {
       if (opts.typing && sock.sendPresenceUpdate) {
         try {
           presence = true
-          await sock.sendPresenceUpdate('composing', s.jid)
+          await sock.sendPresenceUpdate('composing', s.address)
           await this.wait(typingMs(s.text, this.rng()))
-          await sock.sendPresenceUpdate('paused', s.jid)
+          await sock.sendPresenceUpdate('paused', s.address)
         } catch (e) {
-          return fail(['typing'], `"digitando" falhou: ${errMsg(e).slice(0, 120)}`)
+          return fail(['typing'], `"digitando" falhou (${errCode(e)})`)
         }
       }
-      if (gen !== this.gen || this.status !== 'open') return fail(['typing'], 'a conexão caiu antes de enviar')
-      if (!repo.sends.transition(s.id, ['typing'], 'sending')) return
-      this.sendingId = s.id
+      if (gen !== this.gen || this.status !== 'open') return expire(['typing'], CONN_LOST_REASON)
+      if (signal?.aborted) return fail(['typing'], 'tempo esgotado antes de enviar')
+      if (queue.isPaused()) return expire(['typing'], PAUSED_REASON)
+      // nova tentativa: uma anterior pode ter chegado (o eco veio depois); nesse caso não envia de novo
+      if (s.attempt > 1) {
+        const echo = findSentEcho(s.msgIds, (mid) => repo.getMessage(mid))
+        if (echo) {
+          if (repo.sends.transition(s.id, s.attempt, ['typing'], 'sent', { sentAt: echo.ts, waMsgId: echo.id, error: null })) {
+            repo.setApprovedSentText(s.replyId, echo.text ?? s.text)
+            this.diag('send_sent', `${tag} a tentativa anterior já tinha chegado`)
+            this.emitSend(s.jid)
+          }
+          return
+        }
+      }
+      const msgId = newMessageId()
+      if (!repo.sends.transition(s.id, s.attempt, ['typing'], 'sending', { newMsgId: msgId })) return
+      this.inFlight.set(s.id, s.attempt)
       let res: Awaited<ReturnType<NonNullable<WaSocket['sendMessage']>>>
       try {
-        res = await sock.sendMessage(s.jid, { text: s.text }, quote ? { quoted: quotedMessage(quote) } : undefined)
+        res = await sock.sendMessage(s.address, { text: s.text }, quote ? { quoted: quotedMessage(quote), messageId: msgId } : { messageId: msgId })
       } catch (e) {
         // o pedido pode ter saído: nunca reenviar no escuro
-        if (repo.sends.transition(s.id, ['sending'], 'unknown', { error: `envio sem confirmação: ${errMsg(e).slice(0, 120)}` })) {
-          this.diag('send_unknown', `${tag} o WhatsApp não confirmou o envio`)
-          verifyUnknownSend(repo, { ...s, status: 'unknown', startedAt: s.startedAt ?? clock.now() })
+        if (repo.sends.transition(s.id, s.attempt, ['sending'], 'unknown', { error: `envio sem confirmação (${errCode(e)})` })) {
+          this.diag('send_unknown', `${tag} o WhatsApp não confirmou o envio (${errCode(e)})`)
+          verifyUnknownSend(repo, { ...repo.sends.get(s.id)! })
           this.emitSend(s.jid)
         }
         return
       } finally {
-        this.sendingId = null
+        this.inFlight.delete(s.id)
       }
       presence = true
-      if (repo.sends.transition(s.id, ['sending', 'unknown'], 'sent', { sentAt: clock.now(), waMsgId: res?.key?.id ?? null, error: null })) {
+      if (repo.sends.transition(s.id, s.attempt, ['sending', 'unknown'], 'sent', { sentAt: clock.now(), waMsgId: res?.key?.id ?? msgId, error: null })) {
         repo.setApprovedSentText(s.replyId, s.text)
         this.diag('send_sent', `${tag}${quote ? ' com citação' : ''}`)
         this.emitSend(s.jid)

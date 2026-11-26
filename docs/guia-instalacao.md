@@ -207,16 +207,19 @@ Nos grupos, a resposta sai **citando** a mensagem que você está respondendo: a
 | No cartão | O que significa | O que fazer |
 |---|---|---|
 | **Na fila — envia em 42 s** | Confirmada, esperando a vez. O Saga envia no máximo uma mensagem a cada 30 a 90 segundos. | Nada. Mudou de ideia? **Cancelar envio**. |
-| **Na fila — pausado** / **esperando o WhatsApp conectar** | Você clicou em **Pausar tudo**, ou o WhatsApp está desconectado. | **Retomar** no topo, ou espere conectar. Se passar de 10 minutos, o envio é cancelado sozinho (veja abaixo). |
+| **Na fila — pausado** | Você clicou em **Pausar tudo**. | **Retomar** no topo. Se passar de 10 minutos, o envio não sai mais sozinho (veja abaixo). |
 | **Digitando…** | O Saga está mostrando "digitando…" para a pessoa, por alguns segundos (mais tempo para textos longos), e já vai enviar. | Nada. |
 | **Enviada ✓ às 14:07** | O WhatsApp recebeu a mensagem. A conversa sai de "Para responder" assim que ela aparece no histórico, e os alertas se resolvem como quando você responde pelo celular. | Nada. |
 | **Não enviada — tentar de novo** | Não saiu (por exemplo, a internet caiu antes de enviar). Nada chegou para a pessoa. | **Tentar de novo** abre a confirmação outra vez. |
+| **Não enviada — a conexão caiu. Enviar de novo?** | A internet ou o WhatsApp caiu antes de a mensagem sair. **O Saga nunca envia sozinho depois de reconectar.** | Quando a faixa de cima voltar a **Conectado**, clique em **Enviar de novo** e confirme. |
 | **Não enviada — aguardando confirmação** | Ficou mais de 10 minutos na fila, ou o Saga foi fechado antes de enviar. **O Saga nunca envia sozinho depois de reabrir ou reconectar.** | **Tentar de novo** e confirme, se ainda fizer sentido. |
-| **Não sei se foi enviada — conferir** | A conexão caiu bem na hora do envio. O Saga procura a mensagem na conversa e, se ela aparecer, marca como enviada sozinho. | Clique em **Conferir**. Se ela não aparecer, olhe no celular: se não chegou, clique em **Enviar de novo** (o Saga pede a confirmação de novo, para não mandar duas vezes). |
+| **Não sei se foi enviada — conferir** | A conexão caiu bem na hora do envio. O Saga procura a mensagem na conversa e, se ela aparecer, marca como enviada sozinho. | Clique em **Conferir**. Se ela não aparecer, olhe no celular: se não chegou, clique em **Enviar de novo** (o Saga pede a confirmação de novo; se a primeira chegar nesse meio-tempo, ele não manda a segunda). Se o WhatsApp ainda estiver respondendo ao primeiro envio, o Saga pede para esperar um pouco. |
 
 ![Envio na fila, com a contagem regressiva](img/envio-na-fila.png)
 
 ![Não sei se foi enviada: conferir e enviar de novo](img/envio-nao-sei.png)
+
+O botão **Enviar** só funciona com o WhatsApp **Conectado**; sem conexão, a confirmação avisa e não deixa enviar.
 
 **Configurações › Envio direto** (tudo ligado por padrão):
 

@@ -521,8 +521,8 @@ describe('JobQueue', () => {
       expect(diag[0]).toMatch(/^queue_summary /)
     })
 
-    it('prazos padrão: download 120 s, transcrição 180 s, perfil 60 s, alertas 90 s, envio 60 s', () => {
-      expect(DEFAULT_JOB_TIMEOUTS_MS).toEqual({ download_audio: 120_000, transcribe: 180_000, fetch_profile: 60_000, classify: 90_000, send_message: 60_000 })
+    it('prazos padrão: download 120 s, transcrição 180 s, perfil 60 s, alertas 90 s, envio 180 s', () => {
+      expect(DEFAULT_JOB_TIMEOUTS_MS).toEqual({ download_audio: 120_000, transcribe: 180_000, fetch_profile: 60_000, classify: 90_000, send_message: 180_000 })
     })
   })
 

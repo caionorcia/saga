@@ -11,6 +11,12 @@ export interface SendRow {
   replyId: number
   jid: string
   text: string
+  /** para onde vai: o grupo, ou na individual o JID como o contato escreveu por último (@lid ou telefone) */
+  address: string
+  /** grupo: a mensagem citada vista na confirmação (null = sem citação) */
+  quotedId: string | null
+  /** ids de mensagem gerados pelo app, um por tentativa que chegou a pedir o envio */
+  msgIds: string[]
   status: SendStatus
   /** 1 na primeira confirmação; cada nova confirmação depois de falha/expiração/desconhecido soma 1 */
   attempt: number
@@ -22,6 +28,15 @@ export interface SendRow {
   error: string | null
 }
 
+function ids(raw: unknown): string[] {
+  try {
+    const v = JSON.parse(String(raw ?? '[]'))
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 function toSend(r: Row): SendRow {
   return {
     id: r.id,
@@ -29,6 +44,9 @@ function toSend(r: Row): SendRow {
     replyId: r.reply_id,
     jid: r.jid,
     text: r.text,
+    address: r.address,
+    quotedId: r.quoted_id ?? null,
+    msgIds: ids(r.msg_ids_json),
     status: r.status,
     attempt: r.attempt,
     queuedAt: r.queued_at,
@@ -42,7 +60,27 @@ function toSend(r: Row): SendRow {
 /** A chave do job da fila de um envio (uma por confirmação: uma tentativa nova nunca reaproveita o job antigo). */
 export const sendJobKey = (s: Pick<SendRow, 'id' | 'attempt'>) => `send:${s.id}:${s.attempt}`
 
-/** Envio direto (v0.4.0): a tabela `sends`. As transições de estado ficam aqui, com as condições no próprio UPDATE. */
+export class SendConflictError extends Error {
+  constructor() {
+    super('a chave do envio já pertence a outra conversa')
+    this.name = 'SendConflictError'
+  }
+}
+
+export interface SendTransitionExtra {
+  error?: string | null
+  startedAt?: number
+  sentAt?: number
+  /** id da mensagem que confirmou o envio (resposta do WhatsApp ou mensagem achada na conversa) */
+  waMsgId?: string | null
+  /** id gerado para esta tentativa: vira o `wa_msg_id` e entra na lista de ids (conferência) */
+  newMsgId?: string
+}
+
+/**
+ * Envio direto (v0.4.0): a tabela `sends`. Toda transição de estado é condicional ao estado atual E à tentativa: o
+ * handler de uma tentativa antiga (por exemplo, que estourou o prazo) nunca mexe na linha de uma tentativa nova.
+ */
 export class SendRepo {
   constructor(
     private readonly db: DatabaseSync,
@@ -56,6 +94,14 @@ export class SendRepo {
 
   byIdemKey(key: string): SendRow | null {
     const r = this.db.prepare('SELECT * FROM sends WHERE idem_key = ?').get(key) as Row | undefined
+    return r ? toSend(r) : null
+  }
+
+  /** O envio que gerou este id de mensagem (o eco da mensagem enviada), ou null. */
+  byMsgId(msgId: string): SendRow | null {
+    const r = this.db
+      .prepare('SELECT s.* FROM sends s WHERE EXISTS (SELECT 1 FROM json_each(s.msg_ids_json) WHERE value = ?) ORDER BY s.id DESC LIMIT 1')
+      .get(msgId) as Row | undefined
     return r ? toSend(r) : null
   }
 
@@ -73,39 +119,44 @@ export class SendRepo {
   /**
    * Novo envio na fila, ou o mesmo de antes (mesma chave de idempotência): um que ainda vai sair ou já saiu é devolvido
    * como está (`created: false`); um que falhou, expirou, ficou desconhecido ou foi cancelado volta para a fila com
-   * `attempt + 1` (só depois de uma nova confirmação explícita, que é quem chama).
+   * `attempt + 1` e o destino/citação desta nova confirmação (só depois de uma nova confirmação explícita, que é quem
+   * chama). A chave de outra conversa lança `SendConflictError`.
    */
-  enqueue(a: { idemKey: string; replyId: number; jid: string; text: string }): { send: SendRow; created: boolean } {
+  enqueue(a: { idemKey: string; replyId: number; jid: string; text: string; address: string; quotedId: string | null }): { send: SendRow; created: boolean } {
     const now = this.clock.now()
     const cur = this.byIdemKey(a.idemKey)
     if (!cur) {
       const res = this.db
-        .prepare(`INSERT INTO sends(idem_key, reply_id, jid, text, status, queued_at) VALUES (?, ?, ?, ?, 'queued', ?)`)
-        .run(a.idemKey, a.replyId, a.jid, a.text, now)
+        .prepare(`INSERT INTO sends(idem_key, reply_id, jid, text, address, quoted_id, status, queued_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`)
+        .run(a.idemKey, a.replyId, a.jid, a.text, a.address, a.quotedId, now)
       return { send: this.get(Number(res.lastInsertRowid))!, created: true }
     }
+    if (cur.jid !== a.jid || cur.replyId !== a.replyId) throw new SendConflictError()
     if (cur.status === 'queued' || cur.status === 'typing' || cur.status === 'sending' || cur.status === 'sent') {
       return { send: cur, created: false }
     }
     this.db
       .prepare(
-        `UPDATE sends SET status = 'queued', attempt = attempt + 1, queued_at = ?, started_at = NULL, sent_at = NULL, wa_msg_id = NULL, error = NULL
-         WHERE id = ?`
+        `UPDATE sends SET status = 'queued', attempt = attempt + 1, queued_at = ?, started_at = NULL, sent_at = NULL, wa_msg_id = NULL,
+           error = NULL, address = ?, quoted_id = ?
+         WHERE id = ? AND attempt = ?`
       )
-      .run(now, cur.id)
+      .run(now, a.address, a.quotedId, cur.id, cur.attempt)
     return { send: this.get(cur.id)!, created: true }
   }
 
-  /** Muda o estado só se o atual for um dos `from`. `true` se mudou. */
-  transition(id: number, from: SendStatus[], to: SendStatus, extra: { error?: string | null; startedAt?: number; sentAt?: number; waMsgId?: string | null } = {}): boolean {
+  /** Muda o estado só se a tentativa for a mesma e o estado atual for um dos `from`. `true` se mudou. */
+  transition(id: number, attempt: number, from: SendStatus[], to: SendStatus, extra: SendTransitionExtra = {}): boolean {
+    const msgId = extra.newMsgId ?? extra.waMsgId ?? null
     const res = this.db
       .prepare(
         `UPDATE sends SET status = ?1,
            error = CASE WHEN ?2 THEN ?3 ELSE error END,
            started_at = COALESCE(?4, started_at),
            sent_at = COALESCE(?5, sent_at),
-           wa_msg_id = COALESCE(?6, wa_msg_id)
-         WHERE id = ?7 AND status IN (SELECT value FROM json_each(?8))`
+           wa_msg_id = COALESCE(?6, wa_msg_id),
+           msg_ids_json = CASE WHEN ?7 IS NULL THEN msg_ids_json ELSE json_insert(msg_ids_json, '$[#]', ?7) END
+         WHERE id = ?8 AND attempt = ?9 AND status IN (SELECT value FROM json_each(?10))`
       )
       .run(
         to,
@@ -113,8 +164,10 @@ export class SendRepo {
         extra.error ?? null,
         extra.startedAt ?? null,
         extra.sentAt ?? null,
-        extra.waMsgId ?? null,
+        msgId,
+        extra.newMsgId ?? null,
         id,
+        attempt,
         JSON.stringify(from)
       )
     return Number(res.changes) > 0

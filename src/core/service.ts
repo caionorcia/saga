@@ -46,9 +46,9 @@ import type { NormalizedMessage } from './types'
 import { WhatsAppClient, type ConnState, type WhatsAppClientDeps } from './wa/client'
 import type { WaVersionFetcher } from './wa/version'
 import { formatPhone } from './db/repo'
-import { sendJobKey, type SendRow } from './db/sendRepo'
+import { SendConflictError, sendJobKey, type SendRow } from './db/sendRepo'
 import { SendGate } from './send/gate'
-import { chatHash, hasRecentContactMessage, pickQuote, textHash } from './send/logic'
+import { chatHash, hasRecentContactMessage, pickQuote, sendAddress, textHash } from './send/logic'
 import { verifyUnknownSend } from './send/verify'
 import {
   NOT_CONFIRMED_TEXT,
@@ -90,6 +90,10 @@ export interface WaClientLike {
   getRetryAt?(): number | null
   isDiskLow(): boolean
   recheckDisk(): Promise<void>
+  /** geração da conexão atual (vai no job de cada envio: uma conexão nova invalida o que foi confirmado antes) */
+  connGen?(): number
+  /** o pedido deste envio ao WhatsApp ainda está em andamento */
+  isSendInFlight?(sendId: number): boolean
 }
 
 export interface SagaServiceOpts {
@@ -1076,7 +1080,17 @@ export class SagaService extends EventEmitter {
     if ([...t].length > SEND_LIMITS.textChars) return 'too_long'
     if (!this.repo.listContacts({ includeHidden: true }).some((c) => c.jid === jid)) return 'unknown_chat'
     if (!hasRecentContactMessage(this.repo.listMessages(jid, 300), this.clock.now())) return 'no_recent_contact'
+    // confirmar sem conexão não adianta: o envio só vale para a conexão em que foi confirmado
+    if (this.persistedStop || this.wa.getStatus() !== 'open') return 'offline'
     return null
+  }
+
+  /** O destino e a citação que a confirmação mostra (e que ficam presos ao token). */
+  private sendBinding(jid: string, isGroup: boolean): { address: string; quote: MessageRow | null } {
+    const messages = this.repo.listMessages(jid, 300)
+    const q = isGroup && this.settings.sendOptions().quoteInGroups ? pickQuote(messages) : null
+    // só cita com a chave original da mensagem (nunca uma reconstruída)
+    return { address: sendAddress(messages, jid), quote: q?.waKeyJson ? q : null }
   }
 
   /**
@@ -1090,16 +1104,15 @@ export class SagaService extends EventEmitter {
     if (refusal) return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
     const contact = this.repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)!
     const options = this.settings.sendOptions()
+    const bind = this.sendBinding(jid, contact.isGroup)
     let quote: { senderName: string; text: string } | null = null
-    if (contact.isGroup && options.quoteInGroups) {
-      const q = pickQuote(this.repo.listMessages(jid, 300))
-      if (q) {
-        const body = q.text ?? (q.transcriptStatus === 'done' ? q.transcript : null) ?? (q.kind === 'audio' ? '[áudio]' : '')
-        quote = { senderName: q.senderLabel ?? 'Participante', text: body.length > 140 ? `${body.slice(0, 139)}…` : body }
-      }
+    const q = bind.quote
+    if (q) {
+      const body = q.text ?? (q.transcriptStatus === 'done' ? q.transcript : null) ?? (q.kind === 'audio' ? '[áudio]' : '')
+      quote = { senderName: q.senderLabel ?? 'Participante', text: body.length > 140 ? `${body.slice(0, 139)}…` : body }
     }
     const phone = contact.isGroup || jid.endsWith('@lid') ? null : formatPhone(jid)
-    const { token, expiresAt } = this.sendGate.issue(jid, text)
+    const { token, expiresAt } = this.sendGate.issue(jid, text, { address: bind.address, quotedId: q?.id ?? null })
     return { ok: true, preview: { token, expiresAt, jid, text, recipient: { name: contact.displayName, phone, isGroup: contact.isGroup }, quote, options } }
   }
 
@@ -1111,7 +1124,8 @@ export class SagaService extends EventEmitter {
   async sendReply(input: SendReplyInput): Promise<SendReplyResult> {
     const jid = input.jid
     const text = input.text.trim()
-    if (!this.sendGate.consume(input.token, jid, text)) {
+    const bind = this.sendGate.consume(input.token, jid, text)
+    if (!bind) {
       this.diag('send_refused', `chat=${chatHash(jid)} sem confirmação válida`)
       return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
     }
@@ -1120,9 +1134,15 @@ export class SagaService extends EventEmitter {
       this.diag('send_refused', `chat=${chatHash(jid)} ${refusal}`)
       return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
     }
-    const reused = input.replyId ? this.repo.getApproved(input.replyId) : null
-    const replyId =
-      reused && reused.jid === jid && reused.finalText.trim() === text
+    const reusedRow = input.replyId ? this.repo.getApproved(input.replyId) : null
+    const reused = reusedRow && reusedRow.jid === jid && reusedRow.finalText.trim() === text ? reusedRow : null
+    // o pedido anterior desta mesma resposta ainda não terminou: nunca uma segunda tentativa por cima
+    const prev = reused ? this.repo.sends.byIdemKey(`${reused.id}:${textHash(text)}`) : null
+    if (prev && this.wa.isSendInFlight?.(prev.id)) {
+      this.diag('send_refused', `send #${prev.id} chat=${chatHash(jid)} in_flight`)
+      return { ok: false, code: 'in_flight', message: SEND_REFUSAL_TEXT.in_flight }
+    }
+    const replyId = reused
         ? reused.id
         : await this.saveReply({
             jid,
@@ -1131,9 +1151,18 @@ export class SagaService extends EventEmitter {
             analysisLastMsgId: input.analysisLastMsgId ?? null,
             ...(input.chosenIndex !== undefined ? { chosenIndex: input.chosenIndex } : {})
           })
-    const { send, created } = this.repo.sends.enqueue({ idemKey: `${replyId}:${textHash(text)}`, replyId, jid, text })
+    let enq: ReturnType<Repo['sends']['enqueue']>
+    try {
+      enq = this.repo.sends.enqueue({ idemKey: `${replyId}:${textHash(text)}`, replyId, jid, text, address: bind.address, quotedId: bind.quotedId })
+    } catch (e) {
+      if (!(e instanceof SendConflictError)) throw e
+      this.diag('send_refused', `chat=${chatHash(jid)} conflito de chave`)
+      return { ok: false, code: 'unknown_chat', message: SEND_REFUSAL_TEXT.unknown_chat }
+    }
+    const { send, created } = enq
     if (created) {
-      this.queue.enqueue('send_message', sendJobKey(send), { sendId: send.id }, SEND_PRIORITY)
+      // a geração da conexão vai junto: se a conexão cair antes da vez, este envio nunca sai
+      this.queue.enqueue('send_message', sendJobKey(send), { sendId: send.id, attempt: send.attempt, gen: this.wa.connGen?.() ?? 0 }, SEND_PRIORITY)
       this.sendDiag('send_queued', send, send.attempt > 1 ? `tentativa ${send.attempt}` : '')
     }
     this.markSends(jid)
@@ -1144,7 +1173,7 @@ export class SagaService extends EventEmitter {
   /** "Cancelar envio": só enquanto está na fila (depois do "digitando…" não dá mais). `true` se cancelou. */
   async cancelSend(id: number): Promise<boolean> {
     const s = this.repo.sends.get(id)
-    if (!s || !this.repo.sends.transition(id, ['queued'], 'canceled')) return false
+    if (!s || !this.repo.sends.transition(id, s.attempt, ['queued'], 'canceled')) return false
     this.sendDiag('send_canceled', s)
     this.markSends(s.jid)
     return true
@@ -1196,7 +1225,7 @@ export class SagaService extends EventEmitter {
     const cut = this.clock.now() - SEND_LIMITS.queuedMaxMs
     for (const s of this.repo.sends.listByStatus('queued')) {
       if (s.queuedAt > cut) continue
-      if (this.repo.sends.transition(s.id, ['queued'], 'expired', { error: 'mais de 10 min na fila' })) {
+      if (this.repo.sends.transition(s.id, s.attempt, ['queued'], 'expired', { error: 'mais de 10 min na fila' })) {
         this.sendDiag('send_expired', s, 'mais de 10 min na fila')
         this.markSends(s.jid)
       }
@@ -1209,12 +1238,12 @@ export class SagaService extends EventEmitter {
    */
   private recoverSends(): void {
     for (const s of this.repo.sends.listByStatus('queued', 'typing')) {
-      if (this.repo.sends.transition(s.id, ['queued', 'typing'], 'expired', { error: 'o Saga fechou antes de enviar' })) {
+      if (this.repo.sends.transition(s.id, s.attempt, ['queued', 'typing'], 'expired', { error: 'o Saga fechou antes de enviar' })) {
         this.sendDiag('send_expired', s, 'o Saga fechou antes de enviar')
       }
     }
     for (const s of this.repo.sends.listByStatus('sending')) {
-      if (this.repo.sends.transition(s.id, ['sending'], 'unknown', { error: 'o Saga fechou durante o envio' })) {
+      if (this.repo.sends.transition(s.id, s.attempt, ['sending'], 'unknown', { error: 'o Saga fechou durante o envio' })) {
         this.sendDiag('send_unknown', s, 'o Saga fechou durante o envio')
       }
     }
@@ -1235,14 +1264,21 @@ export class SagaService extends EventEmitter {
 
   /** O job do envio estourou o prazo (ou lançou): o envio fica no estado certo, nunca volta para a fila sozinho. */
   private sendJobFailed(payload: unknown): void {
-    const id = Number((payload as { sendId?: unknown } | null)?.sendId)
+    const p = payload as { sendId?: unknown; attempt?: unknown } | null
+    const id = Number(p?.sendId)
+    const attempt = Number(p?.attempt)
     const s = Number.isSafeInteger(id) ? this.repo.sends.get(id) : null
-    if (!s) return
-    if (this.repo.sends.transition(id, ['queued', 'typing'], 'failed', { error: 'não chegou a enviar' })) {
+    if (!s || s.attempt !== attempt) return
+    // o pedido ao WhatsApp ainda está em andamento: fica "enviando" até ele terminar (quem decide é a resposta dele)
+    if (this.wa.isSendInFlight?.(id)) {
+      this.sendDiag('send_slow', s, 'o WhatsApp ainda não respondeu; esperando')
+      return
+    }
+    if (this.repo.sends.transition(id, attempt, ['queued', 'typing'], 'failed', { error: 'não chegou a enviar' })) {
       this.sendDiag('send_failed', s, 'não chegou a enviar')
-    } else if (this.repo.sends.transition(id, ['sending'], 'unknown', { error: 'o WhatsApp não respondeu' })) {
+    } else if (this.repo.sends.transition(id, attempt, ['sending'], 'unknown', { error: 'o WhatsApp não respondeu' })) {
       this.sendDiag('send_unknown', s, 'o WhatsApp não respondeu')
-      verifyUnknownSend(this.repo, { ...s, status: 'unknown' })
+      verifyUnknownSend(this.repo, this.repo.sends.get(id)!)
     }
     this.markSends(s.jid)
   }
@@ -1272,7 +1308,7 @@ export class SagaService extends EventEmitter {
     // envio direto desligado: o que estava na fila não sai (volta a "aguardando confirmação")
     if (patch.directSend === false) {
       for (const s of this.repo.sends.listByStatus('queued')) {
-        if (this.repo.sends.transition(s.id, ['queued'], 'expired', { error: 'envio direto desligado' })) {
+        if (this.repo.sends.transition(s.id, s.attempt, ['queued'], 'expired', { error: 'envio direto desligado' })) {
           this.sendDiag('send_expired', s, 'envio direto desligado')
           this.markSends(s.jid)
         }

@@ -63,6 +63,40 @@ describe('Enviar (envio direto)', () => {
     expect(await screen.findByText('Envio cancelado')).toBeTruthy()
   })
 
+  it('Ctrl+Enter repetido (ou clique duplo) envia uma vez só', async () => {
+    const ctl = install()
+    render(<Suggestions jid={ANA} />)
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Enviar' }))[0])
+    const dlg = await screen.findByRole('dialog')
+    await within(dlg).findByText('Ana Paula Souza')
+    const box = within(dlg).getByLabelText('Mensagem')
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
+      fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
+      fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls(ctl, 'sendReply')).toHaveLength(1)
+  })
+
+  it('conexão caiu antes de enviar: o cartão pergunta "Enviar de novo?" e o botão abre uma nova confirmação', async () => {
+    const ctl = install()
+    render(<Suggestions jid={ANA} />)
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Enviar' }))[0])
+    const dlg = await screen.findByRole('dialog')
+    await within(dlg).findByText('Ana Paula Souza')
+    await act(async () => {
+      fireEvent.click(within(dlg).getByRole('button', { name: 'Enviar' }))
+    })
+    await screen.findByText(/Na fila/)
+    act(() => ctl.setSend(ctl.lastSend()!.id, { status: 'expired', error: 'a conexão caiu antes de enviar', etaAt: null }))
+    expect(await screen.findByText('Não enviada — a conexão caiu. Enviar de novo?')).toBeTruthy()
+    const before = calls(ctl, 'prepareSend').length
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar de novo' }))
+    await screen.findByRole('dialog')
+    await waitFor(() => expect(calls(ctl, 'prepareSend').length).toBe(before + 1))
+  })
+
   it('Cancelar fecha o diálogo sem enviar nada', async () => {
     const ctl = install()
     render(<Suggestions jid={ANA} />)
@@ -125,6 +159,8 @@ describe('Enviar (envio direto)', () => {
     expect(sendStatusText({ ...base, status: 'failed' })).toBe('Não enviada — tentar de novo')
     expect(sendStatusText({ ...base, status: 'unknown' })).toBe('Não sei se foi enviada — conferir')
     expect(sendStatusText({ ...base, status: 'expired' })).toBe('Não enviada — aguardando confirmação')
+    expect(sendStatusText({ ...base, status: 'expired', error: 'a conexão caiu antes de enviar' })).toBe('Não enviada — a conexão caiu. Enviar de novo?')
+    expect(sendStatusText({ ...base, status: 'expired', error: 'pausado' })).toBe('Não enviada — você pausou. Enviar de novo?')
   })
 })
 

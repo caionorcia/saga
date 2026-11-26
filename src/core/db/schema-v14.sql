@@ -10,6 +10,13 @@ CREATE TABLE sends (
   reply_id INTEGER NOT NULL,
   jid TEXT NOT NULL,
   text TEXT NOT NULL,
+  -- para onde vai (escolhido na confirmação): o grupo, ou na individual o JID como o contato escreveu por último
+  -- (@lid quando a conversa migrou para LID, senão o telefone)
+  address TEXT NOT NULL,
+  -- grupo: a mensagem citada que o mentor viu na confirmação (null = sem citação)
+  quoted_id TEXT,
+  -- os ids de mensagem que o próprio app gerou para cada tentativa (conferir na conversa pelo id, sem depender do relógio)
+  msg_ids_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL CHECK (status IN ('queued', 'typing', 'sending', 'sent', 'failed', 'unknown', 'expired', 'canceled')),
   attempt INTEGER NOT NULL DEFAULT 1,
   queued_at INTEGER NOT NULL,

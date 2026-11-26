@@ -323,8 +323,7 @@ individuais não citar.
   (nome e número, ou o nome do grupo), nos grupos a prévia da mensagem citada ("Respondendo a …"), o texto final
   (editável) e **Enviar** / **Cancelar** (Ctrl+Enter confirma, Esc cancela). Enviar = escolher a sugestão (como
   Copiar/Salvar: grava na memória com as não escolhidas) + pôr o envio na fila. O cartão mostra o estado: "Na fila —
-  envia em 42 s" (contagem regressiva, com "Cancelar envio"; "pausado" ou "esperando o WhatsApp conectar" quando for o
-  caso), "Digitando…", "Enviada ✓ às HH:MM", "Não enviada — tentar de novo", "Não enviada — aguardando confirmação"
+  envia em 42 s" (contagem regressiva, com "Cancelar envio"; "pausado" quando for o caso), "Digitando…", "Enviada ✓ às HH:MM", "Não enviada — tentar de novo", "Não enviada — aguardando confirmação"
   (expirou) e "Não sei se foi enviada — conferir" (Conferir procura na conversa; sem achar, "Enviar de novo" pede nova
   confirmação). Enquanto o envio não termina, o texto do cartão fica só leitura.
 - **Configurações › Envio direto:** "Mostrar o botão Enviar nas sugestões" (ligado por padrão; desligado, o botão some
@@ -349,7 +348,33 @@ individuais não citar.
   conversa; nunca o texto nem o jid.
 - **Tabela `sends`:** um envio por resposta aprovada + impressão do texto (`idem_key` único); estados `queued`,
   `typing`, `sending`, `sent`, `failed`, `unknown`, `expired`, `canceled`; `attempt` soma 1 a cada nova confirmação
-  depois de falha/expiração/desconhecido, e cada tentativa tem o seu job (`send:<id>:<tentativa>`).
+  depois de falha/expiração/desconhecido, e cada tentativa tem o seu job (`send:<id>:<tentativa>`), cujo payload leva a
+  tentativa e a geração da conexão. Toda mudança de estado é condicional ao estado atual E à tentativa (um handler velho
+  nunca mexe na tentativa nova). `address` (destino) e `quoted_id` (citação) ficam presos na confirmação; `msg_ids_json`
+  guarda os ids de mensagem que o app gerou para cada tentativa.
+
+#### Ajustes da revisão de segurança (v0.4.0)
+
+- **Nunca sai depois de reconectar:** qualquer perda de conexão (estado diferente de `open`, queda, "Reconectar",
+  parar o app) leva tudo o que está na fila ou no "digitando…" para `expired` ("a conexão caiu antes de enviar") e conclui
+  os jobs. O job leva a geração da conexão em que foi confirmado; `executeSend` recusa uma geração diferente. Sem
+  conexão aberta, a confirmação é recusada ("O WhatsApp não está conectado"). O cartão mostra "Não enviada — a conexão
+  caiu. Enviar de novo?" (nova confirmação).
+- **Sem envio duplicado:** prazo do job de 180 s; estourar o prazo com o pedido ao WhatsApp ainda em andamento NÃO dá o
+  envio como desconhecido (fica "enviando" até o pedido terminar, `send_slow` no registro); uma nova tentativa da mesma
+  resposta é recusada enquanto o pedido anterior está em andamento; numa tentativa > 1, logo antes de enviar, se a
+  mensagem de uma tentativa anterior já está na conversa, marca enviada sem enviar; o sinal de prazo do job é conferido
+  antes do "digitando…" e antes de enviar.
+- **Conferência pelo id:** o app gera o id da mensagem (formato do WhatsApp Web) e passa em `sendMessage(..., {
+  messageId })`; o estado desconhecido é resolvido achando uma mensagem do mentor com um desses ids (sem comparar relógio
+  nem texto). O eco com esse id fica na conversa de onde a resposta saiu, mesmo vindo pelo @lid.
+- **Endereço LID:** na individual, o destino (envio e "digitando…") é o `remoteJid` original da última mensagem do
+  contato, sem dispositivo (@lid quando a conversa migrou, senão o telefone), escolhido na confirmação.
+- **Menores:** "Pausar tudo" durante o "digitando…" expira o envio ("pausado"); a citação é exatamente a mensagem vista
+  na confirmação (se sumiu, vai sem citação; sem chave original, não cita); `readMessages` só com chaves originais (nunca
+  reconstruídas); `sends.error` e o registro só levam o tipo/código do erro, nunca a mensagem; "contato recente" conta
+  só conteúdo (texto, áudio, mídia, figurinha); chave de idempotência de outra conversa é recusada; o diálogo não envia
+  duas vezes com Ctrl+Enter repetido.
 
 ### Versão 0.3.1 (a pedido do mentor)
 
@@ -616,7 +641,7 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
   "Digitando…" proporcional ao tamanho do texto (1,5 s + 35 ms/caractere, até 8 s).
 - **Nunca reenviar no escuro:** se o estado de um envio ficou desconhecido
   (o app fechou ou o socket caiu com o pedido de envio em andamento, ou o WhatsApp não confirmou), ele fica `unknown`
-  e o app procura na conversa uma mensagem do mentor com o mesmo texto (±10 min do começo do envio): achou, vira
+  e o app procura na conversa a mensagem do mentor com o id que ele mesmo gerou para o envio: achou, vira
   enviada; senão mostra "Não sei se foi enviada — conferir" e só reenvia com um clique do mentor (nova confirmação).
   Também confere a cada mensagem do mentor que chega e ao abrir o app.
 - **Idempotência:** uma chave por resposta aprovada + impressão do texto; um pedido repetido para um envio na fila, em

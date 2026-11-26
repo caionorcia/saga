@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MessageRow } from '../../../src/core/db/repo'
-import { findSentEcho, hasRecentContactMessage, messageKey, pickQuote, quotedMessage, unreadKeys } from '../../../src/core/send/logic'
+import { errCode, findSentEcho, hasRecentContactMessage, messageKey, newMessageId, pickQuote, quotedMessage, sendAddress, unreadKeys } from '../../../src/core/send/logic'
 import { SendGate } from '../../../src/core/send/gate'
 import { FakeClock } from '../../../src/core/clock'
 import { typingMs } from '../../../src/shared/send'
@@ -58,36 +58,62 @@ describe('envio: regras puras', () => {
     expect(audio.message).toEqual({ audioMessage: { seconds: 9 } })
   })
 
-  it('marcar como lida: só as do contato depois da última resposta do mentor, com a chave original', () => {
+  it('marcar como lida: só as do contato depois da última resposta do mentor, só com a chave original (nunca reconstruída)', () => {
     const lidKey = JSON.stringify({ remoteJid: '999:2@lid', id: 'x2' })
+    const pnKey = JSON.stringify({ remoteJid: ANA, id: 'x3' })
     const msgs = [
-      m({ id: 'x0', ts: 1, jid: ANA, senderJid: null }),
+      m({ id: 'x0', ts: 1, jid: ANA, senderJid: null, waKeyJson: JSON.stringify({ remoteJid: ANA, id: 'x0' }) }),
       m({ id: 'me', ts: 2, jid: ANA, fromMe: true, senderJid: null }),
+      // de antes da v0.4.0: sem chave original, fica de fora
       m({ id: 'x1', ts: 3, jid: ANA, senderJid: null }),
-      m({ id: 'x2', ts: 4, jid: ANA, senderJid: null, waKeyJson: lidKey })
+      m({ id: 'x2', ts: 4, jid: ANA, senderJid: null, waKeyJson: lidKey }),
+      m({ id: 'x3', ts: 5, jid: ANA, senderJid: null, waKeyJson: pnKey })
     ]
     expect(unreadKeys(msgs)).toEqual([
-      { remoteJid: ANA, id: 'x1', fromMe: false },
-      { remoteJid: '999:2@lid', id: 'x2', fromMe: false }
+      { remoteJid: '999:2@lid', id: 'x2', fromMe: false },
+      { remoteJid: ANA, id: 'x3', fromMe: false }
     ])
+  })
+
+  it('destino: grupo é o grupo; individual é o JID com que o contato escreveu por último (@lid sem dispositivo, senão o telefone)', () => {
+    expect(sendAddress([m({ id: 'g', ts: 1 })], GRP)).toBe(GRP)
+    const lid = (id: string, ts: number, remote: string) => m({ id, ts, jid: ANA, senderJid: null, waKeyJson: JSON.stringify({ remoteJid: remote, id }) })
+    expect(sendAddress([lid('a', 1, ANA), lid('b', 2, '999:7@lid')], ANA)).toBe('999@lid')
+    expect(sendAddress([lid('a', 1, '999:7@lid'), lid('b', 2, '5547999998888:3@s.whatsapp.net')], ANA)).toBe(ANA)
+    // sem chave original (mensagens antigas) ou só minhas: o JID da conversa
+    expect(sendAddress([m({ id: 'a', ts: 1, jid: ANA }), m({ id: 'me', ts: 2, jid: ANA, fromMe: true })], ANA)).toBe(ANA)
+  })
+
+  it('id de mensagem no formato do WhatsApp Web; erro vira só tipo e código (sem número nem texto)', () => {
+    expect(newMessageId()).toMatch(/^3EB0[0-9A-F]{36}$/)
+    expect(newMessageId()).not.toBe(newMessageId())
+    const e = Object.assign(new Error('falhou para 5547999998888@s.whatsapp.net'), { output: { statusCode: 408 } })
+    expect(errCode(e)).toBe('Error 408')
+    expect(errCode(Object.assign(new TypeError('x 5511@lid'), {}))).toBe('TypeError')
+    expect(errCode('texto com 5547999998888')).toBe('Error')
   })
 
   it('só responde: o contato precisa ter mandado mensagem nos últimos 30 dias (as minhas não contam)', () => {
     const DAY = 86_400_000
     expect(hasRecentContactMessage([m({ id: 'a', ts: NOW - 29 * DAY })], NOW)).toBe(true)
+    // figurinha/mídia contam como conteúdo
+    expect(hasRecentContactMessage([m({ id: 'st', ts: NOW - DAY, kind: 'other', text: '[figurinha]' })], NOW)).toBe(true)
+    // um tipo que não é conteúdo (defesa: reações e controle nem chegam ao banco) não conta
+    expect(hasRecentContactMessage([m({ id: 'r', ts: NOW - DAY, kind: 'reaction' as any })], NOW)).toBe(false)
     expect(hasRecentContactMessage([m({ id: 'a', ts: NOW - 31 * DAY }), m({ id: 'me', ts: NOW - DAY, fromMe: true })], NOW)).toBe(false)
     expect(hasRecentContactMessage([], NOW)).toBe(false)
   })
 
-  it('conferir: mensagem minha com o mesmo texto (espaços não contam) até 10 min do começo do envio', () => {
-    const msgs = [
-      m({ id: 'far', ts: NOW - 11 * 60_000, fromMe: true, text: 'Combinado!' }),
-      m({ id: 'other', ts: NOW + 1000, fromMe: true, text: 'Outra coisa' }),
-      m({ id: 'theirs', ts: NOW, text: 'Combinado!' }),
-      m({ id: 'near', ts: NOW + 60_000, fromMe: true, text: ' Combinado!\n' })
-    ]
-    expect(findSentEcho(msgs, 'Combinado!', NOW)?.id).toBe('near')
-    expect(findSentEcho(msgs.slice(0, 3), 'Combinado!', NOW)).toBeNull()
+  it('conferir: pelo id gerado pelo app (qualquer tentativa), só mensagem minha; sem comparar relógio nem texto', () => {
+    const db = new Map([
+      ['ID1', m({ id: 'ID1', ts: NOW + 3 * 3_600_000, fromMe: true, text: 'Outro texto (editado no celular)' })],
+      ['THEIRS', m({ id: 'THEIRS', ts: NOW, text: 'Combinado!' })]
+    ])
+    const get = (id: string) => db.get(id) ?? null
+    expect(findSentEcho(['ID0', 'ID1'], get)?.id).toBe('ID1')
+    expect(findSentEcho(['ID0'], get)).toBeNull()
+    expect(findSentEcho(['THEIRS'], get)).toBeNull()
+    expect(findSentEcho([], get)).toBeNull()
   })
 
   it('"digitando…": 1,5 s + 35 ms por caractere, no máximo 8 s, com até 0,5 s de sorteio', () => {
@@ -104,21 +130,24 @@ describe('envio: regras puras', () => {
       const gate = new SendGate(clock)
       const a = gate.issue(ANA, ' Oi! ')
       expect(a.expiresAt).toBe(NOW + 5 * 60_000)
-      expect(gate.consume(a.token, ANA, 'Oi!')).toBe(true)
-      expect(gate.consume(a.token, ANA, 'Oi!')).toBe(false)
+      expect(gate.consume(a.token, ANA, 'Oi!')).toEqual({ address: ANA, quotedId: null })
+      expect(gate.consume(a.token, ANA, 'Oi!')).toBeNull()
+      // o destino e a citação vistos na confirmação ficam presos ao token
+      const bound = gate.issue(GRP, 'Oi!', { address: GRP, quotedId: 'G7' })
+      expect(gate.consume(bound.token, GRP, 'Oi!')).toEqual({ address: GRP, quotedId: 'G7' })
 
       const b = gate.issue(ANA, 'Oi!')
-      expect(gate.consume(b.token, ANA, 'Oi! editado')).toBe(false)
+      expect(gate.consume(b.token, ANA, 'Oi! editado')).toBeNull()
       // uma tentativa errada gasta o token
-      expect(gate.consume(b.token, ANA, 'Oi!')).toBe(false)
+      expect(gate.consume(b.token, ANA, 'Oi!')).toBeNull()
 
       const c = gate.issue(ANA, 'Oi!')
-      expect(gate.consume(c.token, BIA, 'Oi!')).toBe(false)
+      expect(gate.consume(c.token, BIA, 'Oi!')).toBeNull()
 
       const d = gate.issue(ANA, 'Oi!')
       clock.advance(5 * 60_000)
-      expect(gate.consume(d.token, ANA, 'Oi!')).toBe(false)
-      expect(gate.consume('inventado', ANA, 'Oi!')).toBe(false)
+      expect(gate.consume(d.token, ANA, 'Oi!')).toBeNull()
+      expect(gate.consume('inventado', ANA, 'Oi!')).toBeNull()
     })
   })
 })

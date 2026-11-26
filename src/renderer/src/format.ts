@@ -1,6 +1,7 @@
 import type { AppState } from '../../shared/api'
 import { WAIT_AMBER_MS, WAIT_RED_MS, type AlertKind } from '../../shared/triage'
 import { KIND_LABELS } from '../../shared/feedback'
+import { CONN_LOST_REASON, PAUSED_REASON } from '../../shared/send'
 
 const timeFmt = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' })
 const dayFmt = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -277,6 +278,8 @@ export function sendStatusText(s: import('../../shared/send').SendView, now = Da
     case 'unknown':
       return 'Não sei se foi enviada — conferir'
     case 'expired':
+      if (s.error === CONN_LOST_REASON) return 'Não enviada — a conexão caiu. Enviar de novo?'
+      if (s.error === PAUSED_REASON) return 'Não enviada — você pausou. Enviar de novo?'
       return 'Não enviada — aguardando confirmação'
     case 'canceled':
       return 'Envio cancelado'

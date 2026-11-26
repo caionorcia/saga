@@ -42,8 +42,9 @@ export const DEFAULT_JOB_TIMEOUTS_MS: Record<JobType, number> = {
   transcribe: 180_000,
   fetch_profile: 60_000,
   classify: 90_000,
-  // "digitando…" (até 8,5 s) + o envio + marcar como lida
-  send_message: 60_000
+  // "digitando…" (até 8,5 s) + o envio + marcar como lida. Folgado de propósito: estourar o prazo NÃO dá o envio como
+  // desconhecido enquanto o pedido ao WhatsApp ainda está em andamento (o serviço espera ele terminar)
+  send_message: 180_000
 }
 
 /**

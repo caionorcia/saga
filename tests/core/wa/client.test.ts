@@ -11,7 +11,9 @@ import { LIMITS, RateLimiter } from '../../../src/core/queue/limiter'
 import { WhatsAppClient, type ConnState } from '../../../src/core/wa/client'
 import { useAtomicAuthState } from '../../../src/core/wa/authState'
 import { sendJobKey } from '../../../src/core/db/sendRepo'
-import { chatHash } from '../../../src/core/send/logic'
+import { chatHash, pickQuote, sendAddress } from '../../../src/core/send/logic'
+import { verifyUnknownSend } from '../../../src/core/send/verify'
+import { isGroupJid } from '../../../src/core/wa/normalize'
 import { DEFAULT_SEND_OPTIONS, typingMs, type SendOptions } from '../../../src/shared/send'
 
 const DAY = 86_400_000
@@ -1159,14 +1161,28 @@ describe('WhatsAppClient', () => {
     })
   })
   describe('envio direto (o único caminho que escreve no WhatsApp)', () => {
+    /** o contato escreveu por último pelo @lid: as respostas vão para o @lid (sem dispositivo) */
+    const ANA_LID = '999@lid'
     let log: string[]
 
     const open = () => emit('connection.update', { connection: 'open' })
-    /** uma resposta aprovada + o envio na fila, como o serviço faz depois da confirmação */
-    const queueSend = (jid: string, text: string) => {
+    /**
+     * uma resposta aprovada + o envio na fila, como o serviço faz depois da confirmação: destino e citação presos na
+     * confirmação e a geração da conexão no job
+     */
+    const queueSend = (jid: string, text: string, o: { quotedId?: string | null; gen?: number; idemKey?: string } = {}) => {
+      const msgs = repo.listMessages(jid, 300)
+      const q = isGroupJid(jid) && sendOpts.quoteInGroups ? pickQuote(msgs) : null
       const replyId = repo.insertApproved({ jid, contextText: 'ctx', originalSuggestion: text, finalText: text, provider: 'groq' })
-      const { send } = repo.sends.enqueue({ idemKey: `${replyId}:x`, replyId, jid, text })
-      queue.enqueue('send_message', sendJobKey(send), { sendId: send.id }, 20)
+      const { send } = repo.sends.enqueue({
+        idemKey: o.idemKey ?? `${replyId}:x`,
+        replyId,
+        jid,
+        text,
+        address: sendAddress(msgs, jid),
+        quotedId: o.quotedId !== undefined ? o.quotedId : (q?.id ?? null)
+      })
+      queue.enqueue('send_message', sendJobKey(send), { sendId: send.id, attempt: send.attempt, gen: o.gen ?? client.connGen() }, 20)
       return send
     }
     /** roda um tick da fila deixando o "digitando…" passar */
@@ -1182,6 +1198,9 @@ describe('WhatsAppClient', () => {
         return { key: { id: 'WA-OUT-1' } }
       })
       s.spies.readMessages.mockImplementation(async (keys: any[]) => void log.push(`read:${keys.map((k) => k.id).join(',')}`))
+    }
+    const noWrites = () => {
+      for (const sk of sockets) for (const name of SEND_PATH) expect(sk.spies[name], name).not.toHaveBeenCalled()
     }
 
     beforeEach(async () => {
@@ -1202,32 +1221,76 @@ describe('WhatsAppClient', () => {
       })
     })
 
-    it('sem envio na fila nada é escrito; com a conexão fechada o envio espera (nada chamado)', async () => {
-      queueSend(JID, 'Oi!')
-      // ainda "connecting": o tipo send_message está pausado
-      expect(await queue.tick()).toBe('idle')
-      for (const name of SEND_PATH) expect(last().spies[name]).not.toHaveBeenCalled()
+    it('a conexão cai com o envio esperando a vez: expira na hora e NUNCA sai depois de reconectar', async () => {
       await open()
+      const s = queueSend(JID, 'Oi!')
       await close(408)
-      expect(await queue.tick()).toBe('idle')
-      for (const name of SEND_PATH) expect(last().spies[name]).not.toHaveBeenCalled()
+      expect(repo.sends.get(s.id)).toMatchObject({ status: 'expired', error: 'a conexão caiu antes de enviar' })
+      expect(repo.jobCounts('send_message')).toMatchObject({ pending: 0, running: 0 })
+      expect(diagLines.some(([k, d]) => k === 'send_expired' && d.includes(`send #${s.id}`))).toBe(true)
+      // reconecta e abre de novo: nada sai
+      await advance(15_000)
+      await open()
+      expect(client.getStatus()).toBe('open')
+      for (let i = 0; i < 3; i++) await runSend(120_000)
+      expect(repo.sends.get(s.id)!.status).toBe('expired')
+      expect(repo.jobCounts('send_message').pending).toBe(0)
+      noWrites()
     })
 
-    it('1:1: "digitando…" pelo tempo do texto → parou → envia sem citar → lidas só desta conversa → indisponível', async () => {
+    it('Reconectar (socket refeito) e parar o app também expiram o que ainda não saiu', async () => {
+      await open()
+      const a = queueSend(JID, 'um')
+      await client.manualReconnect()
+      expect(repo.sends.get(a.id)!.status).toBe('expired')
+      await open()
+      const b = queueSend(JID2, 'dois')
+      await client.stop()
+      expect(repo.sends.get(b.id)!.status).toBe('expired')
+      noWrites()
+      await client.start()
+    })
+
+    it('job confirmado numa conexão anterior (geração diferente): expira sem escrever nada', async () => {
+      await open()
+      const s = queueSend(JID, 'velho', { gen: client.connGen() - 1 })
+      expect(await runSend()).toBe('ran')
+      expect(repo.sends.get(s.id)).toMatchObject({ status: 'expired', error: 'a conexão caiu antes de enviar' })
+      noWrites()
+    })
+
+    it('tentativa do job diferente da linha (job velho): não faz nada', async () => {
+      await open()
+      const s = queueSend(JID, 'x')
+      // a linha virou a tentativa 2 (nova confirmação) e o job da tentativa 1 ainda roda
+      repo.sends.transition(s.id, 1, ['queued'], 'failed', { error: 't' })
+      const again = repo.sends.enqueue({ idemKey: s.idemKey, replyId: s.replyId, jid: JID, text: 'x', address: s.address, quotedId: null })
+      expect(again.send.attempt).toBe(2)
+      expect(await runSend()).toBe('ran')
+      expect(repo.sends.get(s.id)!.status).toBe('queued')
+      noWrites()
+    })
+
+    it('1:1 que migrou para @lid: "digitando…", envio e citação nenhuma vão para o @lid; lidas só desta conversa; indisponível no fim', async () => {
       await open()
       spyLog(last())
       const text = 'Oi! Te respondo já.'
       const s = queueSend(JID, text)
+      expect(s.address).toBe(ANA_LID)
       const t = queue.tick()
       await vi.advanceTimersByTimeAsync(0)
-      expect(log).toEqual([`presence:composing:${JID}`])
+      expect(log).toEqual([`presence:composing:${ANA_LID}`])
       expect(repo.sends.get(s.id)!.status).toBe('typing')
       await vi.advanceTimersByTimeAsync(typingMs(text, 0.5) - 1)
       expect(log).toHaveLength(1)
       await vi.advanceTimersByTimeAsync(1)
       await t
-      expect(log).toEqual([`presence:composing:${JID}`, `presence:paused:${JID}`, `send:${JID}`, 'read:c1,c2', 'presence:unavailable'])
-      expect(last().spies.sendMessage).toHaveBeenCalledWith(JID, { text }, undefined)
+      expect(log).toEqual([`presence:composing:${ANA_LID}`, `presence:paused:${ANA_LID}`, `send:${ANA_LID}`, 'read:c1,c2', 'presence:unavailable'])
+      const [, content, sendOpts2] = last().spies.sendMessage.mock.calls[0]
+      expect(content).toEqual({ text })
+      // id gerado pelo app (para conferir depois), sem citação na individual
+      expect(sendOpts2).toEqual({ messageId: expect.stringMatching(/^3EB0[0-9A-F]{36}$/) })
+      expect(repo.sends.get(s.id)!.msgIds).toEqual([sendOpts2.messageId])
       // a chave original (o @lid como veio), só as mensagens do contato depois da última resposta do mentor, só desta conversa
       expect(last().spies.readMessages).toHaveBeenCalledWith([
         { remoteJid: JID, id: 'c1', fromMe: false },
@@ -1242,33 +1305,50 @@ describe('WhatsAppClient', () => {
       for (const [, d] of lines) {
         expect(d).toContain(`send #${s.id} chat=${chatHash(JID)}`)
         expect(d).not.toContain(text)
-        expect(d).not.toContain('5547999998888')
+        expect(d).not.toMatch(/5547999998888|999@lid/)
       }
     })
 
-    it('grupo: cita a mensagem que menciona o mentor (chave original) e marca como lidas só as do grupo', async () => {
+    it('1:1 só por telefone: vai para o telefone; o eco (mesmo vindo do @lid) cai na conversa certa', async () => {
       await open()
       spyLog(last())
-      queueSend(GRP, 'Claro, vamos ver isso!')
+      const s = queueSend(JID2, 'Certo!')
+      expect(s.address).toBe(JID2)
+      await runSend()
+      expect(log).toContain(`send:${JID2}`)
+      const id = repo.sends.get(s.id)!.msgIds[0]
+      // o eco chega pelo @lid (rc14): fica na conversa de onde a resposta saiu
+      await emit('messages.upsert', { messages: [{ ...wamsg({ id, fromMe: true, ts: NOW + 5_000, text: 'Certo!' }), key: { remoteJid: '555:1@lid', fromMe: true, id } }] })
+      expect(repo.getMessage(id)!.jid).toBe(JID2)
+    })
+
+    it('grupo: cita a mensagem confirmada (chave original) e marca como lidas só as do grupo', async () => {
+      await open()
+      spyLog(last())
+      const s = queueSend(GRP, 'Claro, vamos ver isso!')
+      expect(s.quotedId).toBe('g0')
+      // chega mensagem nova depois da confirmação: a citação continua a que o mentor viu
+      await emit('messages.upsert', { messages: [wamsg({ id: 'g9', jid: GRP, participant: JID2, ts: NOW - 1_000, text: 'nova', contextInfo: { mentionedJid: [OWN] } })] })
       await runSend()
       const [jid, content, opts] = last().spies.sendMessage.mock.calls[0]
       expect(jid).toBe(GRP)
       expect(content).toEqual({ text: 'Claro, vamos ver isso!' })
       expect(opts.quoted.key).toEqual({ remoteJid: GRP, id: 'g0', fromMe: false, participant: JID2 })
       expect(opts.quoted.message).toEqual({ conversation: 'me ajuda @mentor?' })
+      expect(opts.messageId).toMatch(/^3EB0/)
       expect(last().spies.readMessages).toHaveBeenCalledWith([
         { remoteJid: GRP, id: 'g0', fromMe: false, participant: JID2 },
-        { remoteJid: GRP, id: 'g1', fromMe: false, participant: '888:1@lid' }
+        { remoteJid: GRP, id: 'g1', fromMe: false, participant: '888:1@lid' },
+        { remoteJid: GRP, id: 'g9', fromMe: false, participant: JID2 }
       ])
     })
 
-    it('grupo sem menção: cita a mais recente do contato; opções desligadas: sem citar, sem "digitando", sem marcar como lida', async () => {
-      await emit('messages.upsert', { messages: [wamsg({ id: 'gm', jid: GRP, fromMe: true, ts: NOW - 30_000, text: 'respondi' }), wamsg({ id: 'g2', jid: GRP, participant: JID2, ts: NOW - 20_000, text: 'valeu, e agora?' })] })
+    it('grupo: a mensagem citada sumiu → envia sem citar; opções desligadas: sem "digitando", sem marcar como lida', async () => {
       await open()
       spyLog(last())
-      queueSend(GRP, 'Agora é a parte 2.')
+      queueSend(GRP, 'Agora é a parte 2.', { quotedId: 'nao-existe' })
       await runSend()
-      expect(last().spies.sendMessage.mock.calls[0][2].quoted.key.id).toBe('g2')
+      expect(last().spies.sendMessage.mock.calls[0][2]).toEqual({ messageId: expect.any(String) })
 
       sendOpts = { enabled: true, typing: false, markRead: false, quoteInGroups: false }
       log = []
@@ -1276,28 +1356,30 @@ describe('WhatsAppClient', () => {
       queueSend(GRP, 'Outra coisa.')
       await runSend(0)
       expect(log).toEqual([`send:${GRP}`, 'presence:unavailable'])
-      expect(last().spies.sendMessage.mock.calls[1]).toEqual([GRP, { text: 'Outra coisa.' }, undefined])
+      expect(last().spies.sendMessage.mock.calls[1]).toEqual([GRP, { text: 'Outra coisa.' }, { messageId: expect.any(String) }])
     })
 
-    it('nunca inicia conversa: sem mensagem do contato nos últimos 30 dias → não envia (failed)', async () => {
+    it('nunca inicia conversa: sem mensagem do contato nos últimos 30 dias (uma reação não conta) → não envia', async () => {
       clock.advance(31 * DAY)
       await open()
+      // uma reação recente do contato não é conversa (nem chega ao banco)
+      await emit('messages.upsert', { messages: [{ key: { remoteJid: JID, fromMe: false, id: 'react' }, messageTimestamp: Math.floor(clock.now() / 1000), message: { reactionMessage: { text: '👍', key: { id: 'm0' } } } }] })
       const s = queueSend(JID, 'Oi, sumido!')
       await runSend()
-      for (const name of SEND_PATH) expect(last().spies[name]).not.toHaveBeenCalled()
+      noWrites()
       expect(repo.sends.get(s.id)).toMatchObject({ status: 'failed' })
       expect(diagLines.some(([k]) => k === 'send_failed')).toBe(true)
     })
 
     it('mais de 10 min na fila, cancelado ou envio direto desligado: não envia', async () => {
+      await open()
       const old = queueSend(JID, 'velho')
       clock.advance(10 * 60_000 + 1)
-      await open()
       await runSend()
       expect(repo.sends.get(old.id)!.status).toBe('expired')
 
       const c = queueSend(JID, 'cancelado')
-      repo.sends.transition(c.id, ['queued'], 'canceled')
+      repo.sends.transition(c.id, 1, ['queued'], 'canceled')
       clock.advance(120_000)
       await runSend()
       expect(repo.sends.get(c.id)!.status).toBe('canceled')
@@ -1307,28 +1389,45 @@ describe('WhatsAppClient', () => {
       clock.advance(120_000)
       await runSend()
       expect(repo.sends.get(off.id)!.status).toBe('expired')
-      for (const name of SEND_PATH) expect(last().spies[name]).not.toHaveBeenCalled()
+      noWrites()
     })
 
-    it('o WhatsApp não confirmou: estado desconhecido (sem reenviar); já aparece na conversa → enviada', async () => {
+    it('o WhatsApp não confirmou: desconhecido, erro sem número; o eco com o id gerado aparece → enviada', async () => {
       await open()
-      last().spies.sendMessage.mockRejectedValue(new Error('Timed Out'))
+      last().spies.sendMessage.mockRejectedValue(Object.assign(new Error('Timed Out para 5547999998888@s.whatsapp.net'), { output: { statusCode: 408 } }))
       const s = queueSend(JID, 'Pode sim!')
       await runSend()
-      expect(repo.sends.get(s.id)).toMatchObject({ status: 'unknown' })
+      const row = repo.sends.get(s.id)!
+      expect(row).toMatchObject({ status: 'unknown', error: 'envio sem confirmação (Error 408)' })
       expect(diagLines.filter(([k]) => k === 'send_unknown')).toHaveLength(1)
+      for (const [, d] of diagLines) expect(d).not.toContain('5547999998888@')
       clock.advance(3_600_000)
       await runSend()
       expect(last().spies.sendMessage).toHaveBeenCalledTimes(1)
-
-      // a mensagem saiu mesmo (o eco chegou antes): conferida na conversa
-      await emit('messages.upsert', { messages: [wamsg({ id: 'echo', fromMe: true, ts: NOW + 3_600_000 + 1_000, text: 'Tudo certo.' })] })
-      const s2 = queueSend(JID, 'Tudo certo.')
-      await runSend()
-      expect(repo.sends.get(s2.id)).toMatchObject({ status: 'sent', waMsgId: 'echo' })
+      // o eco chega (horas depois, relógio do PC diferente): confere pelo id, não pelo horário
+      await emit('messages.upsert', { messages: [wamsg({ id: row.msgIds[0], fromMe: true, ts: NOW - 5 * DAY, text: 'Pode sim!' })] })
+      expect(verifyUnknownSend(repo, repo.sends.get(s.id)!)).toBe(true)
+      expect(repo.sends.get(s.id)).toMatchObject({ status: 'sent', waMsgId: row.msgIds[0] })
     })
 
-    it('a conexão cai no meio do envio: desconhecido na hora; a fila nunca reenvia', async () => {
+    it('nova tentativa depois de desconhecido: se a anterior já chegou, marca enviada sem enviar de novo', async () => {
+      await open()
+      last().spies.sendMessage.mockRejectedValueOnce(new Error('Timed Out'))
+      const s = queueSend(JID, 'Uma vez só')
+      await runSend()
+      const first = repo.sends.get(s.id)!
+      expect(first.status).toBe('unknown')
+      // o mentor confirma de novo; enquanto isso o eco da 1ª tentativa chega
+      clock.advance(120_000)
+      const again = repo.sends.enqueue({ idemKey: s.idemKey, replyId: s.replyId, jid: JID, text: 'Uma vez só', address: s.address, quotedId: null })
+      queue.enqueue('send_message', sendJobKey(again.send), { sendId: s.id, attempt: 2, gen: client.connGen() }, 20)
+      await emit('messages.upsert', { messages: [wamsg({ id: first.msgIds[0], fromMe: true, ts: NOW + 60_000, text: 'Uma vez só' })] })
+      await runSend()
+      expect(last().spies.sendMessage).toHaveBeenCalledTimes(1)
+      expect(repo.sends.get(s.id)).toMatchObject({ status: 'sent', attempt: 2, waMsgId: first.msgIds[0] })
+    })
+
+    it('a conexão cai no meio do envio: desconhecido na hora; "em andamento" até o pedido terminar; a fila nunca reenvia', async () => {
       await open()
       let release: (v: unknown) => void = () => {}
       last().spies.sendMessage.mockImplementation(() => new Promise((r) => (release = r)))
@@ -1336,33 +1435,58 @@ describe('WhatsAppClient', () => {
       const t = queue.tick()
       await vi.advanceTimersByTimeAsync(10_000)
       expect(repo.sends.get(s.id)!.status).toBe('sending')
+      expect(client.isSendInFlight(s.id)).toBe(true)
       await close(408)
       expect(repo.sends.get(s.id)).toMatchObject({ status: 'unknown', error: 'a conexão caiu durante o envio' })
+      expect(client.isSendInFlight(s.id)).toBe(true)
       // a resposta atrasada do WhatsApp confirma: vira enviada
       release({ key: { id: 'late' } })
       await t
+      expect(client.isSendInFlight(s.id)).toBe(false)
       expect(repo.sends.get(s.id)).toMatchObject({ status: 'sent', waMsgId: 'late' })
       clock.advance(3_600_000)
       await vi.advanceTimersByTimeAsync(60_000)
       expect(sockets[0].spies.sendMessage).toHaveBeenCalledTimes(1)
     })
 
-    it('"digitando" falhou ou a conexão caiu durante o "digitando": não enviada (failed), sem enviar', async () => {
+    it('"digitando" falhou: não enviada; a conexão cai durante o "digitando": expira; "Pausar tudo" durante o "digitando": expira', async () => {
       await open()
-      last().spies.sendPresenceUpdate.mockRejectedValueOnce(new Error('Connection Closed'))
+      last().spies.sendPresenceUpdate.mockRejectedValueOnce(Object.assign(new Error('Connection Closed 5547999998888'), { output: { statusCode: 428 } }))
       const a = queueSend(JID, 'um')
       await runSend()
-      expect(repo.sends.get(a.id)!.status).toBe('failed')
+      expect(repo.sends.get(a.id)).toMatchObject({ status: 'failed', error: '"digitando" falhou (Error 428)' })
 
       clock.advance(120_000)
       const b = queueSend(JID, 'dois')
       const t = queue.tick()
       await vi.advanceTimersByTimeAsync(100)
       await close(408)
+      expect(repo.sends.get(b.id)).toMatchObject({ status: 'expired', error: 'a conexão caiu antes de enviar' })
       await vi.advanceTimersByTimeAsync(10_000)
       await t
-      expect(repo.sends.get(b.id)).toMatchObject({ status: 'failed', error: 'a conexão caiu antes de enviar' })
-      for (const s of sockets) expect(s.spies.sendMessage).not.toHaveBeenCalled()
+
+      await advance(15_000)
+      await open()
+      clock.advance(120_000)
+      const c = queueSend(JID, 'três')
+      const t2 = queue.tick()
+      await vi.advanceTimersByTimeAsync(100)
+      queue.pause()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await t2
+      expect(repo.sends.get(c.id)).toMatchObject({ status: 'expired', error: 'pausado' })
+      queue.resume()
+      for (const sk of sockets) expect(sk.spies.sendMessage).not.toHaveBeenCalled()
+    })
+
+    it('prazo do job esgotado (sinal abortado) antes de enviar: não envia', async () => {
+      await open()
+      const s = queueSend(JID, 'tarde')
+      const ctrl = new AbortController()
+      ctrl.abort()
+      await (client as any).executeSend({ sendId: s.id, attempt: 1, gen: client.connGen() }, ctrl.signal)
+      expect(repo.sends.get(s.id)).toMatchObject({ status: 'failed', error: 'tempo esgotado antes de enviar' })
+      noWrites()
     })
   })
 })
