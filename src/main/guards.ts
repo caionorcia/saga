@@ -9,6 +9,7 @@ import { KB_LIMITS, KB_ROLES } from '../shared/kb'
 import { SEARCH_KINDS, SEARCH_LIMITS, SEARCH_PERIODS } from '../shared/search'
 import { BACKUP_PASSWORD_MAX, BACKUP_PASSWORD_MIN } from '../shared/backup'
 import { SEND_LIMITS } from '../shared/send'
+import { isValidSchedule } from '../shared/sendHours'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -118,7 +119,8 @@ const SETTINGS_FIELDS: Record<string, (v: unknown) => boolean> = {
   directSend: isBool,
   sendTyping: isBool,
   sendMarkRead: isBool,
-  sendQuoteInGroups: isBool
+  sendQuoteInGroups: isBool,
+  sendSchedule: isValidSchedule
 }
 
 /** Papel e/ou "Usar" de um arquivo da base (pelo menos um dos dois). */
@@ -213,7 +215,13 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
     (i.chosenIndex === undefined || (typeof i.chosenIndex === 'number' && Number.isInteger(i.chosenIndex) && i.chosenIndex >= 0 && i.chosenIndex < 20)),
   copyToClipboard: ([t]) => isStr(t),
   prepareSend: (a) =>
-    a.length === 1 && isObj(a[0]) && Object.keys(a[0]).every((k) => k === 'jid' || k === 'text') && nonEmpty(a[0].jid) && a[0].jid.length <= 200 && isSendText(a[0].text),
+    a.length === 1 &&
+    isObj(a[0]) &&
+    Object.keys(a[0]).every((k) => k === 'jid' || k === 'text' || k === 'forced') &&
+    nonEmpty(a[0].jid) &&
+    a[0].jid.length <= 200 &&
+    isSendText(a[0].text) &&
+    (a[0].forced === undefined || isBool(a[0].forced)),
   sendReply: (a) => a.length === 1 && isSendReply(a[0]),
   cancelSend: (a) => a.length === 1 && isId(a[0]),
   listSends: (a) => a.length === 1 && nonEmpty(a[0]) && a[0].length <= 200,

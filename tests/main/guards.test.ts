@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_SEND_SCHEDULE } from '../../src/shared/sendHours'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { InvalidIpcArgsError, isAppUrl, isExternalHttpUrl, validateIpcArgs } from '../../src/main/guards'
@@ -113,14 +114,27 @@ describe('validateIpcArgs', () => {
     ok('saveSettings', { directSend: false, sendTyping: true, sendMarkRead: false, sendQuoteInGroups: true })
     bad('saveSettings', { directSend: 'off' })
     bad('saveSettings', { sendTyping: 1 })
+    // v0.4.1: horário de envio (7 dias, HH:MM de 15 em 15 min, fim depois do início)
+    ok('saveSettings', { sendSchedule: DEFAULT_SEND_SCHEDULE })
+    ok('saveSettings', { sendSchedule: { ...DEFAULT_SEND_SCHEDULE, enabled: false } })
+    const sched = (day: unknown) => ({ ...DEFAULT_SEND_SCHEDULE, days: [day, ...DEFAULT_SEND_SCHEDULE.days.slice(1)] })
+    bad('saveSettings', { sendSchedule: sched({ on: true, start: '18:00', end: '09:00' }) })
+    bad('saveSettings', { sendSchedule: sched({ on: true, start: '09:10', end: '18:00' }) })
+    bad('saveSettings', { sendSchedule: sched({ on: 'sim', start: '09:00', end: '18:00' }) })
+    bad('saveSettings', { sendSchedule: { ...DEFAULT_SEND_SCHEDULE, days: DEFAULT_SEND_SCHEDULE.days.slice(0, 5) } })
+    bad('saveSettings', { sendSchedule: 'Seg–Sex' })
   })
 
   describe('envio direto', () => {
     const TOKEN = '0f8e4f9a-3c1b-4d2e-9a7b-1c2d3e4f5a6b'
     const JID = '5547999998888@s.whatsapp.net'
 
-    it('prepareSend: só jid e texto (não vazio, até 4096 caracteres)', () => {
+    it('prepareSend: só jid, texto (não vazio, até 4096 caracteres) e "Forçar envio" (sim/não)', () => {
       ok('prepareSend', { jid: JID, text: 'Oi!' })
+      ok('prepareSend', { jid: JID, text: 'Oi!', forced: true })
+      ok('prepareSend', { jid: JID, text: 'Oi!', forced: false })
+      bad('prepareSend', { jid: JID, text: 'Oi!', forced: 'sim' })
+      bad('prepareSend', { jid: JID, text: 'Oi!', forced: 1 })
       bad('prepareSend', { jid: JID, text: '' })
       bad('prepareSend', { jid: '', text: 'Oi' })
       bad('prepareSend', { jid: JID, text: 'x'.repeat(4097) })
@@ -139,6 +153,8 @@ describe('validateIpcArgs', () => {
       bad('sendReply', { token: TOKEN, jid: JID, text: 'Oi!', chosenIndex: -1 })
       bad('sendReply', { token: TOKEN, jid: JID, text: 'Oi!', quoted: { id: 'x' } })
       bad('sendReply', { token: TOKEN, jid: JID, text: 'Oi!', to: '5511@s.whatsapp.net' })
+      // "Forçar envio" fica preso ao token do prepareSend: o sendReply não aceita o campo
+      bad('sendReply', { token: TOKEN, jid: JID, text: 'Oi!', forced: true })
     })
 
     it('cancelSend/checkSend: id inteiro positivo; listSends: um jid', () => {

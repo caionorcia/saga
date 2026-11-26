@@ -19,6 +19,7 @@ import type {
   BackupStatus
 } from './backup'
 import type { PrepareSendInput, PrepareSendResult, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView } from './send'
+import type { SendHoursInfo, SendSchedule } from './sendHours'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind, ThemePref }
@@ -27,6 +28,7 @@ export type { KbChunkView, KbFilePatch, KbImportResult, KbPackageView, KbRole, K
 export type { SearchFilters, SearchResult, SearchSummaryResult }
 export type { AutoBackupPatch, BackupExportOptions, BackupExportResult, BackupOpenResult, BackupRestoreMode, BackupRestoreResult, BackupStatus }
 export type { PrepareSendInput, PrepareSendResult, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView }
+export type { SendHoursInfo, SendSchedule }
 export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
@@ -102,6 +104,11 @@ export interface AppState {
   updateCheck: UpdateCheck
   /** conversas (fora as escondidas) em "Para responder" e conversas com algum alerta ativo */
   triage: { awaiting: number; withAlerts: number }
+  /**
+   * v0.4.1: envio direto ligado com horário de envio e agora fora dele: a barra mostra "Fora do horário de envio"
+   * (clique abre Configurações › Envio direto). null/ausente = dentro do horário, sem horário ou envio desligado
+   */
+  sendHours?: SendHoursInfo | null
   /** o início do app falhou (mensagem curta, sem dados sensíveis): mostrar com "Tentar de novo" (`manualReconnect`) */
   startError?: string
 }

@@ -4,6 +4,8 @@ import { alertChipLabel, formatDay, formatDayHeading, formatDuration, formatTime
 import { AlertIcon } from './Alerts'
 import { MissedAlertDialog, NoReplyDialog, NoReplyIcon, RateDownDialog, THANKS, Toast } from './AlertFeedback'
 import { GroupIcon } from './GroupIcon'
+import { ForceSendToggle } from './ForceSendToggle'
+import { clearForceSend } from '../forceSend'
 
 interface Props {
   contact: Contact
@@ -18,11 +20,13 @@ interface Props {
   summarySkipped?: boolean
   /** v0.3.1 (busca geral): rolar até esta mensagem e destacá-la; `seq` novo = novo pedido */
   focusMessage?: { id: string; seq: number } | null
+  /** v0.4.1: envio direto com horário de envio ligado: mostra "Forçar envio" no cabeçalho */
+  forceSendToggle?: boolean
 }
 
 const HIGHLIGHT_MS = 2_500
 
-export function Conversation({ contact, analysis, alerts = [], onDismissAlert, onOpenChat, summarySkipped, focusMessage }: Props) {
+export function Conversation({ contact, analysis, alerts = [], onDismissAlert, onOpenChat, summarySkipped, focusMessage, forceSendToggle }: Props) {
   const [messages, setMessages] = useState<MessageView[] | null>(null)
   const [highlight, setHighlight] = useState<string | null>(null)
   /** avaliações feitas agora (antes de a lista de alertas voltar do processo principal) */
@@ -38,6 +42,8 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert, o
   /** o mentor está lendo o fim da conversa: acompanhar mensagens novas e mudanças de altura */
   const pinned = useRef(true)
   const jid = contact.jid
+  // fechou a conversa: o "Forçar envio" dela desliga
+  useEffect(() => () => clearForceSend(jid), [jid])
 
   useEffect(() => {
     let alive = true
@@ -177,6 +183,7 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert, o
           {contact.notes && <p className="muted small conv-notes">{contact.notes}</p>}
         </div>
         <div className="conv-actions">
+          {forceSendToggle && <ForceSendToggle jid={jid} />}
           {needsReply && !contact.hidden && (
             <button
               type="button"

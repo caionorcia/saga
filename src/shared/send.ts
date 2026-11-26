@@ -40,6 +40,8 @@ export function typingMs(text: string, rnd = 0): number {
   return Math.min(8_000, 1_500 + 35 * [...text].length) + Math.round(Math.max(0, Math.min(1, rnd)) * 500)
 }
 
+import { DEFAULT_SEND_SCHEDULE, cloneSchedule, type SendHoursInfo, type SendSchedule } from './sendHours'
+
 export interface SendOptions {
   /** "Envio direto" ligado (padrão). Desligado, o botão Enviar some e envios na fila expiram */
   enabled: boolean
@@ -49,9 +51,11 @@ export interface SendOptions {
   markRead: boolean
   /** nos grupos, citar a mensagem que está sendo respondida (padrão: sim; nas individuais nunca cita) */
   quoteInGroups: boolean
+  /** v0.4.1: dias e horários em que o envio pode sair (fora deles, só com "Forçar envio") */
+  schedule: SendSchedule
 }
 
-export const DEFAULT_SEND_OPTIONS: SendOptions = { enabled: true, typing: true, markRead: true, quoteInGroups: true }
+export const DEFAULT_SEND_OPTIONS: SendOptions = { enabled: true, typing: true, markRead: true, quoteInGroups: true, schedule: cloneSchedule(DEFAULT_SEND_SCHEDULE) }
 
 /** Um envio, como a interface vê (nunca o jid de quem mandou a mensagem citada). */
 export interface SendView {
@@ -84,9 +88,16 @@ export interface SendPreview {
   /** grupo: a mensagem que vai ser citada (quem mandou e o começo do texto) */
   quote: { senderName: string; text: string } | null
   options: SendOptions
+  /** v0.4.1: confirmação com "Forçar envio" (pode sair fora do horário de envio) */
+  forced: boolean
+  /** v0.4.1: agora está fora do horário de envio (só chega aqui com `forced`); null = dentro ou sem horário */
+  outsideHours: SendHoursInfo | null
 }
 
-export type SendRefusal = 'disabled' | 'empty' | 'too_long' | 'no_recent_contact' | 'unknown_chat' | 'offline' | 'in_flight'
+/** O que a confirmação mostra quando está fora do horário e ainda sem "Forçar envio" (sem token: nada pode sair). */
+export type SendDraft = Omit<SendPreview, 'token' | 'expiresAt' | 'forced' | 'outsideHours'>
+
+export type SendRefusal = 'outside_hours' | 'disabled' | 'empty' | 'too_long' | 'no_recent_contact' | 'unknown_chat' | 'offline' | 'in_flight'
 
 export const SEND_REFUSAL_TEXT: Record<SendRefusal, string> = {
   disabled: 'O envio direto está desligado nas Configurações.',
@@ -95,7 +106,8 @@ export const SEND_REFUSAL_TEXT: Record<SendRefusal, string> = {
   no_recent_contact: 'O Saga só envia para quem mandou mensagem nos últimos 30 dias (responder, nunca iniciar conversa).',
   unknown_chat: 'Conversa não encontrada.',
   offline: 'O WhatsApp não está conectado. Envie quando ele voltar (a faixa de cima mostra "Conectado").',
-  in_flight: 'O envio anterior desta resposta ainda está em andamento. Espere um pouco e clique em Conferir.'
+  in_flight: 'O envio anterior desta resposta ainda está em andamento. Espere um pouco e clique em Conferir.',
+  outside_hours: 'Fora do horário de envio. Marque "Forçar envio" para enviar agora mesmo assim.'
 }
 
 /** Motivo gravado quando a conexão cai (ou é refeita) com o envio ainda na fila ou no "digitando…". */
@@ -103,11 +115,17 @@ export const CONN_LOST_REASON = 'a conexão caiu antes de enviar'
 /** Motivo gravado quando "Pausar tudo" é clicado durante o "digitando…". */
 export const PAUSED_REASON = 'pausado'
 
-export type PrepareSendResult = { ok: true; preview: SendPreview } | { ok: false; code: SendRefusal; message: string }
+export type PrepareSendResult =
+  | { ok: true; preview: SendPreview }
+  /** fora do horário e sem "Forçar envio": a confirmação mostra o aviso e o que iria sair, mas não há token */
+  | { ok: false; code: 'outside_hours'; message: string; nextAllowedAt: number | null; hours: SendHoursInfo; draft: SendDraft }
+  | { ok: false; code: Exclude<SendRefusal, 'outside_hours'>; message: string }
 
 export interface PrepareSendInput {
   jid: string
   text: string
+  /** v0.4.1: "Forçar envio" marcado: a confirmação vale fora do horário de envio (fica presa ao token) */
+  forced?: boolean
 }
 
 export interface SendReplyInput {

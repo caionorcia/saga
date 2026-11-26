@@ -14,6 +14,8 @@ export function App() {
   const [state, setState] = useState<AppState | null>(null)
   const [wizard, setWizard] = useState<boolean | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** abrir as Configurações já numa seção (ex.: a barra de status → "Horário de envio"); `seq` novo = novo pedido */
+  const [settingsFocus, setSettingsFocus] = useState<{ id: string; seq: number } | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   /** pedido da barra de status para a lista mostrar "Para responder" */
   const [viewRequest, setViewRequest] = useState<{ view: ContactView; seq: number } | undefined>(undefined)
@@ -48,6 +50,10 @@ export function App() {
         state={state}
         settingsOpen={settingsOpen}
         onOpenSettings={() => setSettingsOpen((o) => !o)}
+        onOpenSendHours={() => {
+          setSettingsOpen(true)
+          setSettingsFocus((f) => ({ id: 'send-hours', seq: (f?.seq ?? 0) + 1 }))
+        }}
         onShowAwaiting={() => {
           setSettingsOpen(false)
           setViewRequest((r) => ({ view: 'awaiting', seq: (r?.seq ?? 0) + 1 }))
@@ -67,7 +73,7 @@ export function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         viewRequest={viewRequest}
       />
-      {settingsOpen && <Settings />}
+      {settingsOpen && <Settings focus={settingsFocus} />}
     </div>
   )
 }
@@ -119,12 +125,18 @@ function Main({
   const [skipped, setSkipped] = useState(false)
   /** "Envio direto" ligado: o texto do painel fala do botão Enviar */
   const [directSend, setDirectSend] = useState(false)
+  /** horário de envio ligado: o cabeçalho da conversa mostra "Forçar envio" */
+  const [sendHoursOn, setSendHoursOn] = useState(false)
   useEffect(() => {
     let alive = true
     try {
       window.saga
         .getSettings()
-        .then((st) => alive && setDirectSend(st.directSend === true))
+        .then((st) => {
+          if (!alive) return
+          setDirectSend(st.directSend === true)
+          setSendHoursOn(st.sendSchedule?.enabled === true)
+        })
         .catch(() => {})
     } catch {
       // sem configurações: fica o texto de copiar e colar
@@ -132,7 +144,7 @@ function Main({
     return () => {
       alive = false
     }
-  }, [contact?.jid])
+  }, [contact?.jid, hidden])
   /** busca geral: a mensagem para rolar e destacar na conversa aberta */
   const [focusMsg, setFocusMsg] = useState<{ jid: string; id: string; seq: number } | null>(null)
 
@@ -189,6 +201,7 @@ function Main({
           onOpenChat={onSelect}
           summarySkipped={skipped}
           focusMessage={focusMsg && focusMsg.jid === contact.jid ? focusMsg : null}
+          forceSendToggle={directSend && sendHoursOn}
           onDismissAlert={(kind) => {
             setAlerts((l) => l.filter((a) => a.kind !== kind))
             void window.saga.dismissAlert(contact.jid, kind).catch(() => {})

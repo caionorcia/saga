@@ -1170,7 +1170,7 @@ describe('WhatsAppClient', () => {
      * uma resposta aprovada + o envio na fila, como o serviço faz depois da confirmação: destino e citação presos na
      * confirmação e a geração da conexão no job
      */
-    const queueSend = (jid: string, text: string, o: { quotedId?: string | null; gen?: number; idemKey?: string } = {}) => {
+    const queueSend = (jid: string, text: string, o: { quotedId?: string | null; gen?: number; idemKey?: string; forced?: boolean } = {}) => {
       const msgs = repo.listMessages(jid, 300)
       const q = isGroupJid(jid) && sendOpts.quoteInGroups ? pickQuote(msgs) : null
       const replyId = repo.insertApproved({ jid, contextText: 'ctx', originalSuggestion: text, finalText: text, provider: 'groq' })
@@ -1180,7 +1180,8 @@ describe('WhatsAppClient', () => {
         jid,
         text,
         address: sendAddress(msgs, jid),
-        quotedId: o.quotedId !== undefined ? o.quotedId : (q?.id ?? null)
+        quotedId: o.quotedId !== undefined ? o.quotedId : (q?.id ?? null),
+        forced: o.forced ?? false
       })
       queue.enqueue('send_message', sendJobKey(send), { sendId: send.id, attempt: send.attempt, gen: o.gen ?? client.connGen() }, 20)
       return send
@@ -1350,7 +1351,7 @@ describe('WhatsAppClient', () => {
       await runSend()
       expect(last().spies.sendMessage.mock.calls[0][2]).toEqual({ messageId: expect.any(String) })
 
-      sendOpts = { enabled: true, typing: false, markRead: false, quoteInGroups: false }
+      sendOpts = { enabled: true, typing: false, markRead: false, quoteInGroups: false, schedule: DEFAULT_SEND_OPTIONS.schedule }
       log = []
       clock.advance(120_000)
       queueSend(GRP, 'Outra coisa.')
@@ -1390,6 +1391,65 @@ describe('WhatsAppClient', () => {
       await runSend()
       expect(repo.sends.get(off.id)!.status).toBe('expired')
       noWrites()
+    })
+
+    describe('horário de envio (v0.4.1)', () => {
+      /** hora local de hoje (NOW é segunda 13:00 em Brasília; o vitest.config fixa o fuso) */
+      const todayAt = (h: number, mi = 0, sec = 0) => {
+        const d = new Date(NOW)
+        return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, mi, sec).getTime()
+      }
+      const goTo = (ts: number) => clock.advance(ts - clock.now())
+
+      it('fora do horário, sem forçar: expira antes do "digitando…", nada é escrito, registro sem texto nem jid', async () => {
+        await open()
+        goTo(todayAt(19))
+        await emit('messages.upsert', { messages: [wamsg({ id: 'late1', ts: clock.now() - 60_000, text: 'tá aí?' })] })
+        const s = queueSend(JID, 'Resposta das 19h')
+        await runSend()
+        expect(repo.sends.get(s.id)).toMatchObject({ status: 'expired', error: 'fora do horário de envio' })
+        noWrites()
+        const lines = diagLines.filter(([k]) => k === 'send_outside_hours')
+        expect(lines).toHaveLength(1)
+        for (const [, d] of diagLines) {
+          expect(d).not.toContain('5547999998888')
+          expect(d).not.toContain('Resposta das 19h')
+        }
+      })
+
+      it('fora do horário, com "Forçar envio": sai normalmente (digitando, envia, marca como lida)', async () => {
+        await open()
+        spyLog(last())
+        goTo(todayAt(19))
+        const s = queueSend(JID, 'Forçado às 19h', { forced: true })
+        await runSend()
+        expect(repo.sends.get(s.id)!.status).toBe('sent')
+        expect(log[0]).toMatch(/^presence:composing:/)
+        expect(log.some((l) => l.startsWith('send:'))).toBe(true)
+      })
+
+      it('o fim do horário chega durante o "digitando…": expira antes de enviar (nunca sai depois)', async () => {
+        await open()
+        goTo(todayAt(17, 59, 58))
+        last().spies.sendPresenceUpdate.mockImplementation(async (type: string) => {
+          // o "digitando…" leva alguns segundos: passa das 18:00
+          if (type === 'composing') clock.advance(5_000)
+        })
+        const s = queueSend(JID, 'Quase no fim do dia')
+        await runSend()
+        expect(repo.sends.get(s.id)).toMatchObject({ status: 'expired', error: 'fora do horário de envio' })
+        expect(last().spies.sendMessage).not.toHaveBeenCalled()
+        expect(diagLines.some(([k, d]) => k === 'send_outside_hours' && d.includes('antes de enviar'))).toBe(true)
+      })
+
+      it('horário desligado: sai a qualquer hora', async () => {
+        await open()
+        goTo(todayAt(23, 30))
+        sendOpts = { ...sendOpts, schedule: { ...sendOpts.schedule, enabled: false } }
+        const s = queueSend(JID, 'Tarde da noite')
+        await runSend()
+        expect(repo.sends.get(s.id)!.status).toBe('sent')
+      })
     })
 
     it('o WhatsApp não confirmou: desconhecido, erro sem número; o eco com o id gerado aparece → enviada', async () => {

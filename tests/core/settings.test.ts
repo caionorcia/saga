@@ -1,3 +1,4 @@
+import { DEFAULT_SEND_SCHEDULE, cloneSchedule } from '../../src/shared/sendHours'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { openDb } from '../../src/core/db/db'
 import { Repo } from '../../src/core/db/repo'
@@ -41,18 +42,39 @@ describe('SettingsStore', () => {
       directSend: true,
       sendTyping: true,
       sendMarkRead: true,
-      sendQuoteInGroups: true
+      sendQuoteInGroups: true,
+      // v0.4.1: horário de envio ligado, segunda a sexta, 09:00–18:00
+      sendSchedule: DEFAULT_SEND_SCHEDULE
     })
   })
 
   it('envio direto: liga/desliga cada opção; recusa valor que não é sim/não', () => {
     const st = new SettingsStore(repo, fakeCipher())
-    expect(st.sendOptions()).toEqual({ enabled: true, typing: true, markRead: true, quoteInGroups: true })
+    expect(st.sendOptions()).toEqual({ enabled: true, typing: true, markRead: true, quoteInGroups: true, schedule: DEFAULT_SEND_SCHEDULE })
     st.save({ directSend: false, sendMarkRead: false })
-    expect(st.sendOptions()).toEqual({ enabled: false, typing: true, markRead: false, quoteInGroups: true })
+    expect(st.sendOptions()).toEqual({ enabled: false, typing: true, markRead: false, quoteInGroups: true, schedule: DEFAULT_SEND_SCHEDULE })
     expect(st.get()).toMatchObject({ directSend: false, sendTyping: true, sendMarkRead: false, sendQuoteInGroups: true })
     expect(() => st.save({ sendTyping: 'sim' as any })).toThrow(/sendTyping/)
     expect(st.get().sendTyping).toBe(true)
+  })
+
+  it('horário de envio: salva dias e horários; recusa fim antes do início sem gravar nada; ilegível volta ao padrão', () => {
+    const st = new SettingsStore(repo, fakeCipher())
+    const custom = cloneSchedule(DEFAULT_SEND_SCHEDULE)
+    custom.days[6] = { on: true, start: '10:00', end: '12:30' }
+    custom.days[1] = { on: true, start: '08:15', end: '18:00' }
+    st.save({ sendSchedule: custom })
+    expect(st.get().sendSchedule).toEqual(custom)
+    expect(st.sendOptions().schedule).toEqual(custom)
+    const bad = cloneSchedule(custom)
+    bad.days[2] = { on: true, start: '18:00', end: '09:00' }
+    expect(() => st.save({ sendSchedule: bad, theme: 'dark' })).toThrow(/sendSchedule/)
+    expect(st.get().sendSchedule).toEqual(custom)
+    expect(st.theme()).toBe('system')
+    st.save({ sendSchedule: { ...custom, enabled: false } })
+    expect(st.get().sendSchedule.enabled).toBe(false)
+    repo.setSetting('settings.sendSchedule', '{quebrado')
+    expect(st.get().sendSchedule).toEqual(DEFAULT_SEND_SCHEDULE)
   })
 
   it('tema: Automático por padrão; salva Claro/Escuro; recusa valor desconhecido sem gravar nada', () => {

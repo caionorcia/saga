@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { Repo } from './db/repo'
 import type { SendOptions } from '../shared/send'
+import { DEFAULT_SEND_SCHEDULE, cloneSchedule, isValidSchedule, type SendSchedule } from '../shared/sendHours'
 import { DEFAULT_CLAUDE_MODEL, DEFAULT_GROQ_MODEL, SETTING_CLAUDE_MODEL, SETTING_GROQ_MODEL } from './ai/llm'
 
 export type Provider = 'groq' | 'claude'
@@ -28,6 +29,8 @@ export interface Settings {
   sendMarkRead: boolean
   /** v0.4.0: nos grupos, citar a mensagem respondida (padrão: sim) */
   sendQuoteInGroups: boolean
+  /** v0.4.1: "Horário de envio" (padrão: ligado, segunda a sexta, 09:00–18:00, no fuso do computador) */
+  sendSchedule: SendSchedule
 }
 
 /** Campos ausentes ficam como estão; chave `''` apaga a chave. */
@@ -46,6 +49,7 @@ export interface SettingsPatch {
   sendTyping?: boolean
   sendMarkRead?: boolean
   sendQuoteInGroups?: boolean
+  sendSchedule?: SendSchedule
 }
 
 /** Cifra do sistema (no app, o `safeStorage` do Electron). Injetada para o core não depender do Electron. */
@@ -80,14 +84,15 @@ const K = {
   directSend: 'settings.directSend',
   sendTyping: 'settings.sendTyping',
   sendMarkRead: 'settings.sendMarkRead',
-  sendQuoteInGroups: 'settings.sendQuoteInGroups'
+  sendQuoteInGroups: 'settings.sendQuoteInGroups',
+  sendSchedule: 'settings.sendSchedule'
 } as const
 
 /** Opções do envio direto: ligadas até o mentor desligar. */
 const SEND_FLAGS = ['directSend', 'sendTyping', 'sendMarkRead', 'sendQuoteInGroups'] as const
 
 /** Configurações que vão na cópia de segurança (nada de chaves nem do que só vale neste computador). */
-const BACKUP_FIELDS = ['provider', 'transcriber', 'dailyCapUsd', 'claudeModel', 'groqModel', 'theme'] as const
+const BACKUP_FIELDS = ['provider', 'transcriber', 'dailyCapUsd', 'claudeModel', 'groqModel', 'theme', 'sendSchedule'] as const
 
 const KEY_FIELDS: Record<KeyKind, 'groqKey' | 'claudeKey' | 'openaiKey'> = {
   groq: 'groqKey',
@@ -116,8 +121,23 @@ export class SettingsStore {
       groqModel: this.repo.getSetting(K.groqModel) || DEFAULT_GROQ_MODEL,
       theme: this.theme(),
       keys: { groq: this.hasKey('groq'), claude: this.hasKey('claude'), openai: this.hasKey('openai') },
-      ...this.sendFlags()
+      ...this.sendFlags(),
+      sendSchedule: this.sendSchedule()
     }
+  }
+
+  /** O horário de envio salvo (padrão: ligado, Seg–Sex 09:00–18:00); um valor ilegível volta ao padrão. */
+  sendSchedule(): SendSchedule {
+    const raw = this.repo.getSetting(K.sendSchedule)
+    if (raw) {
+      try {
+        const v: unknown = JSON.parse(raw)
+        if (isValidSchedule(v)) return cloneSchedule(v)
+      } catch {
+        // ilegível: padrão
+      }
+    }
+    return cloneSchedule(DEFAULT_SEND_SCHEDULE)
   }
 
   private sendFlags(): Record<(typeof SEND_FLAGS)[number], boolean> {
@@ -129,7 +149,7 @@ export class SettingsStore {
   /** As opções do envio direto, lidas na hora de cada envio. */
   sendOptions(): SendOptions {
     const f = this.sendFlags()
-    return { enabled: f.directSend, typing: f.sendTyping, markRead: f.sendMarkRead, quoteInGroups: f.sendQuoteInGroups }
+    return { enabled: f.directSend, typing: f.sendTyping, markRead: f.sendMarkRead, quoteInGroups: f.sendQuoteInGroups, schedule: this.sendSchedule() }
   }
 
   /** O tema escolhido (padrão: Automático). Barato: o processo principal lê antes de abrir a janela. */
@@ -174,8 +194,9 @@ export class SettingsStore {
       const raw = values[f]
       if (typeof raw !== 'string') continue
       if (opts.onlyMissing && this.repo.getSetting(K[f]) !== null) continue
-      const patch: SettingsPatch = f === 'dailyCapUsd' ? { dailyCapUsd: Number(raw) } : ({ [f]: raw } as SettingsPatch)
       try {
+        const patch: SettingsPatch =
+          f === 'dailyCapUsd' ? { dailyCapUsd: Number(raw) } : f === 'sendSchedule' ? { sendSchedule: JSON.parse(raw) } : ({ [f]: raw } as SettingsPatch)
         this.save(patch)
         n++
       } catch {
@@ -205,6 +226,10 @@ export class SettingsStore {
     if (patch.theme !== undefined) {
       if (!THEME_PREFS.includes(patch.theme)) throw new InvalidSettingError('theme')
       writes.push([K.theme, patch.theme])
+    }
+    if (patch.sendSchedule !== undefined) {
+      if (!isValidSchedule(patch.sendSchedule)) throw new InvalidSettingError('sendSchedule')
+      writes.push([K.sendSchedule, JSON.stringify(cloneSchedule(patch.sendSchedule))])
     }
     if (patch.startWithWindows !== undefined) writes.push([K.startWithWindows, patch.startWithWindows ? '1' : '0'])
     for (const f of SEND_FLAGS) {

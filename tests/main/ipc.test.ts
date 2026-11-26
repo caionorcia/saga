@@ -218,7 +218,7 @@ describe('IPC do envio direto', () => {
       await call('sendReply', APP, input)
       expect(service.sendReply).toHaveBeenCalledWith(input)
       await call('prepareSend', APP, { jid: input.jid, text: 'Oi!' })
-      expect(service.prepareSend).toHaveBeenCalledWith({ jid: input.jid, text: 'Oi!' })
+      expect(service.prepareSend).toHaveBeenCalledWith({ jid: input.jid, text: 'Oi!', forced: false })
     } finally {
       off()
     }

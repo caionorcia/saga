@@ -13,9 +13,10 @@ import schemaV11 from './schema-v11.sql?raw'
 import schemaV12 from './schema-v12.sql?raw'
 import schemaV13 from './schema-v13.sql?raw'
 import schemaV14 from './schema-v14.sql?raw'
+import schemaV15 from './schema-v15.sql?raw'
 
 /** Migrações em ordem; o índice + 1 é o `user_version` resultante. */
-const MIGRATIONS: string[] = [schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14]
+const MIGRATIONS: string[] = [schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15]
 
 export function openDb(file: string | ':memory:'): DatabaseSync {
   const db = new DatabaseSync(file)

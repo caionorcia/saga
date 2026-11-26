@@ -6,13 +6,24 @@ import { KnowledgeBaseSection } from './KnowledgeBase'
 import { BackupSection } from './Backup'
 import { UpdateNotice } from './UpdateNotice'
 import { THEME_LABELS, setThemePref, useTheme } from '../theme'
+import {
+  DAY_LONG,
+  DAY_SHORT,
+  SCHEDULE_TIMES,
+  WEEK_ORDER,
+  cloneSchedule,
+  localTimeZone,
+  parseHHMM,
+  scheduleSummary,
+  type SendSchedule
+} from '../../../shared/sendHours'
 
 const THEME_PREFS: ThemePref[] = ['system', 'light', 'dark']
 
 const KEY_LABEL: Record<KeyKind, string> = { groq: 'Groq', claude: 'Claude', openai: 'OpenAI' }
 const KEY_FIELD = { groq: 'groqKey', claude: 'claudeKey', openai: 'openaiKey' } as const
 
-export function Settings() {
+export function Settings({ focus }: { focus?: { id: string; seq: number } | null } = {}) {
   const [s, setS] = useState<SettingsView | null>(null)
   const [events, setEvents] = useState<RecentEvent[]>([])
   const [msg, setMsg] = useState<{ text: string; bad: boolean } | null>(null)
@@ -36,6 +47,15 @@ export function Settings() {
       alive = false
     }
   }, [])
+
+  // aberto pela barra de status: rola até a seção pedida
+  const loaded = !!s
+  useEffect(() => {
+    if (!focus || !loaded) return
+    const el = document.getElementById(focus.id)
+    el?.scrollIntoView?.({ block: 'start' })
+    el?.focus?.({ preventScroll: true })
+  }, [focus?.seq, loaded])
 
   const save = async (patch: SaveSettingsInput) => {
     setMsg(null)
@@ -136,6 +156,7 @@ export function Settings() {
               Nos grupos, citar a mensagem que está sendo respondida
             </label>
           </fieldset>
+          <SendHoursSection schedule={s.sendSchedule} disabled={!s.directSend} onSave={(v) => save({ sendSchedule: v })} />
         </section>
 
         <KnowledgeBaseSection />
@@ -217,6 +238,100 @@ export function Settings() {
         </section>
       </div>
     </main>
+  )
+}
+
+/**
+ * "Horário de envio" (v0.4.1): liga/desliga a regra e, para cada dia (Seg..Dom), se pode enviar e de que horas a que
+ * horas (de 15 em 15 minutos). Salva a cada mudança; um dia com o fim antes do início não é salvo.
+ */
+function SendHoursSection({ schedule, disabled, onSave }: { schedule: SendSchedule; disabled: boolean; onSave: (v: SendSchedule) => Promise<boolean> }) {
+  const [draft, setDraft] = useState(() => cloneSchedule(schedule))
+  const saved = JSON.stringify(schedule)
+  useEffect(() => setDraft(cloneSchedule(JSON.parse(saved) as SendSchedule)), [saved])
+  const badDays = WEEK_ORDER.filter((i) => (parseHHMM(draft.days[i].end) ?? 0) <= (parseHHMM(draft.days[i].start) ?? 0))
+
+  const update = (fn: (d: SendSchedule) => void) => {
+    const next = cloneSchedule(draft)
+    fn(next)
+    setDraft(next)
+    const bad = next.days.some((d) => (parseHHMM(d.end) ?? 0) <= (parseHHMM(d.start) ?? 0))
+    if (!bad) void onSave(next)
+  }
+
+  const off = disabled || !draft.enabled
+  return (
+    <div className="send-hours" id="send-hours" tabIndex={-1} aria-labelledby="send-hours-title">
+      <h3 id="send-hours-title">Horário de envio</h3>
+      <label className="check">
+        <input type="checkbox" checked={draft.enabled} disabled={disabled} onChange={(e) => update((d) => (d.enabled = e.target.checked))} />
+        Só enviar nos dias e horários abaixo
+      </label>
+      <p className="muted small">
+        Fora deles, o botão Enviar continua lá, mas a confirmação só envia se você marcar <strong>Forçar envio</strong>. Um
+        envio que ainda está na fila quando o horário acaba não sai depois: fica como "Não enviada" e você decide se envia de novo.
+      </p>
+      <table className="hours-table" aria-label="Dias e horários de envio">
+        <tbody>
+          {WEEK_ORDER.map((i) => {
+            const day = draft.days[i]
+            const bad = badDays.includes(i)
+            return (
+              <tr key={i} className={`${day.on ? '' : 'hours-off'}${bad ? ' hours-bad' : ''}`}>
+                <th scope="row">
+                  <label className="check">
+                    <input type="checkbox" checked={day.on} disabled={off} onChange={(e) => update((d) => (d.days[i].on = e.target.checked))} />
+                    <span className="hours-day">{DAY_SHORT[i]}</span>
+                  </label>
+                </th>
+                <td>
+                  <select
+                    aria-label={`Início de ${DAY_LONG[i]}`}
+                    value={day.start}
+                    disabled={off || !day.on}
+                    onChange={(e) => update((d) => (d.days[i].start = e.target.value))}
+                  >
+                    {SCHEDULE_TIMES.filter((t) => t !== '24:00').map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td className="hours-sep" aria-hidden="true">
+                  às
+                </td>
+                <td>
+                  <select
+                    aria-label={`Fim de ${DAY_LONG[i]}`}
+                    aria-invalid={bad || undefined}
+                    value={day.end}
+                    disabled={off || !day.on}
+                    onChange={(e) => update((d) => (d.days[i].end = e.target.value))}
+                  >
+                    {SCHEDULE_TIMES.filter((t) => t !== '00:00').map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td className="hours-note">{!day.on ? <span className="muted small">sem envio</span> : null}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      {badDays.length > 0 && (
+        <p className="field-error" role="alert">
+          O fim precisa ser depois do início ({badDays.map((i) => DAY_SHORT[i]).join(', ')}). Esse horário ainda não foi salvo.
+        </p>
+      )}
+      <p className="muted small">
+        {draft.enabled ? `Agora: ${scheduleSummary(draft)}. ` : 'Desligado: o Saga pode enviar a qualquer hora. '}
+        Vale o relógio deste computador (fuso {localTimeZone()}).
+      </p>
+    </div>
   )
 }
 

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { FakeClock } from '../../../src/core/clock'
 import { openDb } from '../../../src/core/db/db'
 import { Repo } from '../../../src/core/db/repo'
+import { DEFAULT_SEND_SCHEDULE, cloneSchedule } from '../../../src/shared/sendHours'
 import { SettingsStore, type Cipher } from '../../../src/core/settings'
 import { BackupManager, autoBackupDue, backupFileName, rotateBackups } from '../../../src/core/backup/manager'
 import { BACKUP_VERSION, encodeBackup, openBackup, writeZip } from '../../../src/core/backup/format'
@@ -114,6 +115,25 @@ describe('cópia de segurança', () => {
     expect(t.repo.listMessages(ANA)).toHaveLength(0)
     // o registro só leva contagens
     expect(diag.join('\n')).not.toMatch(/Ana|precifica|Vamos|Preços/)
+  })
+
+  it('horário de envio vai na cópia e volta igual (v0.4.1)', () => {
+    const custom = cloneSchedule(DEFAULT_SEND_SCHEDULE)
+    custom.days[6] = { on: true, start: '10:00', end: '13:00' }
+    custom.days[5] = { on: true, start: '09:00', end: '17:00' }
+    settings.save({ sendSchedule: custom })
+    const { bytes } = mgr.exportBytes({ includeMessages: false })
+    const t = fresh()
+    expect(t.settings.get().sendSchedule).toEqual(DEFAULT_SEND_SCHEDULE)
+    restoreInto(t, bytes, undefined, 'replace')
+    expect(t.settings.get().sendSchedule).toEqual(custom)
+    // juntar não troca um horário já escolhido neste computador
+    const u = fresh()
+    const mine = cloneSchedule(DEFAULT_SEND_SCHEDULE)
+    mine.enabled = false
+    u.settings.save({ sendSchedule: mine })
+    restoreInto(u, bytes, undefined, 'merge')
+    expect(u.settings.get().sendSchedule).toEqual(mine)
   })
 
   it('com senha (AES-256-GCM + scrypt): senha errada dá erro claro; a certa restaura', () => {

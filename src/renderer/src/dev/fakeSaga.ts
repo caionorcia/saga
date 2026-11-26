@@ -2,6 +2,7 @@
  * `window.saga` falso, em memória, com os dados de `tests/fixtures/wa/demo.json`.
  * Usado pelos testes e pela pré-visualização no navegador (`npm run preview:ui`); nunca no app real.
  */
+import { DEFAULT_SEND_SCHEDULE, cloneSchedule, isWithinSendHours, outsideHoursText, sendHoursInfo } from '../../../shared/sendHours'
 import { loadDemo, loadDemoFeedback, loadDemoReplyFeedback, type DemoContact, type DemoFeedback, type DemoReplyFeedback } from '../../../core/demo'
 import type { GroupAnswer, ReplyDecision } from '../../../shared/feedback'
 import { GROUP_ANSWER_MAX_MEMBERS } from '../../../shared/triage'
@@ -78,6 +79,11 @@ export interface FakeOptions {
    */
   sendEtaMs?: number
   sendAutoAdvance?: boolean
+  /**
+   * horário de envio: o relógio que a regra usa fica parado num sábado às 10:00 (fora do horário padrão; padrão: numa
+   * quarta às 11:00, dentro dele), para a pré-visualização e os testes não dependerem da hora real
+   */
+  outsideHours?: boolean
 }
 
 const EXTRA_SUGGESTION = 'Combinado! Qualquer coisa me avisa por aqui.'
@@ -173,8 +179,24 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     directSend: opts.directSend ?? true,
     sendTyping: true,
     sendMarkRead: true,
-    sendQuoteInGroups: true
+    sendQuoteInGroups: true,
+    sendSchedule: cloneSchedule(DEFAULT_SEND_SCHEDULE)
   }
+  /** o relógio do horário de envio (parado: ver `outsideHours`) */
+  const hoursNow = (() => {
+    const d = new Date(now)
+    const target = opts.outsideHours ? 6 : 3
+    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate() + ((target - d.getDay() + 7) % 7), opts.outsideHours ? 10 : 11)
+    return day.getTime()
+  })()
+  const outsideHoursNow = () => (isWithinSendHours(settings.sendSchedule, hoursNow) ? null : sendHoursInfo(settings.sendSchedule, hoursNow))
+  const sendOptionsNow = () => ({
+    enabled: settings.directSend,
+    typing: settings.sendTyping,
+    markRead: settings.sendMarkRead,
+    quoteInGroups: settings.sendQuoteInGroups,
+    schedule: cloneSchedule(settings.sendSchedule)
+  })
   const stateListeners = new Set<(s: AppState) => void>()
   const contactListeners = new Set<() => void>()
   const calls: FakeControl['calls'] = []
@@ -186,7 +208,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   /** envio direto simulado (nada sai daqui) */
   const sends = new Map<string, SendView[]>()
   const sendListeners = new Set<{ jid: string; cb: () => void }>()
-  const sendTokens = new Map<string, { jid: string; text: string; expiresAt: number }>()
+  const sendTokens = new Map<string, { jid: string; text: string; expiresAt: number; forced: boolean }>()
   let sendSeq = 0
   let tokenSeq = 0
   const notifySends = (jid: string) => sendListeners.forEach((l) => l.jid === jid && l.cb())
@@ -217,7 +239,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     const visible = demo.filter((c) => !hidden.has(c.jid))
     const awaiting = visible.filter(needsReplyOf).length
     const withAlerts = visible.filter((c) => activeAlerts(c.jid).length > 0).length
-    return { ...state, triage: { awaiting, withAlerts } }
+    return { ...state, triage: { awaiting, withAlerts }, sendHours: settings.directSend ? outsideHoursNow() : null }
   }
   const emitState = () => stateListeners.forEach((l) => l(snapshot()))
   const record = <T>(method: string, args: unknown[], value: T): T => {
@@ -531,26 +553,27 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     prepareSend: async (input) => {
       record('prepareSend', [input], undefined)
       const text = input.text.trim()
+      const forced = input.forced === true
       const code = sendRefusal(input.jid, text)
       if (code) return { ok: false, code, message: SEND_REFUSAL_TEXT[code] }
       const c = find(input.jid)!
-      const token = `00000000-0000-4000-9000-${String(++tokenSeq).padStart(12, '0')}`
-      const expiresAt = Date.now() + SEND_LIMITS.tokenTtlMs
-      sendTokens.set(token, { jid: input.jid, text, expiresAt })
       const q = c.isGroup && settings.sendQuoteInGroups ? quoteOf(c) : null
       const body = q ? (q.text ?? q.transcript ?? '[áudio]') : ''
-      return {
-        ok: true,
-        preview: {
-          token,
-          expiresAt,
-          jid: input.jid,
-          text,
-          recipient: { name: displayName(c), phone: c.isGroup ? null : formatDemoPhone(c.jid), isGroup: c.isGroup },
-          quote: q ? { senderName: q.senderName ?? 'Participante', text: body.length > 140 ? `${body.slice(0, 139)}…` : body } : null,
-          options: { enabled: settings.directSend, typing: settings.sendTyping, markRead: settings.sendMarkRead, quoteInGroups: settings.sendQuoteInGroups }
-        }
+      const draft = {
+        jid: input.jid,
+        text,
+        recipient: { name: displayName(c), phone: c.isGroup ? null : formatDemoPhone(c.jid), isGroup: c.isGroup },
+        quote: q ? { senderName: q.senderName ?? 'Participante', text: body.length > 140 ? `${body.slice(0, 139)}…` : body } : null,
+        options: sendOptionsNow()
       }
+      const outside = outsideHoursNow()
+      if (outside && !forced) {
+        return { ok: false, code: 'outside_hours', message: outsideHoursText(outside), nextAllowedAt: outside.nextAllowedAt, hours: outside, draft }
+      }
+      const token = `00000000-0000-4000-9000-${String(++tokenSeq).padStart(12, '0')}`
+      const expiresAt = Date.now() + SEND_LIMITS.tokenTtlMs
+      sendTokens.set(token, { jid: input.jid, text, expiresAt, forced })
+      return { ok: true, preview: { token, expiresAt, ...draft, forced, outsideHours: outside } }
     },
     sendReply: async (input) => {
       record('sendReply', [input], undefined)
@@ -560,6 +583,8 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       if (!t || t.expiresAt <= Date.now() || t.jid !== input.jid || t.text !== text) return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
       const code = sendRefusal(input.jid, text)
       if (code) return { ok: false, code, message: SEND_REFUSAL_TEXT[code] }
+      const outside = outsideHoursNow()
+      if (outside && !t.forced) return { ok: false, code: 'outside_hours', message: outsideHoursText(outside) }
       const rid = input.replyId ?? (await api.saveReply({ jid: input.jid, originalSuggestion: input.originalSuggestion ?? null, finalText: text, analysisLastMsgId: input.analysisLastMsgId, chosenIndex: input.chosenIndex }))
       const list = sends.get(input.jid) ?? []
       const same = list.find((x) => x.replyId === rid && x.text === text)
@@ -650,10 +675,12 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
 
     getSettings: async () => ({ ...settings, keys: { ...settings.keys } }),
     saveSettings: async (patch) => {
+      record('saveSettings', [patch], undefined)
       for (const [k, v] of Object.entries(patch)) {
         if (k.endsWith('Key')) settings.keys[k.replace('Key', '') as keyof SettingsView['keys']] = !!v
         else (settings as unknown as Record<string, unknown>)[k] = v
       }
+      if (patch.sendSchedule !== undefined || patch.directSend !== undefined) emitState()
       return { ok: true, settings: { ...settings, keys: { ...settings.keys } } }
     },
     testKey: async (_kind, key) => key.trim().length >= 8,
@@ -771,7 +798,7 @@ declare global {
 /**
  * Instala o falso em `window.saga`. Na pré-visualização, `?state={"conn":"waiting_retry"}` mexe no estado inicial,
  * `?setup=1` mostra o assistente com um QR Code, `?qr=1` mostra o QR na tela principal (vincular de novo) e
- * `?theme=dark|light|system` escolhe o tema salvo.
+ * `?theme=dark|light|system` escolhe o tema salvo e `?hours=outside` põe o relógio do horário de envio fora dele.
  */
 export async function installFakeSaga(): Promise<void> {
   const params = new URLSearchParams(location.search)
@@ -789,7 +816,7 @@ export async function installFakeSaga(): Promise<void> {
   if (patch.conn === 'waiting_retry' && patch.retryAt === undefined) patch.retryAt = Date.now() + 2 * 60_000
   const t = params.get('theme')
   const theme = t === 'light' || t === 'dark' || t === 'system' ? t : undefined
-  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme })
+  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside' })
   window.saga = ctl.api
   window.__sagaFake = ctl
 }

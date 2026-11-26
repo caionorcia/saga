@@ -2,10 +2,14 @@ import { randomUUID } from 'node:crypto'
 import type { Clock } from '../clock'
 import { SEND_LIMITS } from '../../shared/send'
 
-/** O que o mentor viu na confirmação e fica preso ao token: para onde vai e qual mensagem é citada. */
+/**
+ * O que o mentor viu na confirmação e fica preso ao token: para onde vai, qual mensagem é citada e se marcou "Forçar
+ * envio" (v0.4.1: um token sem `forced` nunca vale fora do horário de envio).
+ */
 export interface SendBinding {
   address: string
   quotedId: string | null
+  forced: boolean
 }
 
 /**
@@ -18,11 +22,11 @@ export class SendGate {
 
   constructor(private readonly clock: Clock) {}
 
-  issue(jid: string, text: string, bind: SendBinding = { address: jid, quotedId: null }): { token: string; expiresAt: number } {
+  issue(jid: string, text: string, bind: SendBinding = { address: jid, quotedId: null, forced: false }): { token: string; expiresAt: number } {
     this.sweep()
     const token = randomUUID()
     const expiresAt = this.clock.now() + SEND_LIMITS.tokenTtlMs
-    this.tokens.set(token, { jid, text: text.trim(), expiresAt, bind })
+    this.tokens.set(token, { jid, text: text.trim(), expiresAt, bind: { address: bind.address, quotedId: bind.quotedId, forced: bind.forced === true } })
     return { token, expiresAt }
   }
 

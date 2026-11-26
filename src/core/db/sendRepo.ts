@@ -18,6 +18,8 @@ export interface SendRow {
   /** ids de mensagem gerados pelo app, um por tentativa que chegou a pedir o envio */
   msgIds: string[]
   status: SendStatus
+  /** v0.4.1: confirmado com "Forçar envio" (pode sair fora do horário de envio) */
+  forced: boolean
   /** 1 na primeira confirmação; cada nova confirmação depois de falha/expiração/desconhecido soma 1 */
   attempt: number
   queuedAt: number
@@ -48,6 +50,7 @@ function toSend(r: Row): SendRow {
     quotedId: r.quoted_id ?? null,
     msgIds: ids(r.msg_ids_json),
     status: r.status,
+    forced: r.forced === 1,
     attempt: r.attempt,
     queuedAt: r.queued_at,
     startedAt: r.started_at ?? null,
@@ -122,13 +125,17 @@ export class SendRepo {
    * `attempt + 1` e o destino/citação desta nova confirmação (só depois de uma nova confirmação explícita, que é quem
    * chama). A chave de outra conversa lança `SendConflictError`.
    */
-  enqueue(a: { idemKey: string; replyId: number; jid: string; text: string; address: string; quotedId: string | null }): { send: SendRow; created: boolean } {
+  enqueue(a: { idemKey: string; replyId: number; jid: string; text: string; address: string; quotedId: string | null; forced?: boolean }): {
+    send: SendRow
+    created: boolean
+  } {
+    const forced = a.forced ? 1 : 0
     const now = this.clock.now()
     const cur = this.byIdemKey(a.idemKey)
     if (!cur) {
       const res = this.db
-        .prepare(`INSERT INTO sends(idem_key, reply_id, jid, text, address, quoted_id, status, queued_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`)
-        .run(a.idemKey, a.replyId, a.jid, a.text, a.address, a.quotedId, now)
+        .prepare(`INSERT INTO sends(idem_key, reply_id, jid, text, address, quoted_id, forced, status, queued_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)`)
+        .run(a.idemKey, a.replyId, a.jid, a.text, a.address, a.quotedId, forced, now)
       return { send: this.get(Number(res.lastInsertRowid))!, created: true }
     }
     if (cur.jid !== a.jid || cur.replyId !== a.replyId) throw new SendConflictError()
@@ -138,10 +145,10 @@ export class SendRepo {
     this.db
       .prepare(
         `UPDATE sends SET status = 'queued', attempt = attempt + 1, queued_at = ?, started_at = NULL, sent_at = NULL, wa_msg_id = NULL,
-           error = NULL, address = ?, quoted_id = ?
+           error = NULL, address = ?, quoted_id = ?, forced = ?
          WHERE id = ? AND attempt = ?`
       )
-      .run(now, a.address, a.quotedId, cur.id, cur.attempt)
+      .run(now, a.address, a.quotedId, forced, cur.id, cur.attempt)
     return { send: this.get(cur.id)!, created: true }
   }
 

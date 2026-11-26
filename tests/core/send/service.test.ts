@@ -12,6 +12,7 @@ import { useAtomicAuthState } from '../../../src/core/wa/authState'
 import type { LlmProvider } from '../../../src/core/ai/llm'
 import { SettingsStore, type Cipher } from '../../../src/core/settings'
 import { SagaService } from '../../../src/core/service'
+import { DEFAULT_SEND_SCHEDULE, cloneSchedule } from '../../../src/shared/sendHours'
 import { chatHash } from '../../../src/core/send/logic'
 
 const NOW = 1_764_000_000_000
@@ -179,7 +180,8 @@ describe('envio direto no serviço', () => {
       await startOpen()
       const p = await prepare(JID, '  Oi!  ')
       expect(p).toMatchObject({ jid: JID, text: 'Oi!', recipient: { name: 'Ana', phone: '+55 47 99999-8888', isGroup: false }, quote: null })
-      expect(p.options).toEqual({ enabled: true, typing: true, markRead: true, quoteInGroups: true })
+      expect(p.options).toEqual({ enabled: true, typing: true, markRead: true, quoteInGroups: true, schedule: DEFAULT_SEND_SCHEDULE })
+      expect(p).toMatchObject({ forced: false, outsideHours: null })
       clock.advance(2 * DAY)
       expect(await service.prepareSend({ jid: OLD, text: 'Oi' })).toMatchObject({ ok: false, code: 'no_recent_contact' })
       expect(await service.prepareSend({ jid: 'x@s.whatsapp.net', text: 'Oi' })).toMatchObject({ ok: false, code: 'unknown_chat' })
@@ -194,6 +196,101 @@ describe('envio direto no serviço', () => {
       const p = await prepare(JID, 'Oi!')
       await service.saveSettings({ directSend: false })
       expect(await service.sendReply({ token: p.token, jid: JID, text: 'Oi!' })).toMatchObject({ ok: false, code: 'disabled' })
+    })
+  })
+
+  describe('horário de envio (v0.4.1)', () => {
+    /** hora local de hoje (NOW é segunda 13:00 em Brasília; o vitest.config fixa o fuso) */
+    const todayAt = (h: number, mi = 0, sec = 0) => {
+      const d = new Date(NOW)
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, mi, sec).getTime()
+    }
+    const goTo = (ts: number) => clock.advance(ts - clock.now())
+
+    it('fora do horário, sem forçar: recusado com outside_hours, o próximo horário e o rascunho; sem token', async () => {
+      await startOpen()
+      goTo(todayAt(18))
+      const r = await service.prepareSend({ jid: JID, text: 'Oi!' })
+      expect(r).toMatchObject({
+        ok: false,
+        code: 'outside_hours',
+        message: 'Fora do horário de envio (Seg–Sex, 09:00–18:00). Próximo horário: amanhã 09:00.',
+        nextAllowedAt: todayAt(9) + DAY,
+        hours: { summary: 'Seg–Sex, 09:00–18:00', next: 'amanhã 09:00' },
+        draft: { jid: JID, text: 'Oi!', recipient: { name: 'Ana', isGroup: false } }
+      })
+      expect(r).not.toHaveProperty('token')
+      expect((r as any).draft).not.toHaveProperty('token')
+      expect(diag.some(([k]) => k === 'send_outside_hours')).toBe(true)
+      expect(writes()).toBe(0)
+    })
+
+    it('"Forçar envio": confirmação forçada sai fora do horário, seguindo as outras regras; registra send_forced', async () => {
+      await startOpen()
+      goTo(todayAt(20, 15))
+      const r = await service.prepareSend({ jid: JID, text: 'Combinado!', forced: true })
+      if (!r.ok) throw new Error(r.code)
+      expect(r.preview).toMatchObject({ forced: true, outsideHours: { next: 'amanhã 09:00' } })
+      const q = await service.sendReply({ token: r.preview.token, jid: JID, text: 'Combinado!' })
+      if (!q.ok) throw new Error(q.code)
+      expect(repo.sends.get(q.send.id)!.forced).toBe(true)
+      await drain()
+      expect(repo.sends.get(q.send.id)!.status).toBe('sent')
+      expect(last().spies.sendPresenceUpdate).toHaveBeenCalledWith('composing', JID)
+      expect(diag.map(([k]) => k)).toContain('send_forced')
+    })
+
+    it('token sem forçar emitido dentro do horário não vale depois do fim', async () => {
+      await startOpen()
+      goTo(todayAt(17, 58))
+      const p = await prepare(JID, 'Oi!')
+      expect(p.forced).toBe(false)
+      goTo(todayAt(18, 0, 30))
+      expect(await service.sendReply({ token: p.token, jid: JID, text: 'Oi!' })).toMatchObject({ ok: false, code: 'outside_hours' })
+      expect(repo.sends.counts().queued).toBe(0)
+      expect(repo.jobCounts('send_message').pending).toBe(0)
+    })
+
+    it('na fila quando o horário acaba: expira com "fora do horário de envio" (nunca espera para sair depois)', async () => {
+      await startOpen()
+      goTo(todayAt(17, 59, 40))
+      const p = await prepare(JID, 'Oi!')
+      const r = await service.sendReply({ token: p.token, jid: JID, text: 'Oi!' })
+      if (!r.ok) throw new Error(r.code)
+      await service.pauseAll()
+      await drain(40_000)
+      expect(repo.sends.get(r.send.id)).toMatchObject({ status: 'expired', error: 'fora do horário de envio' })
+      await service.resumeAll()
+      goTo(todayAt(9) + DAY)
+      await drain(60_000)
+      expect(repo.sends.get(r.send.id)!.status).toBe('expired')
+      expect(last().spies.sendMessage).not.toHaveBeenCalled()
+    })
+
+    it('horário desligado: pode sempre; horário salvo inválido é recusado', async () => {
+      await startOpen()
+      const off = cloneSchedule(DEFAULT_SEND_SCHEDULE)
+      off.enabled = false
+      expect((await service.saveSettings({ sendSchedule: off })).ok).toBe(true)
+      goTo(todayAt(23, 30))
+      const p = await prepare(JID, 'Oi!')
+      expect(p.outsideHours).toBeNull()
+      const bad = cloneSchedule(DEFAULT_SEND_SCHEDULE)
+      bad.days[1].end = '08:00'
+      expect(await service.saveSettings({ sendSchedule: bad })).toMatchObject({ ok: false, code: 'invalid' })
+    })
+
+    it('estado: sendHours só fora do horário e com envio direto ligado; a varredura avisa quando o horário fecha', async () => {
+      await startOpen()
+      expect(service.state().sendHours).toBeNull()
+      const states: Array<unknown> = []
+      service.onState((st) => states.push(st.sendHours))
+      goTo(todayAt(17, 59, 50))
+      await drain(30_000)
+      expect(service.state().sendHours).toMatchObject({ summary: 'Seg–Sex, 09:00–18:00', next: 'amanhã 09:00' })
+      expect(states.some((h) => h !== null && h !== undefined)).toBe(true)
+      await service.saveSettings({ directSend: false })
+      expect(service.state().sendHours).toBeNull()
     })
   })
 

@@ -10,9 +10,11 @@ interface Props {
   settingsOpen: boolean
   /** clique no contador "N para responder · M com alerta": mostrar a lista "Para responder" */
   onShowAwaiting?: () => void
+  /** clique em "Fora do horário de envio": Configurações › Envio direto › Horário de envio */
+  onOpenSendHours?: () => void
 }
 
-export function StatusBar({ state, onOpenSettings, settingsOpen, onShowAwaiting }: Props) {
+export function StatusBar({ state, onOpenSettings, settingsOpen, onShowAwaiting, onOpenSendHours }: Props) {
   const [busy, setBusy] = useState(false)
   const { conn, paused, diskLow, queue } = state
   const [now, setNow] = useState(() => Date.now())
@@ -45,6 +47,16 @@ export function StatusBar({ state, onOpenSettings, settingsOpen, onShowAwaiting 
         <strong>{label.text}</strong>
         {diskLow && <span className="chip chip-warn">Pouco espaço no disco</span>}
         {chip && <span className="chip chip-warn">{chip}</span>}
+        {state.sendHours && (
+          <button
+            type="button"
+            className="chip chip-hours"
+            title={`Envio direto: ${state.sendHours.summary}.${state.sendHours.next ? ` Próximo horário: ${state.sendHours.next}.` : ''} Clique para ajustar.`}
+            onClick={() => onOpenSendHours?.()}
+          >
+            Fora do horário de envio
+          </button>
+        )}
       </div>
 
       <div className="status-info">

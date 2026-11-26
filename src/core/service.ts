@@ -61,6 +61,7 @@ import {
   type SendReplyResult,
   type SendView
 } from '../shared/send'
+import { OUTSIDE_HOURS_REASON, isWithinSendHours, outsideHoursText, sendHoursInfo, type SendHoursInfo, type SendSchedule } from '../shared/sendHours'
 import type {
   AiErrorCode,
   AnalysisResult,
@@ -255,6 +256,8 @@ export class SagaService extends EventEmitter {
   private readonly sendGate: SendGate
   private pendingSendJids = new Set<string>()
   private sendSweepTimer: ReturnType<typeof setInterval> | null = null
+  /** a última situação do horário de envio vista pela varredura (para a barra de status mudar sozinha) */
+  private lastOutside: boolean | null = null
 
   constructor(opts: SagaServiceOpts) {
     super()
@@ -572,6 +575,7 @@ export class SagaService extends EventEmitter {
       update: this.update,
       updateCheck: this.updateCheck,
       triage: this.repo.triageCounts(),
+      sendHours: s.directSend ? this.outsideHours(s.sendSchedule) : null,
       ...(this.startError ? { startError: this.startError } : {})
     }
   }
@@ -1073,7 +1077,7 @@ export class SagaService extends EventEmitter {
   }
 
   /** As regras que valem antes de qualquer envio: envio direto ligado, texto válido, conversa conhecida, contato recente. */
-  private sendRefusal(jid: string, text: string): SendRefusal | null {
+  private sendRefusal(jid: string, text: string): Exclude<SendRefusal, 'outside_hours'> | null {
     if (!this.settings.sendOptions().enabled) return 'disabled'
     const t = text.trim()
     if (!t) return 'empty'
@@ -1100,6 +1104,7 @@ export class SagaService extends EventEmitter {
   async prepareSend(input: PrepareSendInput): Promise<PrepareSendResult> {
     const jid = input.jid
     const text = input.text.trim()
+    const forced = input.forced === true
     const refusal = this.sendRefusal(jid, text)
     if (refusal) return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
     const contact = this.repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)!
@@ -1112,8 +1117,21 @@ export class SagaService extends EventEmitter {
       quote = { senderName: q.senderLabel ?? 'Participante', text: body.length > 140 ? `${body.slice(0, 139)}…` : body }
     }
     const phone = contact.isGroup || jid.endsWith('@lid') ? null : formatPhone(jid)
-    const { token, expiresAt } = this.sendGate.issue(jid, text, { address: bind.address, quotedId: q?.id ?? null })
-    return { ok: true, preview: { token, expiresAt, jid, text, recipient: { name: contact.displayName, phone, isGroup: contact.isGroup }, quote, options } }
+    const draft = { jid, text, recipient: { name: contact.displayName, phone, isGroup: contact.isGroup }, quote, options }
+    // fora do horário de envio: sem "Forçar envio" não há token (nada pode sair); a confirmação mostra o aviso
+    const outsideHours = this.outsideHours(options.schedule)
+    if (outsideHours && !forced) {
+      this.diag('send_outside_hours', `chat=${chatHash(jid)} confirmação aberta fora do horário`)
+      return { ok: false, code: 'outside_hours', message: outsideHoursText(outsideHours), nextAllowedAt: outsideHours.nextAllowedAt, hours: outsideHours, draft }
+    }
+    const { token, expiresAt } = this.sendGate.issue(jid, text, { address: bind.address, quotedId: q?.id ?? null, forced })
+    return { ok: true, preview: { token, expiresAt, ...draft, forced, outsideHours } }
+  }
+
+  /** Fora do horário de envio agora? A situação (resumo e próximo horário); null = pode enviar (ou sem horário). */
+  private outsideHours(schedule: SendSchedule): SendHoursInfo | null {
+    const now = this.clock.now()
+    return isWithinSendHours(schedule, now) ? null : sendHoursInfo(schedule, now)
   }
 
   /**
@@ -1134,6 +1152,12 @@ export class SagaService extends EventEmitter {
       this.diag('send_refused', `chat=${chatHash(jid)} ${refusal}`)
       return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
     }
+    // a confirmação sem "Forçar envio" nunca vale fora do horário (mesmo que o diálogo tenha aberto dentro dele)
+    const outside = this.outsideHours(this.settings.sendOptions().schedule)
+    if (outside && !bind.forced) {
+      this.diag('send_outside_hours', `chat=${chatHash(jid)} confirmação sem forçar, fora do horário`)
+      return { ok: false, code: 'outside_hours', message: outsideHoursText(outside) }
+    }
     const reusedRow = input.replyId ? this.repo.getApproved(input.replyId) : null
     const reused = reusedRow && reusedRow.jid === jid && reusedRow.finalText.trim() === text ? reusedRow : null
     // o pedido anterior desta mesma resposta ainda não terminou: nunca uma segunda tentativa por cima
@@ -1153,7 +1177,7 @@ export class SagaService extends EventEmitter {
           })
     let enq: ReturnType<Repo['sends']['enqueue']>
     try {
-      enq = this.repo.sends.enqueue({ idemKey: `${replyId}:${textHash(text)}`, replyId, jid, text, address: bind.address, quotedId: bind.quotedId })
+      enq = this.repo.sends.enqueue({ idemKey: `${replyId}:${textHash(text)}`, replyId, jid, text, address: bind.address, quotedId: bind.quotedId, forced: bind.forced })
     } catch (e) {
       if (!(e instanceof SendConflictError)) throw e
       this.diag('send_refused', `chat=${chatHash(jid)} conflito de chave`)
@@ -1164,6 +1188,7 @@ export class SagaService extends EventEmitter {
       // a geração da conexão vai junto: se a conexão cair antes da vez, este envio nunca sai
       this.queue.enqueue('send_message', sendJobKey(send), { sendId: send.id, attempt: send.attempt, gen: this.wa.connGen?.() ?? 0 }, SEND_PRIORITY)
       this.sendDiag('send_queued', send, send.attempt > 1 ? `tentativa ${send.attempt}` : '')
+      if (send.forced && outside) this.sendDiag('send_forced', send, 'fora do horário de envio')
     }
     this.markSends(jid)
     this.markState()
@@ -1222,13 +1247,30 @@ export class SagaService extends EventEmitter {
 
   /** Envio na fila há mais de 10 min (pausa, sem conexão): volta a "aguardando confirmação"; nunca sai atrasado. */
   private expireStaleSends(): void {
-    const cut = this.clock.now() - SEND_LIMITS.queuedMaxMs
+    const now = this.clock.now()
+    const cut = now - SEND_LIMITS.queuedMaxMs
+    const schedule = this.settings.sendOptions().schedule
+    const inside = isWithinSendHours(schedule, now)
     for (const s of this.repo.sends.listByStatus('queued')) {
+      // passou do fim do horário com o envio ainda na fila (sem "Forçar envio"): não sai depois, expira
+      if (!inside && !s.forced) {
+        if (this.repo.sends.transition(s.id, s.attempt, ['queued'], 'expired', { error: OUTSIDE_HOURS_REASON })) {
+          this.sendDiag('send_expired', s, OUTSIDE_HOURS_REASON)
+          this.sendDiag('send_outside_hours', s, 'expirou na fila')
+          this.markSends(s.jid)
+        }
+        continue
+      }
       if (s.queuedAt > cut) continue
       if (this.repo.sends.transition(s.id, s.attempt, ['queued'], 'expired', { error: 'mais de 10 min na fila' })) {
         this.sendDiag('send_expired', s, 'mais de 10 min na fila')
         this.markSends(s.jid)
       }
+    }
+    // a barra de status mostra "Fora do horário de envio": avisa quando o horário abre ou fecha
+    if (this.lastOutside !== !inside) {
+      this.lastOutside = !inside
+      this.markState()
     }
   }
 
@@ -1314,6 +1356,8 @@ export class SagaService extends EventEmitter {
         }
       }
     }
+    // horário de envio mudou: o que está na fila e ficou fora dele expira agora
+    if (patch.sendSchedule !== undefined) this.expireStaleSends()
     this.markState()
     return { ok: true, settings: this.settings.get() }
   }

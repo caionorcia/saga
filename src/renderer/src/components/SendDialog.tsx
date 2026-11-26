@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SendPreview, SendReplyInput, SendView } from '../../../shared/api'
+import type { PrepareSendResult, SendDraft } from '../../../shared/send'
+import { outsideHoursText, type SendHoursInfo } from '../../../shared/sendHours'
+import { isForceSend } from '../forceSend'
 import { sendStatusText } from '../format'
 
 const GENERIC = 'Não foi possível enviar agora. Tente de novo.'
@@ -29,6 +32,12 @@ interface DialogProps {
  */
 export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: DialogProps) {
   const [preview, setPreview] = useState<SendPreview | null>(null)
+  /** fora do horário e sem "Forçar envio": o que iria sair (sem confirmação válida) */
+  const [draft, setDraft] = useState<SendDraft | null>(null)
+  /** agora está fora do horário de envio: o aviso e o "Forçar envio" */
+  const [hours, setHours] = useState<SendHoursInfo | null>(null)
+  /** "Forçar envio" marcado (já vem marcado se o cabeçalho da conversa estiver com "Forçar envio" ligado) */
+  const [forced, setForced] = useState(() => isForceSend(jid))
   const [text, setText] = useState(initial)
   const [error, setError] = useState<string | null>(null)
   const [refused, setRefused] = useState(false)
@@ -37,27 +46,55 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
   /** um envio em andamento (Ctrl+Enter repetido ou clique duplo antes de o estado atualizar não envia duas vezes) */
   const inFlight = useRef(false)
 
+  /** aplica a resposta do `prepareSend`; devolve a confirmação (ou null) */
+  const apply = (r: PrepareSendResult): SendPreview | null => {
+    if (r.ok) {
+      setPreview(r.preview)
+      setDraft(null)
+      setHours(r.preview.outsideHours)
+      return r.preview
+    }
+    setPreview(null)
+    if (r.code === 'outside_hours') {
+      setDraft(r.draft)
+      setHours(r.hours)
+    } else {
+      setRefused(true)
+      setError(r.message)
+    }
+    return null
+  }
+
   useEffect(() => {
     let alive = true
     window.saga
-      .prepareSend({ jid, text: initial })
-      .then((r) => {
-        if (!alive) return
-        if (r.ok) setPreview(r.preview)
-        else {
-          setRefused(true)
-          setError(r.message)
-        }
-      })
+      .prepareSend({ jid, text: initial, forced })
+      .then((r) => alive && apply(r))
       .catch(() => alive && (setRefused(true), setError(GENERIC)))
     return () => {
       alive = false
     }
+    // o "Forçar envio" muda pelo seu próprio caminho (toggleForce)
   }, [jid, initial])
 
+  const shown = preview ?? draft
   useEffect(() => {
-    if (preview) textRef.current?.focus()
-  }, [preview])
+    if (shown) textRef.current?.focus()
+  }, [!!shown])
+
+  /** marcou/desmarcou "Forçar envio": a confirmação é refeita (o "forçar" fica preso a ela) */
+  const toggleForce = async (on: boolean) => {
+    setForced(on)
+    setError(null)
+    setBusy(true)
+    try {
+      apply(await window.saga.prepareSend({ jid, text, forced: on }))
+    } catch {
+      setError(GENERIC)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const confirm = async () => {
     if (!preview || inFlight.current || !text.trim()) return
@@ -65,27 +102,22 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
     setBusy(true)
     setError(null)
     try {
-      let p = preview
+      let p: SendPreview | null = preview
       // o texto mudou no diálogo: a confirmação vale para o texto novo
       if (text.trim() !== p.text) {
-        const r = await window.saga.prepareSend({ jid, text })
-        if (!r.ok) {
-          setError(r.message)
-          return
-        }
-        p = r.preview
-        setPreview(p)
+        p = apply(await window.saga.prepareSend({ jid, text, forced }))
+        if (!p) return
       }
       const r = await window.saga.sendReply({ ...extras, token: p.token, jid, text: p.text })
       if (r.ok) {
         onQueued(p.text, r.send)
         return
       }
-      setError(r.message)
-      // confirmação vencida: prepara outra para o próximo clique
-      if (r.code === 'not_confirmed') {
-        const again = await window.saga.prepareSend({ jid, text })
-        if (again.ok) setPreview(again.preview)
+      setError(r.code === 'outside_hours' ? null : r.message)
+      // confirmação vencida (ou o horário acabou): prepara outra para o próximo clique
+      if (r.code === 'not_confirmed' || r.code === 'outside_hours') {
+        const again = await window.saga.prepareSend({ jid, text, forced })
+        if (again.ok || again.code === 'outside_hours') apply(again)
       }
     } catch {
       setError(GENERIC)
@@ -95,8 +127,8 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
     }
   }
 
-  const r = preview?.recipient
-  const o = preview?.options
+  const r = shown?.recipient
+  const o = shown?.options
   return (
     <div
       className="overlay"
@@ -119,7 +151,7 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
         }}
       >
         <h2 id="send-title">Enviar resposta</h2>
-        {!preview && !refused && (
+        {!shown && !refused && (
           <p className="muted" role="status">
             <span className="spinner" aria-hidden="true" />
             Conferindo…
@@ -132,20 +164,33 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
             {r.phone && <span className="muted"> · {r.phone}</span>}
           </p>
         )}
-        {preview?.quote && (
+        {shown?.quote && (
           <blockquote className="send-quote" aria-label="Mensagem citada">
-            <span className="send-quote-who">Respondendo a {preview.quote.senderName}</span>
-            <span className="send-quote-text">{preview.quote.text}</span>
+            <span className="send-quote-who">Respondendo a {shown.quote.senderName}</span>
+            <span className="send-quote-text">{shown.quote.text}</span>
           </blockquote>
         )}
-        {preview && (
+        {shown && (
           <>
             <label htmlFor="send-text">Mensagem</label>
             <textarea id="send-text" ref={textRef} rows={6} value={text} onChange={(e) => setText(e.target.value)} />
-            <p className="muted small send-how">
-              {sendHowText(o?.typing === true, o?.markRead === true)}
-            </p>
+            <p className="muted small send-how">{sendHowText(o?.typing === true, o?.markRead === true)}</p>
           </>
+        )}
+        {hours && shown && (
+          <div className={`send-hours-notice${forced ? ' send-hours-forced' : ''}`} role="note" aria-label="Horário de envio">
+            <p className="send-hours-text">
+              <ClockIcon />
+              <span>{outsideHoursText(hours)}</span>
+            </p>
+            <label className="check send-force">
+              <input type="checkbox" checked={forced} disabled={busy} onChange={(e) => void toggleForce(e.target.checked)} />
+              <span>
+                <strong>Forçar envio</strong>
+                <span className="muted small"> envia agora mesmo assim, fora do horário. As outras regras continuam valendo.</span>
+              </span>
+            </label>
+          </div>
         )}
         {error && (
           <p className="field-error" role="alert">
@@ -159,12 +204,22 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
           </button>
           {!refused && (
             <button type="submit" className="btn btn-primary" disabled={!preview || busy || !text.trim()}>
-              {busy ? 'Enviando…' : 'Enviar'}
+              {busy ? 'Enviando…' : hours && forced ? 'Enviar mesmo assim' : 'Enviar'}
             </button>
           )}
         </div>
       </form>
     </div>
+  )
+}
+
+/** Relógio pequeno do aviso de horário (e do botão "Forçar envio" do cabeçalho). */
+export function ClockIcon() {
+  return (
+    <svg className="clock-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
   )
 }
 

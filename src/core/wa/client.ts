@@ -28,6 +28,7 @@ import { WaVersionResolver, formatWaVersion, type WaVersionFetcher } from './ver
 import { chatHash, errCode, findSentEcho, hasRecentContactMessage, newMessageId, quotedMessage, unreadKeys, type WaKey } from '../send/logic'
 import { verifyUnknownSend } from '../send/verify'
 import { CONN_LOST_REASON, DEFAULT_SEND_OPTIONS, PAUSED_REASON, SEND_LIMITS, typingMs, type SendOptions } from '../../shared/send'
+import { OUTSIDE_HOURS_REASON, isWithinSendHours } from '../../shared/sendHours'
 
 export type ConnState =
   | 'connecting'
@@ -1128,6 +1129,14 @@ export class WhatsAppClient extends EventEmitter {
     if (payload?.gen !== this.gen) return expire(['queued'], CONN_LOST_REASON)
     if (!opts.enabled) return expire(['queued'], 'envio direto desligado')
     if (clock.now() - s.queuedAt > SEND_LIMITS.queuedMaxMs) return expire(['queued'], 'mais de 10 min na fila')
+    // fora do horário de envio (sem "Forçar envio"): expira, nunca espera para sair depois
+    const outsideHours = (from: Array<'queued' | 'typing'>) => {
+      if (s.forced || isWithinSendHours(this.sendOptions().schedule, clock.now())) return false
+      this.diag('send_outside_hours', `${tag} ${from[0] === 'typing' ? 'antes de enviar' : 'antes do "digitando"'}`)
+      expire(from, OUTSIDE_HOURS_REASON)
+      return true
+    }
+    if (outsideHours(['queued'])) return
     const sock = this.sock
     const gen = this.gen
     if (!sock || this.status !== 'open' || !sock.sendMessage) return expire(['queued'], CONN_LOST_REASON)
@@ -1157,6 +1166,7 @@ export class WhatsAppClient extends EventEmitter {
       if (gen !== this.gen || this.status !== 'open') return expire(['typing'], CONN_LOST_REASON)
       if (signal?.aborted) return fail(['typing'], 'tempo esgotado antes de enviar')
       if (queue.isPaused()) return expire(['typing'], PAUSED_REASON)
+      if (outsideHours(['typing'])) return
       // nova tentativa: uma anterior pode ter chegado (o eco veio depois); nesse caso não envia de novo
       if (s.attempt > 1) {
         const echo = findSentEcho(s.msgIds, (mid) => repo.getMessage(mid))
