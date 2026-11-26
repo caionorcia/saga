@@ -170,3 +170,45 @@ O detalhamento fica na migration da integração no repositório do Copiloto.
 - **Só mentorados:** só vão dados de mentorados cadastrados, e o servidor descarta o resto sem gravar.
 - **Acesso:** a leitura no Copiloto segue a RLS que já existe, `can_access_whatsapp()`.
 - **Desligar:** a integração vem desligada. Ao desligar, a fila local é apagada. Os dados já enviados ficam no Copiloto, e apagá-los é decisão do mentor, lá.
+
+---
+
+# Adendo v1.1 — Follow-up do Copiloto enviado pelo SagaZap (2026-11-26)
+
+Aprovado pelo mentor: a equipe escreve o follow-up no Copiloto; o SagaZap busca a fila, mostra o aviso na
+conversa, abre o texto no campo de **mensagem avulsa** (editável) e o mentor confirma cada envio. Valem todas as
+travas da mensagem avulsa, **inclusive a regra dos 30 dias** (o mentorado sempre já conversou com o mentor).
+Follow-up não entra na memória de respostas.
+
+Mesma URL e mesmo `Authorization: Bearer` do contrato v1. Mesmo corpo `{version: 1, ...}`.
+
+## `{action: "followups_pending"}` → 200
+```ts
+{ version: 1, followups: Array<{
+  id: string,                     // uuid do Copiloto
+  target: { kind: 'individual', phone_hashes: string[] }   // sha256hex("sagazap-v1:" + telefone), as duas formas do 9º dígito
+        | { kind: 'group', chat_key: string },             // o mesmo chat.key que o SagaZap enviou
+  text: string,                   // ≤ 4000 caracteres
+  author: string | null,          // nome de quem escreveu (só para mostrar)
+  created_at: string              // ISO com fuso
+}> }
+```
+- Devolve no máximo 50, mais antigos primeiro, só de mentorados ativos; marca cada um como entregue ao SagaZap
+  (`delivered_at`). Pode devolver de novo um já entregue que ainda não recebeu status (o SagaZap deduplica por `id`).
+- O SagaZap pergunta a cada 5 min (e ao abrir/ligar a integração), na mesma fila de 1 requisição por vez.
+
+## `{action: "followup_update", updates: [...]}` → 200 `{results: [{id, status}]}`
+```ts
+updates: Array<{ id: string,
+  status: 'sent' | 'declined' | 'failed',
+  final_text: string | null,      // texto enviado (se o mentor editou, o editado)
+  sent_at: string | null,         // ISO com fuso
+  reason: string | null           // curto; ex.: 'fora_30_dias', 'conversa_nao_encontrada', 'recusado_pelo_mentor'
+}>  // ≤ 100
+```
+- `results[].status`: `updated` | `duplicate` (já tinha status final) | `cancelled` (a equipe cancelou antes) | `invalid`.
+- O SagaZap envia o status assim que o envio é confirmado (eco) ou recusado; reenvia com a mesma espera crescente.
+
+## Cancelamento
+Se a equipe cancelar no Copiloto, o próximo `followups_pending` não traz mais o item; se o SagaZap já mostrou o
+aviso, o `followup_update` volta `cancelled` e o SagaZap remove o aviso (se ainda não enviou).
