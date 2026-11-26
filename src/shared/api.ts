@@ -20,6 +20,7 @@ import type {
 } from './backup'
 import type { PrepareSendInput, PrepareSendResult, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView } from './send'
 import type { SendHoursInfo, SendSchedule } from './sendHours'
+import type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult } from './copiloto'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind, ThemePref }
@@ -29,6 +30,7 @@ export type { SearchFilters, SearchResult, SearchSummaryResult }
 export type { AutoBackupPatch, BackupExportOptions, BackupExportResult, BackupOpenResult, BackupRestoreMode, BackupRestoreResult, BackupStatus }
 export type { PrepareSendInput, PrepareSendResult, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView }
 export type { SendHoursInfo, SendSchedule }
+export type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult }
 export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
@@ -315,6 +317,16 @@ export interface SagaApi {
   /** escolhe a pasta da cópia automática (diálogo do sistema) */
   chooseBackupFolder(): Promise<BackupStatus>
   setAutoBackup(patch: AutoBackupPatch): Promise<BackupStatus>
+
+  // --- Copiloto da Saga (v0.5.0, Configurações › Copiloto da Saga) ---
+  /** ligado, endereço, se há código (nunca o código), pendentes, último envio e último erro */
+  copilotoStatus(): Promise<CopilotoStatus>
+  /** liga/desliga e o endereço (https, terminando em /functions/v1/sagazap-webhook); desligar apaga a fila local */
+  copilotoSave(patch: CopilotoPatch): Promise<CopilotoSaveResult>
+  /** "Gerar código": 32 bytes aleatórios; o código volta só nesta resposta (guardado cifrado) */
+  copilotoGenerateCode(): Promise<CopilotoCodeResult>
+  /** "Testar conexão": busca a lista de mentorados e diz quantos telefones e conversas daqui casaram */
+  copilotoTest(): Promise<CopilotoTestResult>
 }
 
 /** Métodos chamados por `ipcRenderer.invoke('saga:<nome>')`. */
@@ -371,7 +383,11 @@ export const INVOKE_METHODS = [
   'restoreUnlock',
   'restoreApply',
   'chooseBackupFolder',
-  'setAutoBackup'
+  'setAutoBackup',
+  'copilotoStatus',
+  'copilotoSave',
+  'copilotoGenerateCode',
+  'copilotoTest'
 ] as const satisfies ReadonlyArray<keyof SagaApi>
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]

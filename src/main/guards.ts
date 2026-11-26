@@ -10,6 +10,7 @@ import { SEARCH_KINDS, SEARCH_LIMITS, SEARCH_PERIODS } from '../shared/search'
 import { BACKUP_PASSWORD_MAX, BACKUP_PASSWORD_MIN } from '../shared/backup'
 import { SEND_LIMITS } from '../shared/send'
 import { isValidSchedule } from '../shared/sendHours'
+import { COPILOTO_URL_MAX } from '../shared/copiloto'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -183,6 +184,12 @@ function isSendReply(i: unknown): boolean {
   )
 }
 
+/** Copiloto: só `enabled` (sim/não) e/ou `url` (texto curto; o formato é conferido no serviço, com mensagem). */
+function isCopilotoPatch(p: unknown): boolean {
+  if (!isObj(p) || Object.keys(p).length === 0 || !Object.keys(p).every((k) => k === 'enabled' || k === 'url')) return false
+  return (p.enabled === undefined || isBool(p.enabled)) && (p.url === undefined || (isStr(p.url) && p.url.length <= COPILOTO_URL_MAX))
+}
+
 const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   getState: () => true,
   listContacts: ([h, k]) => isBool(h) && (k === undefined || (CONTACT_KINDS as readonly unknown[]).includes(k)),
@@ -259,7 +266,11 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   restoreUnlock: (a) => a.length === 2 && isToken(a[0]) && isStr(a[1]) && a[1].length > 0 && a[1].length <= BACKUP_PASSWORD_MAX,
   restoreApply: (a) => a.length === 2 && isToken(a[0]) && (a[1] === 'merge' || a[1] === 'replace'),
   chooseBackupFolder: (a) => a.length === 0,
-  setAutoBackup: (a) => a.length === 1 && isAutoBackupPatch(a[0])
+  setAutoBackup: (a) => a.length === 1 && isAutoBackupPatch(a[0]),
+  copilotoStatus: (a) => a.length === 0,
+  copilotoSave: (a) => a.length === 1 && isCopilotoPatch(a[0]),
+  copilotoGenerateCode: (a) => a.length === 0,
+  copilotoTest: (a) => a.length === 0
 }
 
 /** Lança `InvalidIpcArgsError` se os argumentos vindos da interface não tiverem o formato esperado. */

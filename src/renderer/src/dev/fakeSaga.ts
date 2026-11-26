@@ -23,6 +23,7 @@ import type {
   SettingsView
 } from '../../../shared/api'
 import { NOT_CONFIRMED_TEXT, SEND_LIMITS, SEND_REFUSAL_TEXT } from '../../../shared/send'
+import { COPILOTO_TEXT, isCopilotoUrl, type CopilotoStatus } from '../../../shared/copiloto'
 
 export const DEFAULT_STATE: AppState = {
   conn: 'open',
@@ -378,6 +379,20 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   /** a cópia "aberta" para restaurar: o token, se tem senha (a senha certa é "senha123") */
   const opened = new Map<string, { encrypted: boolean; unlocked: boolean }>()
   let backupSeq = 0
+  /** Copiloto da Saga: desligado, sem endereço nem código (o "código" de demonstração nunca é real) */
+  const copiloto: CopilotoStatus = {
+    enabled: false,
+    url: null,
+    hasCode: false,
+    pending: 0,
+    lastSentAt: null,
+    lastError: null,
+    lastErrorAt: null,
+    authFailed: false,
+    rosterSize: 0,
+    rosterAt: null,
+    chats: 0
+  }
 
   const api: SagaApi = {
     get initialTheme() {
@@ -744,6 +759,32 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       if (patch.enabled !== undefined) backup.auto.enabled = patch.enabled
       if (patch.password !== undefined) backup.auto.hasPassword = !!patch.password
       return structuredClone(backup)
+    },
+    copilotoStatus: async () => ({ ...copiloto }),
+    copilotoSave: async (patch) => {
+      record('copilotoSave', [patch], undefined)
+      if (patch.url !== undefined) {
+        const url = patch.url.trim()
+        if (url && !isCopilotoUrl(url)) return { ok: false, message: COPILOTO_TEXT.invalidUrl }
+        copiloto.url = url || null
+      }
+      if (patch.enabled === true && !copiloto.enabled) {
+        if (!copiloto.url || !copiloto.hasCode) return { ok: false, message: COPILOTO_TEXT.needsSetup }
+        Object.assign(copiloto, { enabled: true, rosterSize: 24, rosterAt: now, chats: 5, pending: 37, lastSentAt: now - 60_000 })
+      } else if (patch.enabled === false) Object.assign(copiloto, { enabled: false, pending: 0, chats: 0, lastError: null, lastErrorAt: null })
+      return { ok: true, status: { ...copiloto } }
+    },
+    copilotoGenerateCode: async () => {
+      record('copilotoGenerateCode', [], undefined)
+      copiloto.hasCode = true
+      copiloto.authFailed = false
+      return { ok: true, code: 'demo-codigo-de-exemplo-nao-e-real-0000000000' }
+    },
+    copilotoTest: async () => {
+      record('copilotoTest', [], undefined)
+      if (!copiloto.url || !copiloto.hasCode) return { ok: false, message: COPILOTO_TEXT.needsSetup }
+      Object.assign(copiloto, { rosterSize: 24, rosterAt: now, authFailed: false })
+      return { ok: true, phones: 24, chats: 5 }
     },
     summarizeSearch: async (query, filters) => {
       record('summarizeSearch', [query, filters], undefined)

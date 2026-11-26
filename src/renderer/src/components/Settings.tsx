@@ -4,6 +4,7 @@ import { ALERT_LABELS, eventLabel, formatDay, formatTime, updateCheckText } from
 import { DiagnosticsActions } from './Diagnostics'
 import { KnowledgeBaseSection } from './KnowledgeBase'
 import { BackupSection } from './Backup'
+import { CopilotoSection } from './Copiloto'
 import { UpdateNotice } from './UpdateNotice'
 import { THEME_LABELS, setThemePref, useTheme } from '../theme'
 import {
@@ -179,6 +180,8 @@ export function Settings({ focus }: { focus?: { id: string; seq: number } | null
         </section>
 
         <BackupSection />
+
+        <CopilotoSection />
 
         <ThemeSection />
 

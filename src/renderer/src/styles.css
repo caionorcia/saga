@@ -340,6 +340,7 @@ button.alert-main:hover .alert-detail { text-decoration: underline; }
 .steps { padding-left: 22px; margin: 8px 0 4px; }
 .steps li { margin-bottom: 6px; }
 .test-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.copiloto-code { font-family: ui-monospace, Consolas, monospace; user-select: all; word-break: break-all; padding: 4px 8px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border); }
 .qr-box { display: grid; place-items: center; min-height: 260px; margin: 10px 0; background: var(--panel-2); border: 1px dashed var(--border); border-radius: var(--radius); }
 /* o QR fica sempre em fundo branco, com margem clara, nos dois temas (o celular precisa de contraste para ler) */
 .qr-box img { background: #ffffff; padding: 10px; border-radius: 6px; }

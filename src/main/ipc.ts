@@ -189,7 +189,15 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
       const st = service.backup.setAuto(patch)
       opts.onAutoBackupChanged?.()
       return st
-    }
+    },
+    copilotoStatus: () => service.copilotoStatus(),
+    copilotoSave: (patch) =>
+      service.copilotoSave({
+        ...(patch.enabled !== undefined ? { enabled: patch.enabled === true } : {}),
+        ...(patch.url !== undefined ? { url: String(patch.url) } : {})
+      }),
+    copilotoGenerateCode: () => service.copilotoGenerateCode(),
+    copilotoTest: () => service.copilotoTest()
   }
 
   for (const m of INVOKE_METHODS) {
