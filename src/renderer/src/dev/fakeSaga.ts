@@ -611,7 +611,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} e ${names[names.length - 1]}` : names[0]
       return {
         ok: true,
-        answer: `O assunto apareceu em ${list}. ${refs.length > 1 ? 'Nas duas primeiras conversas' : 'Lá'} pedem ajuda para definir o preço sem perder clientes; vale levar o tema para a próxima aula.`,
+        answer: `O assunto apareceu em ${list}. Em resumo: pedem ajuda para definir o preço do serviço sem perder clientes — vale levar o tema para a próxima aula.`,
         refs,
         used: Math.min(r.ranked.length, SEARCH_LIMITS.summarySnippets)
       }

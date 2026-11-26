@@ -72,13 +72,23 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert, o
   // clicar num alerta: rola até a mensagem que o motivou e destaca por alguns segundos
   useEffect(() => {
     if (!highlight) return
-    const t = setTimeout(() => setHighlight(null), HIGHLIGHT_MS)
+    const t = setTimeout(() => {
+      setHighlight(null)
+      jumping.current = false
+    }, HIGHLIGHT_MS)
     return () => clearTimeout(t)
   }, [highlight])
+  /** indo até uma mensagem: a rolagem não "gruda" no fim enquanto o destaque estiver na tela */
+  const jumping = useRef(false)
   const showMessage = (id: string) => {
-    const el = [...(threadRef.current?.querySelectorAll<HTMLElement>('[data-msg-id]') ?? [])].find((e) => e.dataset.msgId === id)
+    const find = () => [...(threadRef.current?.querySelectorAll<HTMLElement>('[data-msg-id]') ?? [])].find((e) => e.dataset.msgId === id)
     pinned.current = false
-    el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    jumping.current = true
+    find()?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    // o resumo e os alertas podem mudar a altura logo depois: confere a posição de novo
+    setTimeout(() => {
+      if (jumping.current) find()?.scrollIntoView?.({ block: 'center' })
+    }, 450)
     setHighlight(id)
   }
 
@@ -262,6 +272,7 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert, o
         aria-label="Mensagens"
         onScroll={(e) => {
           const el = e.currentTarget
+          if (jumping.current) return
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
         }}
       >

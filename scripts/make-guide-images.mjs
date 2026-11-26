@@ -84,6 +84,24 @@ await page.waitForTimeout(300)
 await page.locator('nav.contacts').screenshot({ path: `${OUT}/foco.png` })
 await page.evaluate(() => localStorage.removeItem('saga.focus'))
 
+// busca geral com "Resumir com IA" e a mensagem destacada; cópia de segurança (v0.3.1)
+await page.goto(BASE)
+await page.getByLabel('Procurar em todas as conversas e transcrições').fill('quem falou sobre preço?')
+await page.keyboard.press('Enter')
+await page.getByRole('button', { name: 'Resumir com IA' }).click()
+await page.getByText('Resumo da IA').waitFor()
+await page.locator('.gs-hit', { hasText: 'travei na parte' }).click()
+await page.locator('.bubble-highlight').waitFor()
+await page.waitForTimeout(700)
+await shot('busca')
+await page.goto(BASE)
+await page.getByRole('button', { name: 'Configurações' }).click()
+const backup = page.getByRole('region', { name: 'Cópia de segurança' })
+await backup.locator('.backup-last').waitFor()
+await backup.scrollIntoViewIfNeeded()
+await page.waitForTimeout(300)
+await backup.screenshot({ path: `${OUT}/copia-de-seguranca.png` })
+
 // faixa de estado
 const states = {
   'estado-conectado': {},

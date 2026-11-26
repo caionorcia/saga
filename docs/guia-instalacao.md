@@ -145,13 +145,48 @@ Nas sugestões, aparece **Baseado em:** com o arquivo e a seção usados (só os
 
 ### Foco (versão 0.3.0)
 
-O botão **Foco**, no alto da lista de conversas, apaga as conversas que **não precisam** da sua resposta (você falou por último, o Saga ou você marcou "Não precisa responder", ou foi respondido no grupo). Elas continuam na lista e dá para abrir normalmente; as que esperam a sua resposta ficam em destaque. Funciona junto com **Para responder**, **Com alerta**, **Individuais/Grupos** e a busca, nos dois temas. Clique de novo para desligar; o Saga lembra a escolha neste computador.
+O botão **Foco**, no alto da lista de conversas, apaga bem (desde a versão 0.3.1, quase some e fica sem cor) as conversas que **não precisam** da sua resposta (você falou por último, o Saga ou você marcou "Não precisa responder", ou foi respondido no grupo). Elas continuam na lista e dá para abrir normalmente; as que esperam a sua resposta ficam em destaque. Funciona junto com **Para responder**, **Com alerta**, **Individuais/Grupos** e a busca, nos dois temas. Clique de novo para desligar; o Saga lembra a escolha neste computador.
 
 ![Foco ligado](img/foco.png)
 
 ### Sem conversas escondidas (versão 0.3.0)
 
 Como o telefone do Saga é só profissional, a opção **Mostrar escondidos** e o **Esconder/Mostrar** do menu ⋯ saíram. Se você tinha escondido alguma conversa numa versão anterior, ela volta a aparecer, e os áudios dela que ficaram sem baixar entram na fila aos poucos, no ritmo normal.
+
+### Janela maximizada (versão 0.3.1)
+
+O Saga abre com a janela **maximizada**. Se você tirar do maximizado (botão do meio, no canto de cima), ele lembra o tamanho e a posição e abre do mesmo jeito da próxima vez.
+
+### Sugestões só quando a conversa precisa (versão 0.3.1)
+
+Ao abrir uma conversa que **não precisa** da sua resposta (você falou por último, marcou "Não precisa responder" ou respondeu no grupo), o Saga não escreve resumo nem sugestões sozinho, para não gastar à toa. A coluna da direita mostra **Esta conversa não precisa de resposta agora.** Se quiser mesmo assim, clique em **Gerar sugestões mesmo assim**. Quando a pessoa mandar mensagem nova, as sugestões voltam a aparecer sozinhas.
+
+### Procurar em todas as conversas (versão 0.3.1)
+
+Use a caixa **Procurar nas conversas** (com a lupa), no alto da lista. Dá para escrever uma pergunta do jeito que você falaria, por exemplo **quem falou sobre preço?** — o Saga ignora palavras como "quem", "falou" e "sobre" e procura o assunto em todas as mensagens e nas **transcrições dos áudios**. Atalho: **Ctrl+F** (ou **Ctrl+K**).
+
+- Os resultados aparecem no lugar da lista, por conversa, com quem mandou (nos grupos), a data e o trecho com as palavras em destaque.
+- Clique num resultado para abrir a conversa já na mensagem, destacada.
+- Filtros: **Todos / Individuais / Grupos**, período (**últimos 7 dias**, **30 dias** ou **todo o período**), **Só áudios** e uma conversa específica.
+- Para uma frase exata, use aspas: **"plano de ação"**.
+- **Resumir com IA** (opcional): manda até 30 trechos encontrados para a IA das sugestões e mostra uma resposta curta, com links para as conversas. Só acontece quando você clica e conta no teto de gasto diário.
+- **Limpar** (ou a tecla Esc) volta para a lista normal.
+
+A busca é feita no seu computador; nada sai dele, a não ser no **Resumir com IA**.
+
+![Busca: resumo da IA e a mensagem destacada](img/busca.png)
+
+### Cópia de segurança (versão 0.3.1)
+
+Para não perder o que o Saga aprendeu se trocar de computador, abra **Configurações › Cópia de segurança**.
+
+1. **Exportar:** deixe marcado **Proteger com senha (recomendado)**, digite a senha duas vezes e clique em **Exportar cópia**. Escolha onde salvar o arquivo `Saga-copia-AAAA-MM-DD.sagabackup` (um pendrive, o Google Drive, o OneDrive…). **Anote a senha**: sem ela a cópia não abre.
+   - A cópia leva as respostas aprovadas, os nomes e notas dos contatos, as avaliações (👍/👎, "Não precisa responder"), a base de conhecimento e as configurações (tema, IA, transcrição, teto, filtros).
+   - **Não** leva as chaves de acesso nem a ligação com o WhatsApp: no computador novo, digite as chaves de novo e vincule o WhatsApp pelo QR Code (as mensagens voltam sozinhas). Se quiser levar também as mensagens e transcrições, marque **Incluir mensagens e transcrições (arquivo maior)**.
+2. **Restaurar** (no computador novo): clique em **Restaurar cópia**, escolha o arquivo e digite a senha. O Saga mostra o que tem na cópia antes de mudar qualquer coisa. Escolha **Juntar com o que já existe** (o mais seguro: nada se repete e nada do que já está aqui é apagado) ou **Substituir** (troca o que está aqui pelo que está na cópia; o Saga pede confirmação).
+3. **Cópia automática:** marque **Fazer cópia automática semanal** e clique em **Escolher pasta**. Dica: escolha uma pasta do **Google Drive** ou do **OneDrive** no seu computador — assim a cópia também fica guardada na nuvem. Uma vez por semana, quando o computador estiver parado, o Saga grava uma cópia ali e guarda as 5 mais novas. Dá para pôr uma senha nas cópias automáticas também. Embaixo aparece a data da **última cópia**.
+
+![Configurações › Cópia de segurança](img/copia-de-seguranca.png)
 
 ## 5. O que significa a faixa de cima
 

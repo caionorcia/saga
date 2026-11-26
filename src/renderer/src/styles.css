@@ -470,8 +470,9 @@ select { font: inherit; color: inherit; width: 100%; border: 1px solid var(--bor
 /* v0.3.1: busca geral (procurar em todas as conversas e transcrições) */
 .gsearch { position: relative; display: flex; align-items: center; margin-bottom: 10px; }
 .gsearch-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); display: inline-flex; color: var(--muted); pointer-events: none; }
-.gsearch input { width: 100%; padding: 8px 64px 8px 32px; border-radius: 99px; }
-.gsearch.is-active input { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
+.gsearch input { width: 100%; padding: 8px 12px 8px 32px; border-radius: 99px; }
+.gsearch.has-clear input { padding-right: 60px; }
+.gsearch.is-active input { border-color: var(--accent); }
 .gsearch-clear { position: absolute; right: 12px; font-size: 13px; }
 .gs-results { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .gs-filters { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
@@ -530,3 +531,5 @@ select { font: inherit; color: inherit; width: 100%; border: 1px solid var(--bor
 .backup-folder code { font-size: 12px; overflow-wrap: anywhere; }
 .backup-auto-pw .inline-field { gap: 8px; max-width: 460px; }
 .backup-section > .ok-text, .backup-section > .field-error { min-height: 20px; margin-top: 8px; }
+.backup-auto-pw .inline-field > .btn, .backup-auto-pw .inline-field > .link-btn { flex: none; white-space: nowrap; }
+.backup-auto-pw .inline-field > input { flex: 1; min-width: 0; }

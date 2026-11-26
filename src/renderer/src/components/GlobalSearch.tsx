@@ -44,7 +44,7 @@ export const SearchBox = forwardRef<HTMLInputElement, BoxProps>(function SearchB
   }
   return (
     <form
-      className={`gsearch${active ? ' is-active' : ''}`}
+      className={`gsearch${active ? ' is-active' : ''}${value || active ? ' has-clear' : ''}`}
       role="search"
       onSubmit={(e) => {
         e.preventDefault()
@@ -65,8 +65,8 @@ export const SearchBox = forwardRef<HTMLInputElement, BoxProps>(function SearchB
         autoComplete="off"
         spellCheck={false}
         maxLength={200}
-        placeholder="Procurar nas mensagens (ex.: quem falou de preço?)"
-        title="Procura em todas as conversas e transcrições dos áudios (Ctrl+F ou Ctrl+K)"
+        placeholder="Procurar nas conversas"
+        title="Procura em todas as conversas e transcrições dos áudios. Ex.: quem falou sobre preço? (Ctrl+F ou Ctrl+K)"
         value={value}
         onChange={(e) => change(e.target.value)}
         onKeyDown={(e) => {

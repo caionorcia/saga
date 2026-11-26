@@ -299,7 +299,8 @@ Cada mentorado costuma ter o próprio grupo, onde o mentor responde.
 
 - Botão "Foco" (ícone de alvo, `aria-pressed`) no alto da lista de conversas. Ligado, as conversas que não pedem a
   resposta do mentor (mentor falou por último, "Não precisa responder" do Saga ou do mentor, "Respondido no grupo",
-  escondidas) ficam apagadas (opacidade ~0,45, selos em cinza), mas na lista e clicáveis; as que pedem resposta ficam
+  escondidas) ficam apagadas (v0.3.1: opacidade 0,28 e sem cor, selos inclusive; 0,7 ao passar o mouse ou com o
+  teclado), mas na lista e clicáveis; as que pedem resposta ficam
   normais. Vale com todos os filtros e nos dois temas. Lembrado por computador (`localStorage`, com try/catch).
 
 ### Sem conversas escondidas (v0.3.0, a pedido do mentor)
@@ -310,6 +311,72 @@ Cada mentorado costuma ter o próprio grupo, onde o mentor responde.
   `settings_kv['migration.unhidden_jids']` e, ao iniciar, o serviço devolve à fila (`requeue`, no ritmo normal) os áudios
   deles sem transcrição (baixar, ou só transcrever se o arquivo já existe), apaga a lista e registra só contagens
   (`unhidden_requeue`). A coluna e os caminhos do núcleo que olham `hidden` continuam, inofensivos (sempre 0).
+
+### Versão 0.3.1 (a pedido do mentor)
+
+**Foco mais forte.** "A diferença não ficou tão grande": as conversas que não pedem resposta ficam com opacidade 0,28 e
+`grayscale(100%)` (avatar, texto e selos), um valor só para os dois temas (tokens `--dim-opacity` e
+`--dim-hover-opacity`); ao passar o mouse, com foco do teclado ou selecionada, sobem para 0,7.
+
+**Janela maximizada.** A janela principal abre maximizada por padrão (`maximize()` antes de `show()`, sem piscar). Se o
+mentor tirar do maximizado, `settings_kv['window.state']` guarda `{ maximized, bounds }` (o tamanho normal, por
+`getNormalBounds`, salvo ao maximizar/restaurar, ao mover/redimensionar com pausa de 400 ms e ao fechar). Ao abrir, o
+retângulo é encaixado na tela que existe agora (a de maior área em comum; precisa mostrar ao menos 120×80; senão abre
+centralizada). Abrir de novo (segunda instância, bandeja) só mostra a janela, que continua como estava.
+
+**Sugestões só quando a conversa precisa.** "Conversas que não precisam de resposta não precisam gerar modelos de
+resposta. Somente se eu solicitar." Ao abrir uma conversa que não está em "Para responder" (o mentor falou por último,
+"Não precisa responder" do Saga ou do mentor, respondido no grupo), a interface chama `getAnalysis(jid, { onlyIfNeeded:
+true })`: o serviço não chama a IA (resumo e sugestões são o mesmo pedido), devolve a análise guardada se ela ainda vale
+para a última mensagem, senão `not_needed`. A coluna da direita mostra "Esta conversa não precisa de resposta agora." e
+o botão "Gerar sugestões mesmo assim" (caminho normal, com a base de conhecimento); o resumo diz que não foi gerado. A
+atualização silenciosa usa a mesma opção. Chegou mensagem do contato e a conversa voltou a precisar: gera sozinho como
+antes.
+
+**Busca geral.** "Procurar em todas as conversas e transcrições (ex.: 'quem falou sobre precificação?')".
+- Índice: migração v13 cria `messages_fts` (FTS5, `unicode61 remove_diacritics 2`; colunas `body` = texto + transcrição
+  e `sender` = pushName de quem mandou), `rowid = messages.rowid`, gatilhos de inserção, mudança de texto/transcrição/
+  remetente e exclusão, e preenche com o que já existe. Índice `messages(ts)` para o filtro de período.
+- Pergunta natural: sem acento e minúsculas; saem perguntas, verbos de "falar", artigos e preposições ("quem", "falou",
+  "sobre", "qual", "quando", "alguém", "me", "de"…); ficam palavras com 3 letras ou mais (ou números); radical leve
+  (tira terminações comuns: "precificação" → `"precifica"*`) e busca por prefixo; aspas = frase exata. Primeiro todas as
+  palavras (AND); sem resultado, qualquer uma (OR, com aviso). Só palavras vazias: pede o assunto.
+- Filtros: Todos/Individuais/Grupos, período (tudo, 30 dias, 7 dias), "Só áudios" e uma conversa. Até 300 mensagens por
+  busca (bm25, o texto pesa mais que o nome), agrupadas por conversa (a mais relevante primeiro; dentro, as mais novas;
+  até 20 por conversa, com o total).
+- Interface: caixa "Procurar nas conversas" com lupa no alto da coluna da esquerda (Ctrl+F / Ctrl+K; Enter procura já,
+  ou depois de 450 ms parado; Esc ou "Limpar" volta à lista). Os resultados ocupam o lugar da lista: nome da conversa e
+  total; cada mensagem com quem mandou (grupos; "Você" nas do mentor), data/hora, "áudio" e o trecho com as palavras em
+  `<mark>`, montado por intervalos calculados no núcleo (nunca HTML). Clicar abre a conversa, rola até a mensagem e a
+  destaca (o mesmo mecanismo do "Ver mensagem" dos alertas). "Nenhum resultado" traz dicas.
+- "Resumir com IA" (só quando o mentor clica): no máximo os 30 trechos mais relevantes, cada um com até 240 caracteres,
+  vão para a IA das sugestões (Groq ou Claude, com esquema JSON próprio `{resposta, conversas}`), dentro do teto diário
+  e do limitador; resposta curta em pt-BR com as conversas citadas como links. Os trechos são marcados como dados, não
+  instruções.
+- API: `searchMessages(query, filters)` e `summarizeSearch(query, filters)`, validadas (texto até 200 caracteres,
+  filtros conhecidos) e só da interface do app. Registro: só contagens e o tempo (`search`, `search_summary`).
+- Desempenho: teste com 100 mil mensagens sintéticas, cada busca abaixo de 200 ms (pula em CI).
+
+**Cópia de segurança.** "Exportar as respostas aprendidas, para não perder se trocar de computador."
+- Arquivo `Saga-copia-AAAA-MM-DD.sagabackup`: um .zip com `manifest.json` (`format: saga-backup`, `version: 1`, data,
+  versão do app, cifrado ou não) e `data.json` (com SHA-256 no manifesto) ou `data.enc`. Conteúdo: respostas aprovadas
+  (com texto enviado, não escolhidas e provedor), nomes personalizados e notas, avaliações de alertas e do "Para
+  responder" (sem o vínculo com alertas deste computador), a base de conhecimento (pacotes, arquivos com papel e "Usar",
+  trechos; o índice é refeito), configurações sem segredo (provedor, transcrição, teto, modelos, tema) e as preferências
+  da lista (filtros e Foco). Nunca: chaves (cifradas pela máquina; digitar de novo), a sessão do WhatsApp (vincular de
+  novo), a mídia nem a chave de download dela. Mensagens e transcrições só com "Incluir mensagens e transcrições".
+- "Proteger com senha" (recomendado; 6 a 200 caracteres): AES-256-GCM com chave por scrypt (N=2¹⁵, r=8, p=1), sal e
+  IV aleatórios e o cabeçalho do manifesto como dado autenticado; as contagens vão dentro da parte cifrada. Senha
+  errada → "Senha incorreta"; arquivo alterado, incompleto, de outro tipo ou de versão mais nova → mensagens claras.
+- Restaurar: escolher o arquivo (diálogo do sistema; o caminho nunca vem da interface) → senha → prévia com as contagens
+  → "Juntar com o que já existe" (sem repetir: resposta por conversa + texto + data; avaliação de alerta por conversa,
+  tipo, mensagem, veredito e data; "Para responder" por conversa + mensagem; base por pacote + caminho; nomes e notas e
+  configurações só onde ainda não há) ou "Substituir" (com confirmação; apaga respostas, avaliações, nomes/notas e a
+  base, nunca mensagens). Uma transação; os índices de busca (respostas, base, mensagens) são refeitos no fim.
+- Cópia automática semanal: liga/desliga, pasta escolhida no diálogo (dica: uma pasta do Google Drive ou OneDrive deixa
+  a cópia na nuvem), senha opcional guardada cifrada pelo Windows. O processo principal confere a cada 30 min e só grava
+  com o computador parado há 2 min ou a janela escondida, no máximo uma vez por semana; guarda as 5 mais novas. "Última
+  cópia" e o erro da última tentativa aparecem na tela; o registro só leva contagens e tamanhos.
 
 ## Não-objetivos (v1)
 
@@ -521,6 +588,8 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 - `analyses` (jid, ultima_msg_id, resumo, sugestoes_json, criado_em; `sources_json`, o "Baseado em" — v0.3.0)
 - `kb_packages`, `kb_files` (papel, papel automático e motivo, usar), `kb_chunks` (trilha, texto, sensível) e o índice
   FTS5 `kb_fts` — base de conhecimento, v0.3.0
+- `messages_fts` (FTS5 de texto + transcrição + remetente, mantido por gatilhos) — busca geral, v0.3.1
+- `settings_kv`: `window.state` (janela) e `backup.*` (última cópia, cópia automática) — v0.3.1
 - `approved_replies` (como acima)
 - `jobs` (fila única: tipo, chave única, status, tentativas, próxima_execução)
 - `rate_state` e `events` (histórico de ações e de desconexões, para o painel)
