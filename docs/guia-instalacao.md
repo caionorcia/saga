@@ -68,6 +68,8 @@ O SagaZap traz os últimos 30 dias de conversas e baixa os áudios aos poucos, d
 
 ![Tela principal](img/05-tela-principal.png)
 
+**Configurações** (botão na barra de cima) tem um menu à esquerda com seis partes: **Inteligência artificial** (quem escreve e quem transcreve, chaves, IAs de reserva, gasto e qualidade dos alertas), **Envio de mensagens** (envio direto e horário de envio), **Copiloto da Saga**, **Base de conhecimento**, **Cópia de segurança** e **Aplicativo** (tema, iniciar com o Windows, atualizações, diagnóstico e eventos recentes). Os textos mais longos ficam fechados: clique na linha verde (por exemplo **Limites de segurança**) para abrir.
+
 - **Esquerda:** as conversas, pessoas e grupos. O selo "há 3 h" indica que alguém está aguardando a sua resposta e há quanto tempo (num grupo: a última mensagem não é sua). No topo, escolha **Todos**, **Individuais** ou **Grupos**; o SagaZap lembra a escolha. A busca procura pessoas e grupos.
 - **Meio:** a conversa, com os áudios já transcritos e o resumo "O que a pessoa quer". Nos grupos, cada mensagem mostra o nome de quem mandou, as que mencionam você aparecem marcadas, e o resumo se chama "O que pedem a você": perguntas e pedidos para você, não um resumo do grupo inteiro.
 - **Direita:** sugestões de resposta (num grupo, mensagens para você postar no grupo). Edite como quiser e clique em **Enviar** (você confirma cada envio; veja "Enviar pelo SagaZap" abaixo), ou clique em **Copiar** e cole no WhatsApp. **Enviar**, **Copiar** e **Salvar** escolhem a resposta: as outras sugestões somem e ela fica marcada como "✓ Resposta escolhida" (**Mostrar as outras sugestões** traz elas de volta). Escolher guarda a sua versão final, e também o que você deixou de lado, para o SagaZap aprender o seu jeito. **Gerar novas** pede outras sugestões.
@@ -234,7 +236,7 @@ O botão **Enviar** só funciona com o WhatsApp **Conectado**; sem conexão, a c
 
 Você escolhe em que dias e horários o SagaZap pode enviar. O padrão é **de segunda a sexta, das 09:00 às 18:00**; sábado e domingo ficam sem envio.
 
-Para mudar, vá em **Configurações › Envio direto › Horário de envio**. Em cada dia, marque se pode enviar e escolha o horário de início e de fim (de 15 em 15 minutos). Vale o relógio do seu computador. Para enviar a qualquer hora, desmarque **Só enviar nos dias e horários abaixo**.
+Para mudar, vá em **Configurações › Envio de mensagens › Horário de envio**. Em cada dia, marque se pode enviar e escolha o horário de início e de fim (de 15 em 15 minutos). Vale o relógio do seu computador. Para enviar a qualquer hora, desmarque **Só enviar nos dias e horários abaixo**.
 
 ![Configurações › Horário de envio](img/config-horario-envio.png)
 
@@ -286,7 +288,7 @@ Chave do Gemini:
 
 1. Abra <https://aistudio.google.com/apikey> e entre com a sua conta Google.
 2. Clique em **Get API key** (ou **Create API key**) e copie a chave.
-3. No SagaZap, abra **Configurações › Chaves de acesso › IAs gratuitas de reserva**, clique em **Adicionar** ao lado de
+3. No SagaZap, abra **Configurações › Inteligência artificial › IAs gratuitas de reserva**, clique em **Adicionar** ao lado de
    **Gemini (Google, gratuito)**, cole a chave, clique em **Testar** e depois em **Salvar**.
 
 Chave do Mistral:
