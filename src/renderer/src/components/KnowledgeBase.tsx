@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { KB_LIMITS, KB_ROLES, KB_ROLE_LABELS, type KbImportResult, type KbPackageView, type KbRole } from '../../../shared/kb'
 import { formatDay } from '../format'
+import { Group } from './SettingsParts'
 
 const ROLE_HELP: Record<KbRole, string> = {
   regras: 'um resumo curto vai em toda sugestão',
@@ -74,12 +75,13 @@ export function KnowledgeBaseSection() {
   }
 
   return (
-    <section aria-labelledby="kb-title" className="kb-section">
-      <h2 id="kb-title">Base de conhecimento</h2>
-      <p className="muted small">
-        Importe o material do seu método (um pacote .zip, uma skill .skill, uma pasta ou arquivos .md, .txt e .docx). O SagaZap usa as regras em
-        toda sugestão e busca os trechos que ajudam a responder cada mensagem. Fica tudo só neste computador.
-      </p>
+    <Group
+      id="cfg-kb"
+      title="Base de conhecimento"
+      desc="O material do seu método: o SagaZap usa as regras em toda sugestão e busca os trechos que ajudam a responder. Fica tudo só neste computador."
+    >
+      <div className="s-card kb-section">
+      <p className="help">Importe um pacote .zip, uma skill .skill, uma pasta ou arquivos .md, .txt e .docx.</p>
       <p className="notice kb-warn" role="note">
         <strong>Atenção:</strong> quando a base é usada, trechos dela vão junto com a conversa para a IA que escreve as sugestões (Groq ou
         Claude). Marque como "Interno" o que tem nomes, preços ou falas de outras pessoas, e como "Desligado" o que não deve ser usado.
@@ -103,7 +105,7 @@ export function KnowledgeBaseSection() {
         {busy ? 'Importando…' : (msg?.text ?? '')}
       </p>
 
-      {pkgs !== null && pkgs.length === 0 && <p className="muted small">Nenhum material importado ainda. Sem base, as sugestões seguem só o seu estilo.</p>}
+      {pkgs !== null && pkgs.length === 0 && <p className="help">Nenhum material importado ainda. Sem base, as sugestões seguem só o seu estilo.</p>}
 
       {pkgs?.map((p) => {
         const active = p.files.filter((f) => f.enabled && f.role !== 'desligado').length
@@ -225,7 +227,8 @@ export function KnowledgeBaseSection() {
           }}
         />
       )}
-    </section>
+      </div>
+    </Group>
   )
 }
 

@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Group, Info } from './SettingsParts'
 import type { AlertQuality, AppState, KeyKind, ThemePref, RecentEvent, SaveSettingsInput, SettingsView } from '../../../shared/api'
 import { ALERT_LABELS, eventLabel, formatDay, formatTime, updateCheckText } from '../format'
 import { DiagnosticsActions } from './Diagnostics'
@@ -34,11 +35,23 @@ const KEY_FIELD = { groq: 'groqKey', claude: 'claudeKey', openai: 'openaiKey', g
 export const FREE_FALLBACK_PRIVACY =
   'No plano gratuito, o provedor pode usar as conversas enviadas para melhorar os modelos dele (Google: plano gratuito do Gemini; Mistral: o plano Experiment exige aceitar isso). Use só se concordar.'
 
+/** Menu lateral: [id do grupo, nome]. */
+const GROUPS: Array<[string, string]> = [
+  ['cfg-ia', 'Inteligência artificial'],
+  ['cfg-envio', 'Envio de mensagens'],
+  ['copiloto', 'Copiloto da Saga'],
+  ['cfg-kb', 'Base de conhecimento'],
+  ['cfg-backup', 'Cópia de segurança'],
+  ['cfg-app', 'Aplicativo']
+]
+
 export function Settings({ focus }: { focus?: { id: string; seq: number } | null } = {}) {
   const [s, setS] = useState<SettingsView | null>(null)
   const [events, setEvents] = useState<RecentEvent[]>([])
   const [msg, setMsg] = useState<{ text: string; bad: boolean } | null>(null)
   const [cap, setCap] = useState('')
+  const scroller = useRef<HTMLElement>(null)
+  const [active, setActive] = useState(GROUPS[0][0])
 
   useEffect(() => {
     let alive = true
@@ -67,6 +80,32 @@ export function Settings({ focus }: { focus?: { id: string; seq: number } | null
     el?.scrollIntoView?.({ block: 'start' })
     el?.focus?.({ preventScroll: true })
   }, [focus?.seq, loaded])
+
+  // menu lateral: marca o grupo que está no topo da área rolável
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const onScroll = () => {
+      const top = el.getBoundingClientRect().top + 48
+      let cur = GROUPS[0][0]
+      for (const [id] of GROUPS) {
+        const g = document.getElementById(id)
+        if (g && g.getBoundingClientRect().top <= top) cur = id
+      }
+      // no fim da rolagem, o último grupo (curto) fica marcado
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) cur = GROUPS[GROUPS.length - 1][0]
+      setActive(cur)
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [loaded])
+
+  const goTo = (id: string) => {
+    const g = document.getElementById(id)
+    g?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
+    g?.focus?.({ preventScroll: true })
+    setActive(id)
+  }
 
   const save = async (patch: SaveSettingsInput) => {
     setMsg(null)
@@ -101,165 +140,209 @@ export function Settings({ focus }: { focus?: { id: string; seq: number } | null
   }
 
   return (
-    <main className="settings">
-      <div className="settings-inner">
-        <h1>Configurações</h1>
-        <p className={msg?.bad ? 'field-error' : 'ok-text'} role="status" aria-live="polite">
-          {msg?.text ?? ' '}
-        </p>
-
-        <section aria-labelledby="keys-title-settings">
-          <h2 id="keys-title-settings">Chaves de acesso</h2>
-          <p className="muted small">As chaves ficam guardadas de forma protegida no seu computador e nunca aparecem aqui.</p>
-          {(['groq', 'claude', 'openai'] as const).map((k) => (
-            <KeyRow key={k} kind={k} configured={s.keys[k]} onSave={(key) => save({ [KEY_FIELD[k]]: key })} />
-          ))}
-          <h3 className="subhead">IAs gratuitas de reserva (opcional)</h3>
-          <p className="muted small">
-            Quando a Groq chega ao limite gratuito do dia, o SagaZap passa sozinho para o Gemini e depois para o Mistral, só
-            enquanto for preciso. Sem chave salva, a reserva fica desligada.
+    <main className="settings" ref={scroller}>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Partes das configurações">
+          <h1>Configurações</h1>
+          <ul>
+            {GROUPS.map(([id, label]) => (
+              <li key={id}>
+                <a
+                  href={`#${id}`}
+                  aria-current={active === id ? 'true' : undefined}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    goTo(id)
+                  }}
+                >
+                  {label}
+                </a>
+              </li>
+            ))}
+          </ul>
+          <p className={`settings-saved ${msg?.bad ? 'field-error' : 'ok-text'}`} role="status" aria-live="polite">
+            {msg?.text ?? ''}
           </p>
-          <p className="small privacy-note" role="note">
-            {FREE_FALLBACK_PRIVACY}
-          </p>
-          {(['gemini', 'mistral'] as const).map((k) => (
-            <KeyRow key={k} kind={k} configured={s.keys[k]} onSave={(key) => save({ [KEY_FIELD[k]]: key })} />
-          ))}
-        </section>
+        </nav>
 
-        <section>
-          <h2>Quem escreve as sugestões</h2>
-          <Radio
-            name="provider"
-            value={s.provider}
-            options={[
-              ['groq', 'Groq (grátis)'],
-              ['claude', 'Claude (pago, por uso)']
-            ]}
-            onChange={(v) => void save({ provider: v })}
-          />
-        </section>
+        <div className="settings-content">
+          <Group id="cfg-ia" title="Inteligência artificial" desc="Quem escreve as sugestões, quem transcreve os áudios, as chaves e o gasto.">
+            <section className="s-card" aria-labelledby="who-title">
+              <h3 id="who-title">Quem faz o trabalho</h3>
+              <div className="s-cols">
+                <fieldset>
+                  <legend>Quem escreve as sugestões</legend>
+                  <Radio
+                    name="provider"
+                    value={s.provider}
+                    options={[
+                      ['groq', 'Groq (grátis)'],
+                      ['claude', 'Claude (pago, por uso)']
+                    ]}
+                    onChange={(v) => void save({ provider: v })}
+                  />
+                </fieldset>
+                <fieldset>
+                  <legend>Transcrição dos áudios</legend>
+                  <Radio
+                    name="transcriber"
+                    value={s.transcriber}
+                    options={[
+                      ['groq', 'Groq (grátis)'],
+                      ['openai', 'OpenAI (pago)']
+                    ]}
+                    onChange={(v) => void save({ transcriber: v })}
+                  />
+                </fieldset>
+              </div>
+            </section>
 
-        <section>
-          <h2>Transcrição dos áudios</h2>
-          <Radio
-            name="transcriber"
-            value={s.transcriber}
-            options={[
-              ['groq', 'Groq (grátis)'],
-              ['openai', 'OpenAI (pago)']
-            ]}
-            onChange={(v) => void save({ transcriber: v })}
-          />
-        </section>
+            <section className="s-card" aria-labelledby="keys-title-settings">
+              <h3 id="keys-title-settings">Chaves de acesso</h3>
+              <p className="help">Ficam guardadas de forma protegida neste computador e nunca aparecem aqui.</p>
+              <div className="key-list">
+                {(['groq', 'claude', 'openai'] as const).map((k) => (
+                  <KeyRow key={k} kind={k} configured={s.keys[k]} onSave={(key) => save({ [KEY_FIELD[k]]: key })} />
+                ))}
+              </div>
+            </section>
 
-        <section aria-labelledby="send-title-settings">
-          <h2 id="send-title-settings">Envio direto</h2>
-          <label className="check">
-            <input type="checkbox" checked={s.directSend} onChange={(e) => void save({ directSend: e.target.checked })} />
-            Mostrar o botão Enviar nas sugestões
-          </label>
-          <p className="muted small">
-            Cada envio pede a sua confirmação. O SagaZap só responde a quem mandou mensagem nos últimos 30 dias e envia no
-            máximo uma mensagem a cada 30 a 90 segundos (40 por hora, 200 por dia).
-          </p>
-          <fieldset className="send-options" disabled={!s.directSend}>
-            <legend className="sr-only">Como o SagaZap envia</legend>
-            <label className="check">
-              <input type="checkbox" checked={s.sendTyping} onChange={(e) => void save({ sendTyping: e.target.checked })} />
-              Mostrar "digitando…" antes de enviar
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={s.sendMarkRead} onChange={(e) => void save({ sendMarkRead: e.target.checked })} />
-              Marcar como lidas as mensagens da conversa respondida
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={s.sendQuoteInGroups} onChange={(e) => void save({ sendQuoteInGroups: e.target.checked })} />
-              Nos grupos, citar a mensagem que está sendo respondida
-            </label>
-          </fieldset>
-          <SendHoursSection schedule={s.sendSchedule} disabled={!s.directSend} onSave={(v) => save({ sendSchedule: v })} />
-        </section>
+            <section className="s-card" aria-labelledby="free-title-settings">
+              <h3 id="free-title-settings">IAs gratuitas de reserva (opcional)</h3>
+              <p className="help">
+                Quando a Groq chega ao limite gratuito do dia, o SagaZap passa sozinho para o Gemini e depois para o Mistral, só
+                enquanto for preciso. Sem chave salva, a reserva fica desligada.
+              </p>
+              <p className="s-note" role="note">
+                {FREE_FALLBACK_PRIVACY}
+              </p>
+              <div className="key-list">
+                {(['gemini', 'mistral'] as const).map((k) => (
+                  <KeyRow key={k} kind={k} configured={s.keys[k]} onSave={(key) => save({ [KEY_FIELD[k]]: key })} />
+                ))}
+              </div>
+            </section>
 
-        <KnowledgeBaseSection />
+            <section className="s-card" aria-labelledby="cap-title">
+              <h3 id="cap-title">Gasto</h3>
+              <div className="s-row">
+                <div className="s-row-text">
+                  <label htmlFor="cap">Teto de gasto por dia (em dólares)</label>
+                  <p className="help">Ao chegar nesse valor, o SagaZap para de usar IA paga até o dia seguinte.</p>
+                </div>
+                <div className="inline-field money-field">
+                  <span aria-hidden="true">US$</span>
+                  <input
+                    id="cap"
+                    inputMode="decimal"
+                    value={cap}
+                    onChange={(e) => setCap(e.target.value)}
+                    onBlur={saveCap}
+                    onKeyDown={(e) => e.key === 'Enter' && saveCap()}
+                  />
+                </div>
+              </div>
+            </section>
 
-        <section>
-          <h2>Gasto</h2>
-          <label htmlFor="cap">Teto de gasto por dia (em dólares)</label>
-          <div className="inline-field">
-            <span aria-hidden="true">US$</span>
-            <input
-              id="cap"
-              inputMode="decimal"
-              value={cap}
-              onChange={(e) => setCap(e.target.value)}
-              onBlur={saveCap}
-              onKeyDown={(e) => e.key === 'Enter' && saveCap()}
-            />
-          </div>
-          <p className="muted small">Ao chegar nesse valor, o SagaZap para de usar IA paga até o dia seguinte.</p>
-        </section>
+            <AlertQualitySection />
+          </Group>
 
-        <BackupSection />
+          <Group id="cfg-envio" title="Envio de mensagens" desc="O botão Enviar nas sugestões e os dias e horários em que o SagaZap pode enviar.">
+            <section className="s-card" aria-labelledby="send-title-settings">
+              <h3 id="send-title-settings">Envio direto</h3>
+              <label className="check">
+                <input type="checkbox" checked={s.directSend} onChange={(e) => void save({ directSend: e.target.checked })} />
+                Mostrar o botão Enviar nas sugestões
+              </label>
+              <div className="help check-help">
+                Cada envio pede a sua confirmação.
+                <Info summary="Limites de segurança">
+                  O SagaZap só responde a quem mandou mensagem nos últimos 30 dias e envia no máximo uma mensagem a cada 30 a 90
+                  segundos (40 por hora, 200 por dia).
+                </Info>
+              </div>
+              <fieldset className="send-options" disabled={!s.directSend}>
+                <legend className="sr-only">Como o SagaZap envia</legend>
+                <label className="check">
+                  <input type="checkbox" checked={s.sendTyping} onChange={(e) => void save({ sendTyping: e.target.checked })} />
+                  Mostrar "digitando…" antes de enviar
+                </label>
+                <label className="check">
+                  <input type="checkbox" checked={s.sendMarkRead} onChange={(e) => void save({ sendMarkRead: e.target.checked })} />
+                  Marcar como lidas as mensagens da conversa respondida
+                </label>
+                <label className="check">
+                  <input type="checkbox" checked={s.sendQuoteInGroups} onChange={(e) => void save({ sendQuoteInGroups: e.target.checked })} />
+                  Nos grupos, citar a mensagem que está sendo respondida
+                </label>
+              </fieldset>
+            </section>
+            <SendHoursSection schedule={s.sendSchedule} disabled={!s.directSend} onSave={(v) => save({ sendSchedule: v })} />
+          </Group>
 
-        <CopilotoSection />
+          <CopilotoSection />
 
-        <ThemeSection />
+          <KnowledgeBaseSection />
 
-        <section>
-          <h2>Windows</h2>
-          <label className="check">
-            <input type="checkbox" checked={s.startWithWindows} onChange={(e) => void save({ startWithWindows: e.target.checked })} />
-            Iniciar o SagaZap junto com o Windows
-          </label>
-        </section>
+          <BackupSection />
 
-        <section>
-          <h2>Ritmo dos downloads</h2>
-          <p>
-            Um áudio a cada 4 a 12 segundos, no máximo 300 por hora e 2.000 por dia. Nos primeiros 15 minutos depois de abrir o
-            SagaZap ele anda na metade da velocidade. Isso protege a sua conta e não pode ser alterado.
-          </p>
-        </section>
+          <Group id="cfg-app" title="Aplicativo" desc="Aparência, início, atualizações e ajuda para o suporte.">
+            <div className="s-cols s-cols-cards">
+              <ThemeSection />
+              <section className="s-card" aria-labelledby="startup-title">
+                <h3 id="startup-title">Windows</h3>
+                <label className="check">
+                  <input type="checkbox" checked={s.startWithWindows} onChange={(e) => void save({ startWithWindows: e.target.checked })} />
+                  Iniciar o SagaZap junto com o Windows
+                </label>
+              </section>
+            </div>
 
-        <UpdatesSection />
+            <UpdatesSection />
 
-        <AlertQualitySection />
+            <section className="s-card" aria-labelledby="diag-title">
+              <h3 id="diag-title">Diagnóstico</h3>
+              <p className="help">
+                Se algo não funcionar (por exemplo, o QR Code não aparece), copie o diagnóstico e mande para o suporte. Ele traz
+                só as versões e o registro de conexão: nunca as suas mensagens nem as chaves.
+              </p>
+              <DiagnosticsActions />
+              <details className="s-more">
+                <summary>Eventos recentes</summary>
+                {events.length === 0 ? (
+                  <p className="help">Nada para mostrar por enquanto.</p>
+                ) : (
+                  <ul className="events">
+                    {events.map((e) => (
+                      <li key={e.id}>
+                        <time>
+                          {formatDay(e.ts)}, {formatTime(e.ts)}
+                        </time>
+                        <span>
+                          {eventLabel(e.kind)}
+                          {e.detail && (
+                            <details>
+                              <summary>detalhes</summary>
+                              <code>{e.detail}</code>
+                            </details>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </details>
+            </section>
 
-        <section>
-          <h2>Diagnóstico</h2>
-          <p className="muted small">
-            Se algo não funcionar (por exemplo, o QR Code não aparece), copie o diagnóstico e mande para o suporte. Ele traz
-            só as versões e o registro de conexão: nunca as suas mensagens nem as chaves.
-          </p>
-          <DiagnosticsActions />
-        </section>
-
-        <section>
-          <h2>Eventos recentes</h2>
-          {events.length === 0 ? (
-            <p className="muted">Nada para mostrar por enquanto.</p>
-          ) : (
-            <ul className="events">
-              {events.map((e) => (
-                <li key={e.id}>
-                  <time>
-                    {formatDay(e.ts)}, {formatTime(e.ts)}
-                  </time>
-                  <span>
-                    {eventLabel(e.kind)}
-                    {e.detail && (
-                      <details>
-                        <summary>detalhes</summary>
-                        <code>{e.detail}</code>
-                      </details>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+            <section className="s-card" aria-labelledby="pace-title">
+              <h3 id="pace-title">Ritmo dos downloads</h3>
+              <p className="help">
+                Um áudio a cada 4 a 12 segundos, no máximo 300 por hora e 2.000 por dia. Nos primeiros 15 minutos depois de abrir o
+                SagaZap ele anda na metade da velocidade. Isso protege a sua conta e não pode ser alterado.
+              </p>
+            </section>
+          </Group>
+        </div>
       </div>
     </main>
   )
@@ -285,16 +368,20 @@ function SendHoursSection({ schedule, disabled, onSave }: { schedule: SendSchedu
 
   const off = disabled || !draft.enabled
   return (
-    <div className="send-hours" id="send-hours" tabIndex={-1} aria-labelledby="send-hours-title">
+    <section className="s-card send-hours" id="send-hours" tabIndex={-1} aria-labelledby="send-hours-title">
       <h3 id="send-hours-title">Horário de envio</h3>
+      {disabled && <p className="help">Ligue o Envio direto para usar o horário.</p>}
       <label className="check">
         <input type="checkbox" checked={draft.enabled} disabled={disabled} onChange={(e) => update((d) => (d.enabled = e.target.checked))} />
         Só enviar nos dias e horários abaixo
       </label>
-      <p className="muted small">
-        Fora deles, o botão Enviar continua lá, mas a confirmação só envia se você marcar <strong>Forçar envio</strong>. Um
-        envio que ainda está na fila quando o horário acaba não sai depois: fica como "Não enviada" e você decide se envia de novo.
-      </p>
+      <div className="help check-help">
+        Fora deles, só envia se você marcar <strong>Forçar envio</strong> na confirmação.
+        <Info summary="E o que já está na fila?">
+          Um envio que ainda está na fila quando o horário acaba não sai depois: fica como "Não enviada" e você decide se envia
+          de novo.
+        </Info>
+      </div>
       <table className="hours-table" aria-label="Dias e horários de envio">
         <tbody>
           {WEEK_ORDER.map((i) => {
@@ -351,11 +438,11 @@ function SendHoursSection({ schedule, disabled, onSave }: { schedule: SendSchedu
           O fim precisa ser depois do início ({badDays.map((i) => DAY_SHORT[i]).join(', ')}). Esse horário ainda não foi salvo.
         </p>
       )}
-      <p className="muted small">
+      <p className="help">
         {draft.enabled ? `Agora: ${scheduleSummary(draft)}. ` : 'Desligado: o SagaZap pode enviar a qualquer hora. '}
         Vale o relógio deste computador (fuso {localTimeZone()}).
       </p>
-    </div>
+    </section>
   )
 }
 
@@ -363,15 +450,15 @@ function SendHoursSection({ schedule, disabled, onSave }: { schedule: SendSchedu
 function ThemeSection() {
   const { pref } = useTheme()
   return (
-    <section>
-      <h2>Tema</h2>
+    <section className="s-card" aria-labelledby="theme-title">
+      <h3 id="theme-title">Tema</h3>
       <Radio
         name="theme"
         value={pref}
         options={THEME_PREFS.map((t) => [t, THEME_LABELS[t]] as [ThemePref, string])}
         onChange={(v) => void setThemePref(v)}
       />
-      <p className="muted small">Também dá para trocar pelo botão de sol/lua na barra de cima.</p>
+      <p className="help">Também dá para trocar pelo botão de sol/lua na barra de cima.</p>
     </section>
   )
 }
@@ -412,31 +499,33 @@ function UpdatesSection() {
   const c = st.updateCheck
   const checking = busy || c.checking
   return (
-    <section aria-labelledby="updates-title">
-      <h2 id="updates-title">Atualizações</h2>
-      <p>
-        Versão instalada: <strong>{c.currentVersion || '—'}</strong>
-      </p>
-      <p className="muted small" role="status" aria-live="polite">
-        {checking ? 'Procurando uma versão nova…' : failed ? 'Não foi possível verificar agora. Tente de novo.' : updateCheckText(c, st.update)}
-      </p>
+    <section className="s-card" aria-labelledby="updates-title">
+      <h3 id="updates-title">Atualizações</h3>
+      <div className="s-row">
+        <div className="s-row-text">
+          <p>
+            Versão instalada: <strong>{c.currentVersion || '—'}</strong>
+          </p>
+          <p className="help" role="status" aria-live="polite">
+            {checking ? 'Procurando uma versão nova…' : failed ? 'Não foi possível verificar agora. Tente de novo.' : updateCheckText(c, st.update)}
+          </p>
+        </div>
+        <button type="button" className="btn" disabled={checking || !c.enabled} onClick={() => void checkNow()}>
+          {checking ? 'Verificando…' : 'Verificar agora'}
+        </button>
+      </div>
       {st.update.status !== 'none' && (
         <p className="update-row">
           <UpdateNotice update={st.update} />
         </p>
       )}
-      <div className="export-row">
-        <button type="button" className="btn" disabled={checking || !c.enabled} onClick={() => void checkNow()}>
-          {checking ? 'Verificando…' : 'Verificar agora'}
-        </button>
-      </div>
-      <p className="muted small">
+      <Info summary="Como funciona">
         O SagaZap procura sozinho a cada hora e quando você abre a janela. Se preferir, baixe a versão nova em{' '}
         <a href="https://github.com/caionorcia/saga/releases/latest" target="_blank" rel="noreferrer">
           github.com/caionorcia/saga/releases
         </a>{' '}
         e instale por cima: suas conversas e configurações são mantidas.
-      </p>
+      </Info>
     </section>
   )
 }
@@ -477,9 +566,9 @@ function AlertQualitySection() {
   }
 
   return (
-    <section aria-labelledby="quality-title">
-      <h2 id="quality-title">Qualidade dos alertas</h2>
-      <p className="muted small">
+    <section className="s-card" aria-labelledby="quality-title">
+      <h3 id="quality-title">Qualidade dos alertas</h3>
+      <p className="help">
         Suas avaliações (👍 e 👎 nos alertas, "Faltou um alerta?" e "Não precisa responder") dos últimos {q?.days ?? 30} dias.
         O SagaZap usa os exemplos para errar menos.
       </p>
@@ -529,7 +618,7 @@ function AlertQualitySection() {
           </tbody>
         </table>
       )}
-      {q && total === 0 && <p className="muted small">Nenhuma avaliação ainda. Use 👍 e 👎 na faixa de alertas da conversa.</p>}
+      {q && total === 0 && <p className="help">Nenhuma avaliação ainda. Use 👍 e 👎 na faixa de alertas da conversa.</p>}
       <div className="export-row">
         <button type="button" className="btn" disabled={busy} onClick={() => void exportCsv()}>
           {busy ? 'Exportando…' : 'Exportar avaliações (CSV)'}
@@ -591,15 +680,16 @@ function KeyRow({ kind, configured, onSave }: { kind: KeyKind; configured: boole
   return (
     <div className="key-row">
       <div className="key-head">
-        <strong>{KEY_LABEL[kind]}</strong>
-        {configured ? <span className="ok-text">configurada ✓</span> : <span className="muted">não configurada</span>}
+        <strong className="key-name">{KEY_LABEL[kind]}</strong>
+        {configured ? <span className="pill pill-ok">configurada ✓</span> : <span className="pill pill-neutral">não configurada</span>}
+        <span className="key-actions">
         {!editing && (
           <button type="button" className="btn btn-small" onClick={() => setEditing(true)}>
             {configured ? 'Trocar' : 'Adicionar'}
           </button>
         )}
         {configured && !editing && !confirming && (
-          <button type="button" className="btn btn-small" onClick={() => setConfirming(true)}>
+          <button type="button" className="btn btn-small btn-quiet-danger" onClick={() => setConfirming(true)}>
             Remover
           </button>
         )}
@@ -621,6 +711,7 @@ function KeyRow({ kind, configured, onSave }: { kind: KeyKind; configured: boole
             </button>
           </span>
         )}
+        </span>
       </div>
       {editing && (
         <div className="key-edit">

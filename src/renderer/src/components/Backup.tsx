@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { BackupCounts, BackupPreview, BackupStatus, UiPrefs } from '../../../shared/backup'
 import { BACKUP_PASSWORD_MIN } from '../../../shared/backup'
+import { Group, Info } from './SettingsParts'
 import { formatDay, formatTime } from '../format'
 import { applyTheme } from '../theme'
 import { formatSize } from './KnowledgeBase'
@@ -164,17 +165,23 @@ export function BackupSection() {
   }
 
   return (
-    <section aria-labelledby="backup-title" className="backup-section">
-      <h2 id="backup-title">Cópia de segurança</h2>
-      <p className="muted small">
-        Guarde o que o SagaZap aprendeu — respostas aprovadas, nomes e notas dos contatos, avaliações, a base de conhecimento e as
-        configurações — para não perder se trocar de computador. As <strong>chaves de acesso</strong> e a ligação com o WhatsApp
-        não vão na cópia: no computador novo, digite as chaves de novo e vincule o WhatsApp (as mensagens voltam sozinhas).
-      </p>
-      <p className="small backup-last">{st?.lastAt ? `Última cópia: ${when(st.lastAt)}` : 'Nenhuma cópia feita ainda.'}</p>
-
-      <div className="backup-box">
-        <h3>Exportar</h3>
+    <Group
+      id="cfg-backup"
+      title="Cópia de segurança"
+      desc="Guarde o que o SagaZap aprendeu para não perder se trocar de computador."
+      extra={
+        <>
+          <Info summary="O que vai na cópia">
+            Respostas aprovadas, nomes e notas dos contatos, avaliações, a base de conhecimento e as configurações. As{' '}
+            <strong>chaves de acesso</strong> e a ligação com o WhatsApp não vão na cópia: no computador novo, digite as chaves
+            de novo e vincule o WhatsApp (as mensagens voltam sozinhas).
+          </Info>
+          <p className="backup-last">{st?.lastAt ? `Última cópia: ${when(st.lastAt)}` : 'Nenhuma cópia feita ainda.'}</p>
+        </>
+      }
+    >
+      <section className="s-card backup-box" aria-labelledby="bk-export-title">
+        <h3 id="bk-export-title">Exportar</h3>
         <label className="check">
           <input type="checkbox" checked={protect} onChange={(e) => setProtect(e.target.checked)} />
           Proteger com senha (recomendado)
@@ -195,13 +202,13 @@ export function BackupSection() {
         <button type="button" className="btn btn-primary" disabled={!canExport} onClick={() => void doExport()}>
           {busy ? 'Exportando…' : 'Exportar cópia'}
         </button>
-      </div>
+      </section>
 
-      <div className="backup-box">
-        <h3>Restaurar</h3>
+      <section className="s-card backup-box" aria-labelledby="bk-restore-title">
+        <h3 id="bk-restore-title">Restaurar</h3>
         {restore.step === 'idle' && (
           <>
-            <p className="muted small">Escolha um arquivo .sagabackup. Antes de mudar qualquer coisa, o SagaZap mostra o que tem na cópia.</p>
+            <p className="help">Escolha um arquivo .sagabackup. Antes de mudar qualquer coisa, o SagaZap mostra o que tem na cópia.</p>
             <button type="button" className="btn" onClick={() => void openRestore()}>
               Restaurar cópia
             </button>
@@ -276,15 +283,15 @@ export function BackupSection() {
             )}
           </div>
         )}
-      </div>
+      </section>
 
-      <div className="backup-box">
-        <h3>Cópia automática</h3>
+      <section className="s-card backup-box" aria-labelledby="bk-auto-title">
+        <h3 id="bk-auto-title">Cópia automática</h3>
         <label className="check">
           <input type="checkbox" checked={!!st?.auto.enabled} disabled={!st} onChange={(e) => void setAuto({ enabled: e.target.checked })} />
           Fazer cópia automática semanal
         </label>
-        <p className="muted small">
+        <p className="help check-help">
           Uma vez por semana, quando o computador estiver parado, o SagaZap grava uma cópia na pasta escolhida e guarda as 5 mais
           novas. Dica: escolha uma pasta do <strong>Google Drive</strong> ou do <strong>OneDrive</strong> no seu computador — assim a
           cópia também fica guardada na nuvem.
@@ -325,15 +332,15 @@ export function BackupSection() {
             )}
           </div>
         </form>
-        <p className="small muted">
+        <p className="help">
           {st?.auto.lastAt ? `Última cópia automática: ${when(st.auto.lastAt)}` : 'Ainda não houve cópia automática.'}
           {st?.auto.lastError && <span className="field-error"> — a última tentativa falhou ({st.auto.lastError}). Confira a pasta.</span>}
         </p>
-      </div>
+      </section>
 
-      <p className={msg?.bad ? 'field-error' : 'ok-text small'} role="status" aria-live="polite">
+      <p className={`s-msg ${msg?.bad ? 'field-error' : 'ok-text small'}`} role="status" aria-live="polite">
         {msg?.text ?? ' '}
       </p>
-    </section>
+    </Group>
   )
 }
