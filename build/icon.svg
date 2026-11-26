@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14a89a"/>
+      <stop offset="1" stop-color="#064e48"/>
+    </linearGradient>
+    <linearGradient id="cut" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f9488"/>
+      <stop offset="1" stop-color="#075a53"/>
+    </linearGradient>
+    <radialGradient id="shine" cx="0.25" cy="0.12" r="0.9">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#022c28" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#tile)"/>
+  <rect width="512" height="512" rx="116" fill="url(#shine)"/>
+  <g filter="url(#shadow)">
+    <path d="M168 100h176a76 76 0 0 1 76 76v108a76 76 0 0 1-76 76H232l-92 68 18-70a76 76 0 0 1-66-74V176a76 76 0 0 1 76-76z" fill="#ffffff"/>
+  </g>
+  <path transform="translate(136 104) scale(10.2)" d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" fill="url(#cut)" stroke="url(#cut)" stroke-width="1.1" stroke-linejoin="round"/>
+</svg>
