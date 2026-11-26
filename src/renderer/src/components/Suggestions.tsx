@@ -15,8 +15,14 @@ const COPIED_MS = 2_000
 
 const GENERIC_ERROR = 'Não foi possível gerar as sugestões agora.'
 
-export const providerLabel = (provider: string): string =>
-  provider === 'groq' ? 'Groq (grátis)' : provider === 'claude' ? 'Claude' : provider
+const PROVIDER_LABEL: Record<string, string> = {
+  groq: 'Groq (grátis)',
+  claude: 'Claude',
+  // reservas gratuitas (v0.6.2): só respondem quando a IA principal está no limite
+  gemini: 'Gemini (grátis, reserva)',
+  mistral: 'Mistral (grátis, reserva)'
+}
+export const providerLabel = (provider: string): string => PROVIDER_LABEL[provider] ?? provider
 
 /** Erros em que tentar de novo não adianta sem o mentor mexer em algo. */
 const NO_RETRY: ReadonlySet<string> = new Set(['budget_exceeded', 'missing_key', 'invalid_key', 'no_messages'])

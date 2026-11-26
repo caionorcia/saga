@@ -97,7 +97,9 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   const hidden = new Set<string>()
   const names = new Map<string, string>()
   const notes = new Map<string, string>(demo.flatMap((c) => (c.notes ? [[c.jid, c.notes] as const] : [])))
-  const analyses = new Map(demo.flatMap((c) => (c.analysis ? [[c.jid, c.analysis] as const] : [])))
+  const analyses = new Map<string, { provider: string; summary: string; suggestions: string[] }>(
+    demo.flatMap((c) => (c.analysis ? [[c.jid, c.analysis] as const] : []))
+  )
   let alertSeq = 0
   const alerts = new Map<string, Alert[]>(
     demo.map(
@@ -176,7 +178,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     claudeModel: 'claude',
     groqModel: 'groq',
     theme: opts.theme ?? 'system',
-    keys: { groq: true, claude: false, openai: false },
+    keys: { groq: true, claude: false, openai: false, gemini: false, mistral: false },
     directSend: opts.directSend ?? true,
     sendTyping: true,
     sendMarkRead: true,
@@ -334,7 +336,8 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       generation++
       const base = a?.suggestions ?? ['Oi! Vi a sua mensagem e já te respondo com calma.', 'Obrigado por avisar. Vamos conversar sobre isso na nossa próxima sessão?']
       a = {
-        provider: state.provider,
+        // com a chave do Gemini salva, "Gerar novas" mostra a reserva gratuita respondendo ("Gerado por: Gemini")
+        provider: fresh && state.provider === 'groq' && settings.keys.gemini ? 'gemini' : state.provider,
         summary: a?.summary ?? `${displayName(c)} mandou novas mensagens e espera a sua resposta.`,
         suggestions: fresh ? [...base.slice(1), generation % 2 ? EXTRA_SUGGESTION : base[0]] : base
       }

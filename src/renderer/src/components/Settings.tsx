@@ -21,8 +21,18 @@ import {
 
 const THEME_PREFS: ThemePref[] = ['system', 'light', 'dark']
 
-const KEY_LABEL: Record<KeyKind, string> = { groq: 'Groq', claude: 'Claude', openai: 'OpenAI' }
-const KEY_FIELD = { groq: 'groqKey', claude: 'claudeKey', openai: 'openaiKey' } as const
+const KEY_LABEL: Record<KeyKind, string> = {
+  groq: 'Groq',
+  claude: 'Claude',
+  openai: 'OpenAI',
+  gemini: 'Gemini (Google, gratuito)',
+  mistral: 'Mistral (gratuito)'
+}
+const KEY_FIELD = { groq: 'groqKey', claude: 'claudeKey', openai: 'openaiKey', gemini: 'geminiKey', mistral: 'mistralKey' } as const
+
+/** Aviso de privacidade das reservas gratuitas (sempre visível). */
+export const FREE_FALLBACK_PRIVACY =
+  'No plano gratuito, o provedor pode usar as conversas enviadas para melhorar os modelos dele (Google: plano gratuito do Gemini; Mistral: o plano Experiment exige aceitar isso). Use só se concordar.'
 
 export function Settings({ focus }: { focus?: { id: string; seq: number } | null } = {}) {
   const [s, setS] = useState<SettingsView | null>(null)
@@ -98,10 +108,21 @@ export function Settings({ focus }: { focus?: { id: string; seq: number } | null
           {msg?.text ?? ' '}
         </p>
 
-        <section>
-          <h2>Chaves de acesso</h2>
+        <section aria-labelledby="keys-title-settings">
+          <h2 id="keys-title-settings">Chaves de acesso</h2>
           <p className="muted small">As chaves ficam guardadas de forma protegida no seu computador e nunca aparecem aqui.</p>
           {(['groq', 'claude', 'openai'] as const).map((k) => (
+            <KeyRow key={k} kind={k} configured={s.keys[k]} onSave={(key) => save({ [KEY_FIELD[k]]: key })} />
+          ))}
+          <h3 className="subhead">IAs gratuitas de reserva (opcional)</h3>
+          <p className="muted small">
+            Quando a Groq chega ao limite gratuito do dia, o SagaZap passa sozinho para o Gemini e depois para o Mistral, só
+            enquanto for preciso. Sem chave salva, a reserva fica desligada.
+          </p>
+          <p className="small privacy-note" role="note">
+            {FREE_FALLBACK_PRIVACY}
+          </p>
+          {(['gemini', 'mistral'] as const).map((k) => (
             <KeyRow key={k} kind={k} configured={s.keys[k]} onSave={(key) => save({ [KEY_FIELD[k]]: key })} />
           ))}
         </section>
