@@ -1,15 +1,16 @@
 /**
  * Busca na base de conhecimento na hora de sugerir: monta a consulta com as mensagens novas do contato,
  * escolhe até 4 trechos relevantes (até ~3.000 caracteres; "conhecimento" antes de "interno", nunca "desligado")
- * e resume as regras sempre ligadas num bloco curto (até 2.500 caracteres) para o pedido à IA.
+ * e resume as regras sempre ligadas num bloco de seções inteiras (até 6.000 caracteres) para o pedido à IA.
  */
 import type { KbHit, KbRepo, KbRuleChunk } from '../db/kbRepo'
 import type { KbSource } from '../../shared/kb'
+import { sensitiveChunk } from './classify'
 import { fold } from './text'
 
 export const KB_TOP_K = 4
 export const KB_MAX_CHARS = 3_000
-export const KB_RULES_MAX = 2_500
+export const KB_RULES_MAX = 6_000
 const MAX_TERMS = 24
 const CANDIDATES = 40
 const MAX_PER_FILE = 2
@@ -193,7 +194,6 @@ function condense(text: string): string {
         .trim()
     )
     .filter(Boolean)
-    .map((l) => (l.length > 400 ? `${l.slice(0, 399).trimEnd()}…` : l))
     .join('\n')
 }
 
@@ -210,46 +210,93 @@ function mergeParts(chunks: KbRuleChunk[]): KbRuleChunk[] {
   return out
 }
 
+/** Seções que vão primeiro: regras, postura, vocabulário/palavras, bastidor e "quando não sabe". */
+const RULE_PRIORITY = /(regra|postura|vocabul|palavras|glossario|bastidor|nao sabe|nao souber)/
+/** Mesmo dentro de "regras" ficam de fora as seções com exemplos reais, casos de sucesso e depoimentos. */
+const RULE_REAL_DATA = /(exemplo|caso|sucesso|depoiment|contas?\b)/
+/** Parecidas demais (as mesmas regras em INSTRUCOES e em SKILL): só a primeira entra. */
+const DUP_SIMILARITY = 0.7
+
+function words(s: string): Set<string> {
+  return new Set(fold(s).match(/[a-z0-9]{3,}/g) ?? [])
+}
+
+/** Parecido o bastante para ser a mesma regra escrita duas vezes (palavras em comum / menor texto). */
+function nearDuplicate(a: Set<string>, b: Set<string>): boolean {
+  if (!a.size || !b.size) return false
+  let common = 0
+  for (const w of a) if (b.has(w)) common++
+  return common / Math.min(a.size, b.size) >= DUP_SIMILARITY && common / Math.max(a.size, b.size) >= 0.5
+}
+
+export interface RulesReport {
+  block: string
+  /** `arquivo › seção` das seções que entraram, na ordem */
+  included: string[]
+  /** seções que ficaram de fora e por quê (para conferência) */
+  skipped: { section: string; why: string }[]
+}
+
 /**
- * Resumo das regras dos arquivos "regras" (até `max` caracteres): primeiro os arquivos de regras/vocabulário,
- * depois a descrição de cada SKILL.md, depois as seções de regra/tom/postura das instruções. Fora: checklists,
- * exemplos, casos, instruções para outra IA e trechos com dinheiro ou vários nomes.
+ * Resumo das regras dos arquivos "regras" (até `max` caracteres), feito de seções inteiras, nunca cortadas no meio.
+ * Ordem: seções de regras/postura/vocabulário/bastidor/"quando não sabe" primeiro, depois as demais dos arquivos de
+ * regras, depois a descrição de cada SKILL.md e as seções de regra/tom das instruções. Fora: checklists, exemplos
+ * reais, casos de sucesso, depoimentos, contas, instruções para outra IA e trechos com dinheiro ou vários nomes.
+ * Se a próxima seção não cabe, tenta a seguinte (menor); seções repetidas entre arquivos entram uma vez só.
  */
-export function buildRulesBlock(chunks: KbRuleChunk[], max = KB_RULES_MAX): string {
+export function buildRulesReport(chunks: KbRuleChunk[], max = KB_RULES_MAX): RulesReport {
   const tier = (c: KbRuleChunk) => (isRulesFile(c.path) ? 0 : isSkillFile(c.path) ? 1 : 2)
   const order = (c: KbRuleChunk) => {
     const i = RULE_ORDER.findIndex((r) => r.test(fold(c.heading)))
     return i < 0 ? RULE_ORDER.length : i
   }
-  const picked = mergeParts(chunks)
-    .filter((c) => !c.sensitive && !RULE_SKIP.test(fold(c.heading)))
-    .filter((c) => {
-      const t = tier(c)
-      if (t === 1) return c.heading === 'Descrição'
-      if (t === 2) return RULE_TOPIC.test(fold(c.heading))
-      return true
-    })
-    .sort((a, b) => tier(a) - tier(b) || order(a) - order(b) || a.path.localeCompare(b.path) || a.ord - b.ord)
+  const priority = (c: KbRuleChunk) => (RULE_PRIORITY.test(fold(c.heading)) ? 0 : 1)
+  const label = (c: KbRuleChunk) => `${c.path.split('/').pop()} › ${c.heading === 'Descrição' ? c.title : c.heading}`
+  const skipped: RulesReport['skipped'] = []
+  const eligible: KbRuleChunk[] = []
+  for (const c of mergeParts(chunks)) {
+    const h = fold(c.heading)
+    const t = tier(c)
+    // "quando não sabe" é regra de comportamento, mesmo quando o título cita a IA
+    const asksUnknown = /nao sabe|nao souber/.test(h)
+    if (c.sensitive || sensitiveChunk(c.text)) skipped.push({ section: label(c), why: 'dinheiro ou vários nomes' })
+    else if (RULE_REAL_DATA.test(h)) skipped.push({ section: label(c), why: 'exemplo/caso real' })
+    else if (RULE_SKIP.test(h) && !asksUnknown) skipped.push({ section: label(c), why: 'checklist, instrução de outra IA ou similar' })
+    else if (t === 1 && c.heading !== 'Descrição') skipped.push({ section: label(c), why: 'SKILL: só a descrição' })
+    else if (t === 2 && !RULE_TOPIC.test(h) && !asksUnknown) skipped.push({ section: label(c), why: 'instruções: não é regra/tom/postura' })
+    else eligible.push(c)
+  }
+  eligible.sort((a, b) => priority(a) - priority(b) || tier(a) - tier(b) || order(a) - order(b) || a.path.localeCompare(b.path) || a.ord - b.ord)
+
   const parts: string[] = []
+  const included: string[] = []
+  const taken: Set<string>[] = []
   let used = 0
-  const seen = new Set<string>()
-  for (const c of picked) {
+  for (const c of eligible) {
     const body = condense(c.text)
-    if (!body || seen.has(body)) continue
-    seen.add(body)
+    if (!body) continue
+    const w = words(body)
+    if (taken.some((t) => nearDuplicate(w, t))) {
+      skipped.push({ section: label(c), why: 'repete outra seção' })
+      continue
+    }
     const head = c.heading === 'Descrição' ? `${c.title.replace(/\s*\([^)]*\)$/, '')}:` : `${c.heading}:`
-    let piece = `${head}\n${body}`
-    const room = max - used - (parts.length ? 2 : 0)
-    if (room < 120) break
-    if (piece.length > room) {
-      // corta no fim de uma linha
-      const cut = piece.lastIndexOf('\n', room - 1)
-      piece = cut > head.length ? piece.slice(0, cut) : `${piece.slice(0, room - 1).trimEnd()}…`
+    const piece = `${head}\n${body}`
+    const cost = piece.length + (parts.length ? 2 : 0)
+    if (used + cost > max) {
+      skipped.push({ section: label(c), why: 'não coube no limite' })
+      continue
     }
     parts.push(piece)
-    used += piece.length + (parts.length > 1 ? 2 : 0)
+    taken.push(w)
+    included.push(label(c))
+    used += cost
   }
-  return parts.join('\n\n')
+  return { block: parts.join('\n\n'), included, skipped }
+}
+
+export function buildRulesBlock(chunks: KbRuleChunk[], max = KB_RULES_MAX): string {
+  return buildRulesReport(chunks, max).block
 }
 
 /** O que vai para o pedido da sugestão. */

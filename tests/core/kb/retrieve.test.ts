@@ -3,7 +3,7 @@ import { openDb } from '../../../src/core/db/db'
 import { Repo } from '../../../src/core/db/repo'
 import type { KbRuleChunk } from '../../../src/core/db/kbRepo'
 import { importArchive, importPastedText } from '../../../src/core/kb/importer'
-import { KB_RULES_MAX, buildRulesBlock, ftsExpression, knowledgeFor, pickChunks, queryTerms, sourcesOf, stem } from '../../../src/core/kb/retrieve'
+import { KB_RULES_MAX, buildRulesBlock, buildRulesReport, ftsExpression, knowledgeFor, pickChunks, queryTerms, sourcesOf, stem } from '../../../src/core/kb/retrieve'
 import { demoPackageZip } from './fixtures'
 
 let repo: Repo
@@ -80,17 +80,61 @@ describe('regras', () => {
       rule({ fileId: 3, path: 'INSTRUCOES.md', title: 'INSTRUCOES', heading: 'Tom de voz', text: 'Próximo e direto.' }),
       rule({ fileId: 3, path: 'INSTRUCOES.md', title: 'INSTRUCOES', ord: 1, heading: 'Fluxo da entrega', text: 'Primeiro extraia.' })
     ])
-    expect(block).toBe('Postura nas mensagens:\n- Fale curto.\n- Termine com pergunta.\n\nVocabulário:\n- "cliente ideal"\n\nMetodo:\nAtende mentorados.\n\nTom de voz:\nPróximo e direto.')
+    expect(block).toBe('Postura nas mensagens:\n- Fale curto.\n- Termine com pergunta.\n\nVocabulário:\n- "cliente ideal"\n\nO que a IA faz quando não sabe:\nManda perguntar para outra pessoa.\n\nMetodo:\nAtende mentorados.\n\nTom de voz:\nPróximo e direto.')
   })
 
-  it('junta as partes de uma seção longa e corta no limite, no fim de uma linha', () => {
-    const lines = Array.from({ length: 200 }, (_, i) => `- regra número ${i}, lorem ipsum dolor sit amet`)
-    const parts = [lines.slice(0, 100).join('\n'), `…sit amet\n\n${lines.slice(100).join('\n')}`]
+  it('usa seções inteiras: o que não cabe é pulado (tenta a próxima, menor) e nada é cortado no meio', () => {
+    const big = Array.from({ length: 60 }, (_, i) => `- regra grande número ${i}, lorem ipsum dolor sit amet`).join('\n')
+    const block = buildRulesBlock(
+      [rule({ ord: 0, heading: 'Regras de postura', text: '- Fale curto.' }), rule({ ord: 1, heading: 'Regras enormes', text: big }), rule({ ord: 2, heading: 'Vocabulário', text: '- "cliente ideal"' })],
+      600
+    )
+    expect(block).toBe('Regras de postura:\n- Fale curto.\n\nVocabulário:\n- "cliente ideal"')
+    const all = buildRulesBlock([rule({ ord: 0, heading: 'Regras enormes', text: big })], 6_000)
+    expect(all.length).toBeLessThanOrEqual(KB_RULES_MAX)
+    expect(all.endsWith('amet')).toBe(true)
+    expect(KB_RULES_MAX).toBe(6_000)
+  })
+
+  it('junta as partes de uma seção longa e tira a sobreposição', () => {
+    const parts = ['- regra A\n- regra B', '…regra B\n\n- regra C']
     const block = buildRulesBlock(parts.map((text, i) => rule({ ord: i, heading: `Regras de postura (parte ${i + 1})`, text })))
-    expect(block.length).toBeLessThanOrEqual(KB_RULES_MAX)
-    expect(block.startsWith('Regras de postura:\n- regra número 0,')).toBe(true)
-    expect(block).not.toContain('…sit amet')
-    expect(block.endsWith('dolor sit amet')).toBe(true)
+    expect(block).toBe('Regras de postura:\n- regra A\n- regra B\n- regra C')
+  })
+
+  it('prioridade: regras/postura/vocabulário/palavras/bastidor/"quando não sabe" antes das outras seções do arquivo', () => {
+    const block = buildRulesBlock([
+      rule({ ord: 0, heading: 'Contexto geral', text: 'Fundamentos do método.' }),
+      rule({ ord: 1, heading: 'Palavras que usamos', text: '- cliente ideal' }),
+      rule({ ord: 2, heading: 'Sem bastidor', text: '- Não conte bastidor.' }),
+      rule({ ord: 3, heading: 'Quando não souber', text: '- Diga que vai confirmar.' })
+    ])
+    expect(block.split('\n\n').map((p) => p.split(':')[0])).toEqual(['Sem bastidor', 'Palavras que usamos', 'Quando não souber', 'Contexto geral'])
+  })
+
+  it('nunca inclui exemplos com dados reais: título de exemplo/caso/depoimento, dinheiro ou vários nomes', () => {
+    const rep = buildRulesReport([
+      rule({ ord: 0, heading: 'Contas de exemplo', text: '- Faturou bastante.' }),
+      rule({ ord: 1, heading: 'Casos de sucesso', text: '- Foi ótimo.' }),
+      rule({ ord: 2, heading: 'Depoimentos', text: '- Recomendo.' }),
+      rule({ ord: 3, heading: 'Regras de preço', text: '- Cobre R$ 1.500 por mês.' }),
+      rule({ ord: 4, heading: 'Regras de turma', text: 'Falar com Maria Silva, João Souza e Pedro Alves.' }),
+      rule({ ord: 5, heading: 'Regras de tom', text: '- Fale curto.' })
+    ])
+    expect(rep.block).toBe('Regras de tom:\n- Fale curto.')
+    expect(rep.included).toEqual(['regras.md › Regras de tom'])
+    expect(rep.skipped.map((x) => x.section)).toHaveLength(5)
+  })
+
+  it('seções repetidas entre arquivos (INSTRUCOES e SKILL) entram uma vez só', () => {
+    const text = '- Fale curto.\n- Termine com uma pergunta.\n- Não use jargão de marketing.'
+    const block = buildRulesBlock([
+      rule({ fileId: 1, path: 'regras.md', heading: 'Regras de postura', text }),
+      rule({ fileId: 3, path: 'INSTRUCOES.md', title: 'INSTRUCOES', heading: 'Regras de tom', text: `${text}\n- Use o nome da pessoa.` }),
+      rule({ fileId: 3, path: 'INSTRUCOES.md', title: 'INSTRUCOES', ord: 1, heading: 'Regras de escrita', text: '- Parágrafos de uma frase.' })
+    ])
+    expect(block.match(/Fale curto/g)).toHaveLength(1)
+    expect(block).toContain('Regras de escrita:')
   })
 
   it('knowledgeFor: null sem base em uso; com base, regras + trechos', () => {

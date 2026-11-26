@@ -278,9 +278,11 @@ Cada mentorado costuma ter o próprio grupo, onde o mentor responde.
   últimas dele), sem palavras vazias, com radical e alguns sinônimos de conversa ("zap" → WhatsApp, "insta" →
   Instagram, "cobrar" → preço); bm25 no FTS5; um trecho só entra com 2+ termos da consulta; até 4 trechos e ~3.000
   caracteres, no máximo 2 por arquivo e 1 interno, "conhecimento" antes de "interno", nunca "desligado" nem "regras".
-  As regras viram um bloco de até 2.500 caracteres no pedido do sistema: primeiro postura/bastidor, regras e vocabulário
-  dos arquivos de regras, depois a `description` dos SKILL.md e as seções de tom/regra das instruções; fora checklists,
-  exemplos, casos, contas, instruções para outra IA e trechos sensíveis.
+  As regras viram um bloco de até 6.000 caracteres no pedido do sistema, feito de seções inteiras (nunca cortadas no
+  meio): primeiro as seções de regras, postura, vocabulário/palavras, bastidor e "quando não sabe", depois as demais dos
+  arquivos de regras, a `description` dos SKILL.md e as seções de tom/regra das instruções. Se a próxima seção não cabe,
+  tenta a seguinte (menor); seções repetidas entre arquivos (ex.: INSTRUCOES e SKILL) entram uma vez só. Fora: checklists,
+  exemplos reais, casos de sucesso, depoimentos, contas, instruções para outra IA e trechos com dinheiro ou vários nomes.
 - **Instruções à IA (valem mais que as do pacote):** seguir as regras; usar os trechos para responder com precisão;
   "Conhecimento" pode ser mencionado (o conceito, a aula); "Orientação interna" só para entender, sem copiar frases nem
   citar nomes, preços, resultados, depoimentos ou falas; sem bastidor (nunca revelar outros alunos, preços de outros,
