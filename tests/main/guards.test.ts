@@ -100,6 +100,10 @@ describe('validateIpcArgs', () => {
   it('saveSettings: só campos conhecidos com tipos válidos', () => {
     ok('saveSettings', { provider: 'claude', dailyCapUsd: 2, groqKey: 'k' })
     bad('saveSettings', { provider: 'gpt' })
+    ok('saveSettings', { theme: 'system' })
+    ok('saveSettings', { theme: 'dark' })
+    bad('saveSettings', { theme: 'auto' })
+    bad('saveSettings', { theme: 1 })
     bad('saveSettings', { dailyCapUsd: '2' })
     bad('saveSettings', { outro: 1 })
     bad('saveSettings', null)

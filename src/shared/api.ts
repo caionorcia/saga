@@ -6,10 +6,10 @@ import type { AlertRow, AnalysisRow, ContactKind, ContactRow, TranscriptStatus }
 import { ALERT_KINDS, type AlertKind } from './triage'
 import type { QueueStats } from '../core/queue/queue'
 import type { ConnState } from '../core/wa/client'
-import type { KeyKind, Provider, Settings, SettingsPatch, TranscriberKind } from '../core/settings'
+import type { KeyKind, Provider, Settings, SettingsPatch, ThemePref, TranscriberKind } from '../core/settings'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
-export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind }
+export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind, ThemePref }
 export type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason }
 export { ALERT_KINDS }
 
@@ -150,6 +150,11 @@ export interface RecentEvent {
 export type Unsubscribe = () => void
 
 export interface SagaApi {
+  /**
+   * O tema salvo nas configurações quando a janela abriu (vem do processo principal antes da primeira pintura, para a
+   * interface já nascer com as cores certas). Mudanças depois: `saveSettings({ theme })`.
+   */
+  readonly initialTheme: ThemePref
   getState(): Promise<AppState>
   onState(cb: (s: AppState) => void): Unsubscribe
   /** a lista de contatos mudou: chamar `listContacts` de novo */
@@ -263,10 +268,19 @@ export const INVOKE_METHODS = [
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]
 
 /** Erro de compilação se algum método de `SagaApi` (fora os `on*`) faltar em INVOKE_METHODS. */
-type MissingInvoke = Exclude<Exclude<keyof SagaApi, `on${string}`>, InvokeMethod>
+type MissingInvoke = Exclude<Exclude<keyof SagaApi, `on${string}` | 'initialTheme'>, InvokeMethod>
 export const INVOKE_COMPLETE: [MissingInvoke] extends [never] ? true : MissingInvoke = true
 
 export const invokeChannel = (m: InvokeMethod) => `saga:${m}`
+
+/** Argumento de linha de comando com o tema inicial (`--saga-theme=dark`), lido pelo preload. */
+export const THEME_ARG = '--saga-theme='
+
+/** O tema da linha de comando do preload (padrão: Automático). */
+export function themeFromArgv(argv: readonly string[]): ThemePref {
+  const v = argv.find((a) => a.startsWith(THEME_ARG))?.slice(THEME_ARG.length)
+  return v === 'light' || v === 'dark' ? v : 'system'
+}
 
 /** Eventos main → interface. */
 export const EVENTS = {

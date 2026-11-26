@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
-import type { AlertQuality, AppState, KeyKind, RecentEvent, SaveSettingsInput, SettingsView } from '../../../shared/api'
+import type { AlertQuality, AppState, KeyKind, ThemePref, RecentEvent, SaveSettingsInput, SettingsView } from '../../../shared/api'
 import { ALERT_LABELS, eventLabel, formatDay, formatTime, updateCheckText } from '../format'
 import { DiagnosticsActions } from './Diagnostics'
 import { UpdateNotice } from './UpdateNotice'
+import { THEME_LABELS, setThemePref, useTheme } from '../theme'
+
+const THEME_PREFS: ThemePref[] = ['system', 'light', 'dark']
 
 const KEY_LABEL: Record<KeyKind, string> = { groq: 'Groq', claude: 'Claude', openai: 'OpenAI' }
 const KEY_FIELD = { groq: 'groqKey', claude: 'claudeKey', openai: 'openaiKey' } as const
@@ -123,6 +126,8 @@ export function Settings() {
           <p className="muted small">Ao chegar nesse valor, o Saga para de usar IA paga até o dia seguinte.</p>
         </section>
 
+        <ThemeSection />
+
         <section>
           <h2>Windows</h2>
           <label className="check">
@@ -179,6 +184,23 @@ export function Settings() {
         </section>
       </div>
     </main>
+  )
+}
+
+/** "Tema": Automático (segue o Windows), Claro ou Escuro; muda na hora e fica salvo. */
+function ThemeSection() {
+  const { pref } = useTheme()
+  return (
+    <section>
+      <h2>Tema</h2>
+      <Radio
+        name="theme"
+        value={pref}
+        options={THEME_PREFS.map((t) => [t, THEME_LABELS[t]] as [ThemePref, string])}
+        onChange={(v) => void setThemePref(v)}
+      />
+      <p className="muted small">Também dá para trocar pelo botão de sol/lua na barra de cima.</p>
+    </section>
   )
 }
 

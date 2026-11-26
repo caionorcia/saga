@@ -35,8 +35,21 @@ describe('SettingsStore', () => {
       startWithWindows: false,
       claudeModel: 'claude-opus-5-5',
       groqModel: DEFAULT_GROQ_MODEL,
+      theme: 'system',
       keys: { groq: false, claude: false, openai: false }
     })
+  })
+
+  it('tema: Automático por padrão; salva Claro/Escuro; recusa valor desconhecido sem gravar nada', () => {
+    const st = new SettingsStore(repo, fakeCipher())
+    expect(st.theme()).toBe('system')
+    st.save({ theme: 'dark' })
+    expect(st.get().theme).toBe('dark')
+    expect(repo.getSetting('settings.theme')).toBe('dark')
+    expect(() => st.save({ theme: 'roxo' as never, dailyCapUsd: 5 })).toThrow(/theme/)
+    expect(st.get()).toMatchObject({ theme: 'dark', dailyCapUsd: 1 })
+    repo.setSetting('settings.theme', 'lixo')
+    expect(st.theme()).toBe('system')
   })
 
   it('chaves: guardadas cifradas em base64; get() só devolve booleanos; getKey devolve o texto', () => {

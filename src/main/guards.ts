@@ -109,7 +109,8 @@ const SETTINGS_FIELDS: Record<string, (v: unknown) => boolean> = {
   dailyCapUsd: (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0,
   startWithWindows: isBool,
   claudeModel: isStr,
-  groqModel: isStr
+  groqModel: isStr,
+  theme: (v) => v === 'system' || v === 'light' || v === 'dark'
 }
 
 const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {

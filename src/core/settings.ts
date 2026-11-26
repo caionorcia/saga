@@ -5,6 +5,9 @@ import { DEFAULT_CLAUDE_MODEL, DEFAULT_GROQ_MODEL, SETTING_CLAUDE_MODEL, SETTING
 export type Provider = 'groq' | 'claude'
 export type TranscriberKind = 'groq' | 'openai'
 export type KeyKind = 'groq' | 'claude' | 'openai'
+/** Tema: `system` = Automático (segue o Windows), `light` = Claro, `dark` = Escuro. */
+export type ThemePref = 'system' | 'light' | 'dark'
+export const THEME_PREFS: ReadonlyArray<ThemePref> = ['system', 'light', 'dark']
 
 /** O que a interface vê: as chaves só como "configurada ou não", nunca o texto. */
 export interface Settings {
@@ -14,6 +17,7 @@ export interface Settings {
   startWithWindows: boolean
   claudeModel: string
   groqModel: string
+  theme: ThemePref
   keys: Record<KeyKind, boolean>
 }
 
@@ -28,6 +32,7 @@ export interface SettingsPatch {
   startWithWindows?: boolean
   claudeModel?: string
   groqModel?: string
+  theme?: ThemePref
 }
 
 /** Cifra do sistema (no app, o `safeStorage` do Electron). Injetada para o core não depender do Electron. */
@@ -57,7 +62,8 @@ const K = {
   dailyCapUsd: 'settings.dailyCapUsd',
   startWithWindows: 'settings.startWithWindows',
   claudeModel: SETTING_CLAUDE_MODEL,
-  groqModel: SETTING_GROQ_MODEL
+  groqModel: SETTING_GROQ_MODEL,
+  theme: 'settings.theme'
 } as const
 
 const KEY_FIELDS: Record<KeyKind, 'groqKey' | 'claudeKey' | 'openaiKey'> = {
@@ -85,8 +91,15 @@ export class SettingsStore {
       startWithWindows: this.repo.getSetting(K.startWithWindows) === '1',
       claudeModel: this.repo.getSetting(K.claudeModel) || DEFAULT_CLAUDE_MODEL,
       groqModel: this.repo.getSetting(K.groqModel) || DEFAULT_GROQ_MODEL,
+      theme: this.theme(),
       keys: { groq: this.hasKey('groq'), claude: this.hasKey('claude'), openai: this.hasKey('openai') }
     }
+  }
+
+  /** O tema escolhido (padrão: Automático). Barato: o processo principal lê antes de abrir a janela. */
+  theme(): ThemePref {
+    const t = this.repo.getSetting(K.theme)
+    return (THEME_PREFS as readonly (string | null)[]).includes(t) ? (t as ThemePref) : 'system'
   }
 
   hasKey(kind: KeyKind): boolean {
@@ -121,6 +134,10 @@ export class SettingsStore {
         throw new InvalidSettingError('dailyCapUsd')
       }
       writes.push([K.dailyCapUsd, String(patch.dailyCapUsd)])
+    }
+    if (patch.theme !== undefined) {
+      if (!THEME_PREFS.includes(patch.theme)) throw new InvalidSettingError('theme')
+      writes.push([K.theme, patch.theme])
     }
     if (patch.startWithWindows !== undefined) writes.push([K.startWithWindows, patch.startWithWindows ? '1' : '0'])
     for (const f of ['claudeModel', 'groqModel'] as const) {

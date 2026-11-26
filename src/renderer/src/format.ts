@@ -205,7 +205,7 @@ export function updateCheckText(c: AppState['updateCheck'], update: AppState['up
   if (!c.enabled) return 'Este Saga não procura atualizações sozinho (versão de desenvolvimento).'
   if (c.checking) return 'Procurando uma versão nova…'
   if (c.lastCheckAt === null) return 'Ainda não procurou nesta sessão.'
-  const when = `${formatDay(c.lastCheckAt)}, ${formatTime(c.lastCheckAt)}`
+  const when = `${sameDay(c.lastCheckAt, Date.now()) ? 'hoje' : formatDay(c.lastCheckAt)}, às ${formatTime(c.lastCheckAt)}`
   if (c.lastResult === 'error') return `Última procura: ${when} — não foi possível verificar: ${updateErrorText(c.lastError)}.`
   if (c.lastResult === 'available' || update.status !== 'none') {
     const v = update.status !== 'none' ? update.version : c.latestVersion

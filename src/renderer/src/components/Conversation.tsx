@@ -275,13 +275,14 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert, o
 
 const senderKey = (m: MessageView) => m.senderJid ?? m.senderName ?? ''
 
-/** Cores escuras (contraste AA sobre branco) para o nome de quem mandou, fixas por pessoa. */
-const SENDER_COLORS = ['#0b6e69', '#8a4b08', '#5b3fa0', '#a3324a', '#2d5f9a', '#3f6b1f', '#8c3a8c', '#6b5a12']
+/** Quantas cores para o nome de quem mandou (`--sender-0`…`--sender-7` no CSS; contraste AA nos dois temas). */
+const SENDER_COLORS = 8
 
+/** A cor do nome de quem mandou, fixa por pessoa. */
 function senderColor(key: string): string {
   let h = 0
   for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0
-  return SENDER_COLORS[h % SENDER_COLORS.length]
+  return `var(--sender-${h % SENDER_COLORS})`
 }
 
 /** Faixa fina sob o cabeçalho: cada alerta com o detalhe, "Ver mensagem" (quando há) e "Resolver". */

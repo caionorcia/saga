@@ -55,6 +55,8 @@ export interface FakeOptions {
   state?: Partial<AppState>
   /** atraso artificial das respostas da IA (ms) */
   aiDelayMs?: number
+  /** tema salvo (padrão: Automático) */
+  theme?: SettingsView['theme']
 }
 
 const EXTRA_SUGGESTION = 'Combinado! Qualquer coisa me avisa por aqui.'
@@ -138,6 +140,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     startWithWindows: false,
     claudeModel: 'claude',
     groqModel: 'groq',
+    theme: opts.theme ?? 'system',
     keys: { groq: true, claude: false, openai: false }
   }
   const stateListeners = new Set<(s: AppState) => void>()
@@ -227,6 +230,9 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   }
 
   const api: SagaApi = {
+    get initialTheme() {
+      return settings.theme
+    },
     getState: async () => snapshot(),
     onState: (cb) => {
       stateListeners.add(cb)
@@ -479,7 +485,8 @@ declare global {
 
 /**
  * Instala o falso em `window.saga`. Na pré-visualização, `?state={"conn":"waiting_retry"}` mexe no estado inicial,
- * `?setup=1` mostra o assistente com um QR Code e `?qr=1` mostra o QR na tela principal (vincular de novo).
+ * `?setup=1` mostra o assistente com um QR Code, `?qr=1` mostra o QR na tela principal (vincular de novo) e
+ * `?theme=dark|light|system` escolhe o tema salvo.
  */
 export async function installFakeSaga(): Promise<void> {
   const params = new URLSearchParams(location.search)
@@ -495,7 +502,9 @@ export async function installFakeSaga(): Promise<void> {
     patch = { setupDone: !params.get('setup'), conn: 'needs_qr', qr, ...patch }
   }
   if (patch.conn === 'waiting_retry' && patch.retryAt === undefined) patch.retryAt = Date.now() + 2 * 60_000
-  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600 })
+  const t = params.get('theme')
+  const theme = t === 'light' || t === 'dark' || t === 'system' ? t : undefined
+  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme })
   window.saga = ctl.api
   window.__sagaFake = ctl
 }

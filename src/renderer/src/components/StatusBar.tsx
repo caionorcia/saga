@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AppState } from '../../../shared/api'
 import { UpdateNotice } from './UpdateNotice'
+import { setThemePref, toggledTheme, useTheme } from '../theme'
 import { connectionLabel, downloadProgress, formatUsd, needsManualReconnect, transcribeChip } from '../format'
 
 interface Props {
@@ -84,10 +85,39 @@ export function StatusBar({ state, onOpenSettings, settingsOpen, onShowAwaiting 
         >
           {resumeMode ? 'Retomar' : 'Pausar tudo'}
         </button>
+        <ThemeToggle />
         <button type="button" className="btn" aria-pressed={settingsOpen} onClick={onOpenSettings}>
           {settingsOpen ? 'Voltar às conversas' : 'Configurações'}
         </button>
       </div>
     </header>
+  )
+}
+
+/** Botão rápido de tema (sol/lua): inverte o tema que está valendo; "Automático" volta em Configurações. */
+function ThemeToggle() {
+  const { pref, resolved } = useTheme()
+  const label = resolved === 'dark' ? 'Usar o tema claro' : 'Usar o tema escuro'
+  return (
+    <button type="button" className="theme-toggle" aria-label={label} title={label} onClick={() => void setThemePref(toggledTheme(pref))}>
+      {resolved === 'dark' ? <SunIcon /> : <MoonIcon />}
+    </button>
+  )
+}
+
+function SunIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="4.5" />
+      <path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" />
+    </svg>
+  )
+}
+
+function MoonIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11Z" />
+    </svg>
   )
 }

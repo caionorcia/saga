@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, nativeImage, net, powerMonitor, protocol, shell, Tray } from 'electron'
+import { app, BrowserWindow, Menu, nativeImage, nativeTheme, net, powerMonitor, protocol, shell, Tray } from 'electron'
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { arch, release, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,6 +10,7 @@ import { SagaService } from '../core/service'
 import { createDiagLog, diagnosticsText, type DiagLog } from './diagLog'
 import { isAppUrl, isExternalHttpUrl, type AppOrigin } from './guards'
 import { registerIpc } from './ipc'
+import { THEME_ARG, type ThemePref } from '../shared/api'
 import { createSettingsStore } from './settings'
 import { startUpdater, updatesEnabled, type Updater } from './updater'
 import { initialUpdaterModel } from './updaterState'
@@ -65,12 +66,27 @@ function showWindow(): void {
   win.focus()
 }
 
-function createWindow(): BrowserWindow {
+/** Fundo da janela antes de a interface pintar (sem clarão branco no tema escuro). */
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#0e1517' : '#f0f2f3')
+
+/**
+ * Tema salvo → moldura da janela, barras de rolagem e `prefers-color-scheme` da interface
+ * (`system` = Automático, segue o Windows).
+ */
+function applyNativeTheme(theme: ThemePref): void {
+  nativeTheme.themeSource = theme
+  if (win && !win.isDestroyed()) win.setBackgroundColor(windowBackground())
+}
+
+function createWindow(theme: ThemePref): BrowserWindow {
   const w = new BrowserWindow({
     width: 1100,
     height: 760,
     show: false,
+    backgroundColor: windowBackground(),
     webPreferences: {
+      // o tema já vai junto (o preload aplica antes da primeira pintura)
+      additionalArguments: [`${THEME_ARG}${theme}`],
       preload: join(import.meta.dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
@@ -211,7 +227,11 @@ function main(): void {
         console.warn(`[saga] IPC recusado: ${detail}`)
         repo.logEvent('ipc_refused', detail)
       },
-      onSettingsSaved: () => applyLoginItem(settings.get().startWithWindows),
+      onSettingsSaved: () => {
+        const s = settings.get()
+        applyLoginItem(s.startWithWindows)
+        applyNativeTheme(s.theme)
+      },
       getDiagnostics: () => {
         const lines = diagLog.tail(200).length
         return { text: diagnosticsText(diagLog, versionsHeader(), 200), lines }
@@ -238,7 +258,9 @@ function main(): void {
       })
     }
 
-    win = createWindow()
+    const theme = settings.theme()
+    applyNativeTheme(theme)
+    win = createWindow(theme)
     // abrir a janela (inclusive pela bandeja) também procura uma versão nova, se a última procura foi há um tempo
     win.on('show', () => updater?.onActivity())
     win.on('focus', () => updater?.onActivity())
