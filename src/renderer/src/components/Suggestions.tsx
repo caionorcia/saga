@@ -238,7 +238,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
     return (
       <div className="sug-state sug-not-needed" role="status">
         <p>Esta conversa não precisa de resposta agora.</p>
-        <p className="muted small">O Saga só escreve sugestões quando você pede, para não gastar à toa.</p>
+        <p className="muted small">O SagaZap só escreve sugestões quando você pede, para não gastar à toa.</p>
         <button type="button" className="btn btn-primary" disabled={busy} onClick={loadAnyway}>
           Gerar sugestões mesmo assim
         </button>

@@ -120,7 +120,7 @@ const clean = (s: string | null | undefined): string | null => {
   return t ? t.slice(0, REASON_TEXT_MAX) : null
 }
 
-/** O que o Saga achava da última mensagem do contato (vai para a avaliação). */
+/** O que o SagaZap achava da última mensagem do contato (vai para a avaliação). */
 interface AppView {
   appNeeds: boolean | null
   appReason: string | null
@@ -130,7 +130,7 @@ interface AppView {
 }
 
 /**
- * A última mensagem do contato e o que o Saga tinha decidido sobre ela. A regra do grupo (o mentor escreveu num grupo
+ * A última mensagem do contato e o que o SagaZap tinha decidido sobre ela. A regra do grupo (o mentor escreveu num grupo
  * do contato depois da mensagem dele) vence a regra de agradecimento e a IA, como na lista.
  */
 function current(repo: Repo, jid: string): { last: MessageRow; app: AppView } {
@@ -177,10 +177,10 @@ export function setNeedsReply(repo: Repo, jid: string, needed: boolean, reason?:
   return changed
 }
 
-/** 👍 no "O Saga acha que esta conversa não precisa de resposta": grava `reply_ok` (fica fora da lista). */
+/** 👍 no "O SagaZap acha que esta conversa não precisa de resposta": grava `reply_ok` (fica fora da lista). */
 export function confirmNoReply(repo: Repo, jid: string): boolean {
   const { last, app } = current(repo, jid)
-  if (app.appNeeds !== false) throw new ReplyFeedbackError('o Saga não decidiu que esta conversa dispensa resposta')
+  if (app.appNeeds !== false) throw new ReplyFeedbackError('o SagaZap não decidiu que esta conversa dispensa resposta')
   repo.saveReplyFeedback({
     jid,
     msgId: last.id,
@@ -229,14 +229,14 @@ export function renderReplyExamples(rows: ReplyFeedbackRow[]): string {
   ].join('\n')
 }
 
-/** O Saga acertou nesta avaliação? (o que ele achava na hora × o que o mentor disse; sem decisão = "precisa") */
+/** O SagaZap acertou nesta avaliação? (o que ele achava na hora × o que o mentor disse; sem decisão = "precisa") */
 export function sagaWasRight(f: Pick<ReplyFeedbackRow, 'verdict' | 'appNeeds'>): boolean {
   const sagaNeeds = f.appNeeds !== false
   if (f.verdict === 'reply_ok') return true
   return f.verdict === 'reply_needed' ? sagaNeeds : !sagaNeeds
 }
 
-/** "Para responder" nos últimos 30 dias: removidos pelo mentor, devolvidos, confirmados e % de acerto do Saga. */
+/** "Para responder" nos últimos 30 dias: removidos pelo mentor, devolvidos, confirmados e % de acerto do SagaZap. */
 export function replyQuality(repo: Repo, now: number): ReplyQuality {
   const rows = repo.listReplyFeedback({ since: now - QUALITY_DAYS * 86_400_000 })
   const right = rows.filter(sagaWasRight).length
@@ -248,12 +248,12 @@ export function replyQuality(repo: Repo, now: number): ReplyQuality {
   }
 }
 
-/** Detalhe da linha no CSV: o que o Saga achava. */
+/** Detalhe da linha no CSV: o que o SagaZap achava. */
 export function replyCsvDetail(f: ReplyFeedbackRow): string {
-  if (f.appNeeds === null) return 'Saga: deixou em "Para responder"'
-  if (f.appSource === 'group') return `Saga (grupo): não precisa responder${f.appReason ? ` — ${f.appReason}` : ''}`
+  if (f.appNeeds === null) return 'SagaZap: deixou em "Para responder"'
+  if (f.appSource === 'group') return `SagaZap (grupo): não precisa responder${f.appReason ? ` — ${f.appReason}` : ''}`
   const by = f.appSource === 'rule' ? 'regra' : 'IA'
-  return f.appNeeds ? `Saga (${by}): precisa responder` : `Saga (${by}): não precisa responder${f.appReason ? ` — ${f.appReason}` : ''}`
+  return f.appNeeds ? `SagaZap (${by}): precisa responder` : `SagaZap (${by}): não precisa responder${f.appReason ? ` — ${f.appReason}` : ''}`
 }
 
 export { REPLY_VERDICT_LABELS }

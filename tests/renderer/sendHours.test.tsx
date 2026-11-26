@@ -209,6 +209,6 @@ describe('Configurações › Horário de envio', () => {
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Só enviar nos dias e horários abaixo' }))
     await waitFor(async () => expect((await ctl.api.getSettings()).sendSchedule.enabled).toBe(false))
     expect((screen.getByRole('checkbox', { name: 'Seg' }) as HTMLInputElement).disabled).toBe(true)
-    expect(screen.getByText(/Desligado: o Saga pode enviar a qualquer hora/)).toBeTruthy()
+    expect(screen.getByText(/Desligado: o SagaZap pode enviar a qualquer hora/)).toBeTruthy()
   })
 })

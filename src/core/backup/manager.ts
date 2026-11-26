@@ -35,18 +35,27 @@ const S = {
   autoPassword: 'backup.auto.password'
 } as const
 
-/** Nome do arquivo: `Saga-copia-AAAA-MM-DD.sagabackup` (data local). */
+/** Nome do arquivo: `SagaZap-copia-AAAA-MM-DD.sagabackup` (data local). */
 export function backupFileName(ts: number): string {
   const d = new Date(ts)
   const p = (n: number) => String(n).padStart(2, '0')
-  return `Saga-copia-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.${BACKUP_EXT}`
+  return `SagaZap-copia-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.${BACKUP_EXT}`
 }
 
-const AUTO_RE = new RegExp(`^Saga-copia-\\d{4}-\\d{2}-\\d{2}(-\\d+)?\\.${BACKUP_EXT}$`)
+// também reconhece as cópias de antes do nome SagaZap (`Saga-copia-…`), para o rodízio continuar apagando as velhas
+const AUTO_RE = new RegExp(`^(?:SagaZap|Saga)-copia-(\\d{4}-\\d{2}-\\d{2}(?:-\\d+)?)\\.${BACKUP_EXT}$`)
+/** ordem cronológica pela data no nome (o prefixo antigo ou novo não conta) */
+const backupSortKey = (f: string) => AUTO_RE.exec(f)?.[1] ?? f
 
 /** Apaga as cópias mais velhas da pasta, deixando as `keep` mais novas (só arquivos com o nome das cópias). */
 export function rotateBackups(dir: string, keep = AUTO_BACKUP_KEEP): number {
-  const files = readdirSync(dir).filter((f) => AUTO_RE.test(f)).sort()
+  const files = readdirSync(dir)
+    .filter((f) => AUTO_RE.test(f))
+    .sort((a, b) => {
+      const ka = backupSortKey(a)
+      const kb = backupSortKey(b)
+      return ka < kb ? -1 : ka > kb ? 1 : 0
+    })
   const old = files.slice(0, Math.max(0, files.length - keep))
   for (const f of old) rmSync(join(dir, f), { force: true })
   return old.length

@@ -167,7 +167,7 @@ export function BackupSection() {
     <section aria-labelledby="backup-title" className="backup-section">
       <h2 id="backup-title">Cópia de segurança</h2>
       <p className="muted small">
-        Guarde o que o Saga aprendeu — respostas aprovadas, nomes e notas dos contatos, avaliações, a base de conhecimento e as
+        Guarde o que o SagaZap aprendeu — respostas aprovadas, nomes e notas dos contatos, avaliações, a base de conhecimento e as
         configurações — para não perder se trocar de computador. As <strong>chaves de acesso</strong> e a ligação com o WhatsApp
         não vão na cópia: no computador novo, digite as chaves de novo e vincule o WhatsApp (as mensagens voltam sozinhas).
       </p>
@@ -201,7 +201,7 @@ export function BackupSection() {
         <h3>Restaurar</h3>
         {restore.step === 'idle' && (
           <>
-            <p className="muted small">Escolha um arquivo .sagabackup. Antes de mudar qualquer coisa, o Saga mostra o que tem na cópia.</p>
+            <p className="muted small">Escolha um arquivo .sagabackup. Antes de mudar qualquer coisa, o SagaZap mostra o que tem na cópia.</p>
             <button type="button" className="btn" onClick={() => void openRestore()}>
               Restaurar cópia
             </button>
@@ -237,7 +237,7 @@ export function BackupSection() {
           <div className="backup-preview" aria-label="O que tem na cópia">
             <p className="small">
               <strong>Cópia de {when(restore.preview.createdAt)}</strong>
-              {restore.preview.appVersion && ` (Saga ${restore.preview.appVersion})`}
+              {restore.preview.appVersion && ` (SagaZap ${restore.preview.appVersion})`}
               {restore.preview.encrypted && ' · protegida com senha'}
             </p>
             <ul className="small">
@@ -285,7 +285,7 @@ export function BackupSection() {
           Fazer cópia automática semanal
         </label>
         <p className="muted small">
-          Uma vez por semana, quando o computador estiver parado, o Saga grava uma cópia na pasta escolhida e guarda as 5 mais
+          Uma vez por semana, quando o computador estiver parado, o SagaZap grava uma cópia na pasta escolhida e guarda as 5 mais
           novas. Dica: escolha uma pasta do <strong>Google Drive</strong> ou do <strong>OneDrive</strong> no seu computador — assim a
           cópia também fica guardada na nuvem.
         </p>

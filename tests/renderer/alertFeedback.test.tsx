@@ -61,7 +61,7 @@ describe('Conversation: 👍/👎 nos alertas', () => {
     expect(up.getAttribute('aria-pressed')).toBe('false')
     fireEvent.click(up)
     expect(up.getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByRole('status').textContent).toBe('Obrigado — o Saga vai aprender com isso')
+    expect(screen.getByRole('status').textContent).toBe('Obrigado — o SagaZap vai aprender com isso')
     const call = ctl.calls.find((c) => c.method === 'rateAlert')!
     expect(call.args.slice(0, 2)).toEqual([expect.any(Number), 'up'])
     await rerender()
@@ -152,7 +152,7 @@ describe('Configurações: "Qualidade dos alertas"', () => {
     expect(anon.checked).toBe(true)
     fireEvent.click(within(sec).getByRole('button', { name: 'Exportar avaliações (CSV)' }))
     const reply = within(sec).getByRole('row', { name: /Para responder/ })
-    // removidos, devolvidos, confirmados, % de acerto do Saga
+    // removidos, devolvidos, confirmados, % de acerto do SagaZap
     expect([...reply.querySelectorAll('td')].map((td) => td.textContent)).toEqual(['2', '1', '3', '50%'])
     await within(sec).findByText(/Arquivo salvo com 18 avaliações/)
     fireEvent.click(anon)

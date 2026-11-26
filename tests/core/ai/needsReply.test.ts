@@ -142,7 +142,7 @@ describe('setNeedsReply / confirmNoReply / 👍 no "esperando"', () => {
     expect(() => setNeedsReply(repo, A, false, { code: 'outro' })).toThrow(ReplyFeedbackError)
   })
 
-  it('"Precisa sim" depois da IA dizer que não: volta para a lista e grava a correção (o Saga errou)', () => {
+  it('"Precisa sim" depois da IA dizer que não: volta para a lista e grava a correção (o SagaZap errou)', () => {
     repo.setAppReply({ jid: A, msgId: 'a1', needs: false, reason: 'Só mandou um arquivo', source: 'ai', model: 'm1' })
     expect(contact().needsReply).toBe(false)
     setNeedsReply(repo, A, true)
@@ -153,7 +153,7 @@ describe('setNeedsReply / confirmNoReply / 👍 no "esperando"', () => {
     expect(contact().needsReply).toBe(true)
   })
 
-  it('👍 no "não precisa" do Saga grava reply_ok; sem decisão do Saga, recusa', () => {
+  it('👍 no "não precisa" do SagaZap grava reply_ok; sem decisão do SagaZap, recusa', () => {
     expect(() => confirmNoReply(repo, A)).toThrow(ReplyFeedbackError)
     repo.setAppReply({ jid: A, msgId: 'a1', needs: false, reason: 'Só informou', source: 'ai' })
     confirmNoReply(repo, A)
@@ -211,7 +211,7 @@ describe('aprendizado, qualidade e CSV', () => {
 
   it('qualidade: removidos, devolvidos, confirmados e % de acerto (últimos 30 dias)', () => {
     seed()
-    // A: o Saga deixou na lista e o mentor tirou (errou); B: a IA tirou e o mentor devolveu (errou)
+    // A: o SagaZap deixou na lista e o mentor tirou (errou); B: a IA tirou e o mentor devolveu (errou)
     expect(replyQuality(repo, NOW)).toEqual({ removed: 1, restored: 1, confirmed: 0, correctRate: 0 })
     repo.insertMessage({ id: 'b2', jid: B, fromMe: true, ts: NOW - 20 * 60_000, kind: 'text', text: 'Recebido!', mediaKeyJson: null, durationSec: null })
     repo.insertMessage({ id: 'b3', jid: B, fromMe: false, ts: NOW - 10 * 60_000, kind: 'text', text: 'valeu', mediaKeyJson: null, durationSec: null })
@@ -222,15 +222,15 @@ describe('aprendizado, qualidade e CSV', () => {
     expect(replyQuality(repo, NOW + 40 * DAY)).toEqual({ removed: 0, restored: 0, confirmed: 0, correctRate: null })
   })
 
-  it('CSV: as linhas do "Para responder" com tipo para_responder, motivo e o que o Saga achava', () => {
+  it('CSV: as linhas do "Para responder" com tipo para_responder, motivo e o que o SagaZap achava', () => {
     seed()
     const csv = feedbackCsv(repo.listFeedback(), () => 'X', true, repo.listReplyFeedback())
     const lines = csv.split('\r\n').filter(Boolean)
     expect(lines).toHaveLength(3)
     expect(lines[1]).toContain(`"${CSV_REPLY_KIND}";"Não precisa responder";"Era só agradecimento / ok / emoji"`)
-    expect(lines[1]).toContain('"Contato 1";"Mentorado: Obrigada pelo material!";"Saga: deixou em ""Para responder"""')
+    expect(lines[1]).toContain('"Contato 1";"Mentorado: Obrigada pelo material!";"SagaZap: deixou em ""Para responder"""')
     expect(lines[2]).toContain('"para_responder";"Precisa responder";""')
-    expect(lines[2]).toContain('"Saga (IA): não precisa responder — Só informou"')
+    expect(lines[2]).toContain('"SagaZap (IA): não precisa responder — Só informou"')
   })
 })
 

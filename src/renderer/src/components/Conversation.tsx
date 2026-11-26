@@ -198,7 +198,7 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert, o
           <button
             type="button"
             className="link-btn missed-link"
-            title="Avise o Saga de um sinal que ele deixou passar"
+            title="Avise o SagaZap de um sinal que ele deixou passar"
             onClick={() => setMissedOpen(true)}
           >
             Faltou um alerta?
@@ -416,7 +416,7 @@ function AlertBar({
 }
 
 /**
- * Aviso discreto quando a conversa saiu de "Para responder": por quê, 👍 (o Saga acertou) e "Precisa sim".
+ * Aviso discreto quando a conversa saiu de "Para responder": por quê, 👍 (o SagaZap acertou) e "Precisa sim".
  * Respondido no grupo do contato: o nome do grupo (abre a conversa do grupo) e a hora.
  */
 function ReplyNote({
@@ -451,7 +451,7 @@ function ReplyNote({
           </>
         ) : bySaga ? (
           <>
-            O Saga acha que esta conversa não precisa de resposta{decision.reason ? ': ' : '.'}
+            O SagaZap acha que esta conversa não precisa de resposta{decision.reason ? ': ' : '.'}
             {decision.reason && <span className="reply-reason">{decision.reason}</span>}
           </>
         ) : (
@@ -459,7 +459,7 @@ function ReplyNote({
         )}
       </p>
       {bySaga && (
-        <button type="button" className="rate-btn" aria-label="O Saga acertou" title="Certo: não precisa de resposta" onClick={onConfirm}>
+        <button type="button" className="rate-btn" aria-label="O SagaZap acertou" title="Certo: não precisa de resposta" onClick={onConfirm}>
           <span aria-hidden="true">👍</span>
         </button>
       )}

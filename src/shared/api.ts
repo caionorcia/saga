@@ -55,7 +55,7 @@ export type UpdateCheckResult = 'available' | 'up_to_date' | 'error'
 
 /** Situação da procura por atualizações: versão atual, quando procurou pela última vez e o que achou. */
 export interface UpdateCheck {
-  /** false no app de desenvolvimento ou com `SAGA_UPDATES=off`: o Saga não procura sozinho */
+  /** false no app de desenvolvimento ou com `SAGA_UPDATES=off`: o SagaZap não procura sozinho */
   enabled: boolean
   /** versão instalada */
   currentVersion: string
@@ -212,7 +212,7 @@ export interface SagaApi {
    * `true` = "Precisa sim" (devolve à lista). Vale até chegar outra mensagem do contato; vira exemplo para a IA.
    */
   setNeedsReply(jid: string, needed: boolean, reason?: ReplyReason): Promise<void>
-  /** 👍 no "O Saga acha que esta conversa não precisa de resposta" */
+  /** 👍 no "O SagaZap acha que esta conversa não precisa de resposta" */
   confirmNoReply(jid: string): Promise<void>
   /** "Faltou um alerta?": registra o exemplo e cria o alerta (opcional: a mensagem e um texto do mentor) */
   reportMissedAlert(jid: string, kind: AlertKind, msgId?: string | null, text?: string | null): Promise<void>
@@ -258,7 +258,7 @@ export interface SagaApi {
   downloadUpdate(): Promise<void>
   /** "Verificar agora": procura uma versão nova já e devolve o resultado (espera a procura terminar) */
   checkForUpdates(): Promise<UpdateCheck>
-  /** com a atualização baixada (`ready`): fecha o Saga com cuidado, instala e abre de novo; senão nada */
+  /** com a atualização baixada (`ready`): fecha o SagaZap com cuidado, instala e abre de novo; senão nada */
   installUpdate(): Promise<void>
 
   getSettings(): Promise<SettingsView>
@@ -305,7 +305,7 @@ export interface SagaApi {
   // --- cópia de segurança (v0.3.1, Configurações › Cópia de segurança) ---
   /** última cópia e a cópia automática */
   backupStatus(): Promise<BackupStatus>
-  /** "Exportar cópia": abre "Salvar como" (`Saga-copia-AAAA-MM-DD.sagabackup`) e grava */
+  /** "Exportar cópia": abre "Salvar como" (`SagaZap-copia-AAAA-MM-DD.sagabackup`) e grava */
   exportBackup(opts: BackupExportOptions): Promise<BackupExportResult>
   /** "Restaurar cópia": abre o diálogo, lê o arquivo e mostra as contagens (ou pede a senha) */
   restoreOpen(): Promise<BackupOpenResult>

@@ -172,7 +172,7 @@ describe('IPC da cópia de segurança', () => {
     showSaveDialog.mockReset()
   })
 
-  it('exportar: o caminho vem do "Salvar como" com o nome Saga-copia-AAAA-MM-DD.sagabackup; cancelar não grava', async () => {
+  it('exportar: o caminho vem do "Salvar como" com o nome SagaZap-copia-AAAA-MM-DD.sagabackup; cancelar não grava', async () => {
     const exportTo = vi.fn(() => ({ counts: { approvedReplies: 1 }, bytes: 10 }))
     const saved = vi.fn()
     const service = {
@@ -187,7 +187,7 @@ describe('IPC da cópia de segurança', () => {
     showSaveDialog.mockResolvedValueOnce({ canceled: true, filePath: '' })
     expect(await call('exportBackup', APP, { includeMessages: false })).toEqual({ status: 'canceled' })
     expect(exportTo).not.toHaveBeenCalled()
-    expect(showSaveDialog.mock.calls[0][0]).toMatchObject({ defaultPath: expect.stringMatching(/Saga-copia-\d{4}-\d{2}-\d{2}\.sagabackup$/) })
+    expect(showSaveDialog.mock.calls[0][0]).toMatchObject({ defaultPath: expect.stringMatching(/SagaZap-copia-\d{4}-\d{2}-\d{2}\.sagabackup$/) })
     showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: '/tmp/escolhido.sagabackup' })
     expect(await call('exportBackup', APP, { includeMessages: true, password: 'segredo' })).toMatchObject({ status: 'saved', encrypted: true })
     expect(exportTo).toHaveBeenCalledWith('/tmp/escolhido.sagabackup', { includeMessages: true, password: 'segredo', uiPrefs: undefined })

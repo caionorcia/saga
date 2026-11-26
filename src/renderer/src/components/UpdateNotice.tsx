@@ -3,7 +3,7 @@ import type { UpdateState } from '../../../shared/api'
 
 /**
  * Aviso de versão nova: "Nova versão disponível — Atualizar", o download e "Reiniciar e atualizar".
- * Na barra de status e também no assistente (quem ainda está configurando o Saga vê a atualização).
+ * Na barra de status e também no assistente (quem ainda está configurando o SagaZap vê a atualização).
  */
 export function UpdateNotice({ update, className = 'status-update' }: { update: UpdateState; className?: string }) {
   const [busy, setBusy] = useState(false)
@@ -38,7 +38,7 @@ export function UpdateNotice({ update, className = 'status-update' }: { update: 
   if (update.status === 'ready') {
     return (
       <span className={className} role="status">
-        Atualização pronta — será instalada quando você fechar o Saga.{' '}
+        Atualização pronta — será instalada quando você fechar o SagaZap.{' '}
         <button type="button" className="btn btn-small btn-primary" disabled={busy} onClick={() => run(() => window.saga.installUpdate())}>
           Reiniciar e atualizar
         </button>

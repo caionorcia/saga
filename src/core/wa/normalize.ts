@@ -163,7 +163,7 @@ function body(c: WAMessageContent): Body | null {
 }
 
 /**
- * Converte uma mensagem do Baileys no formato do Saga.
+ * Converte uma mensagem do Baileys no formato do SagaZap.
  * Devolve `null` para tudo que não é conversa individual ou de grupo com conteúdo
  * (status, newsletters, listas de transmissão, reações, edições…).
  */

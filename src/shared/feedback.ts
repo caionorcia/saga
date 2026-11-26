@@ -56,7 +56,7 @@ export interface AlertQuality {
   since: number
   days: number
   kinds: AlertQualityRow[]
-  /** "Para responder": quantas vezes o mentor corrigiu ou confirmou o Saga */
+  /** "Para responder": quantas vezes o mentor corrigiu ou confirmou o SagaZap */
   reply: ReplyQuality
 }
 
@@ -67,9 +67,9 @@ export interface ExportFeedbackOptions {
 
 export type ExportFeedbackResult = { status: 'saved'; rows: number } | { status: 'canceled' } | { status: 'empty' }
 
-// --- "Para responder" (v0.2.2): o mentor corrige quando o Saga erra se a conversa precisa de resposta ---
+// --- "Para responder" (v0.2.2): o mentor corrige quando o SagaZap erra se a conversa precisa de resposta ---
 
-/** O que o mentor disse: tirou da lista, devolveu à lista (ou confirmou o "esperando"), ou 👍 no "não precisa" do Saga. */
+/** O que o mentor disse: tirou da lista, devolveu à lista (ou confirmou o "esperando"), ou 👍 no "não precisa" do SagaZap. */
 export const REPLY_VERDICTS = ['reply_not_needed', 'reply_needed', 'reply_ok'] as const
 export type ReplyVerdict = (typeof REPLY_VERDICTS)[number]
 
@@ -127,10 +127,10 @@ export interface ReplyDecision {
 export interface ReplyQuality {
   /** o mentor tirou da lista ("Não precisa responder") */
   removed: number
-  /** o Saga tinha tirado e o mentor devolveu ("Precisa sim") */
+  /** o SagaZap tinha tirado e o mentor devolveu ("Precisa sim") */
   restored: number
-  /** o mentor confirmou a decisão do Saga (👍 no "esperando" ou no "não precisa") */
+  /** o mentor confirmou a decisão do SagaZap (👍 no "esperando" ou no "não precisa") */
   confirmed: number
-  /** decisões do Saga que o mentor confirmou / todas as avaliadas; null sem avaliações */
+  /** decisões do SagaZap que o mentor confirmou / todas as avaliadas; null sem avaliações */
   correctRate: number | null
 }

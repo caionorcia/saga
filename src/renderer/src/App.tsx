@@ -42,7 +42,7 @@ export function App() {
   if (wizard) return <SetupWizard state={state} onFinish={() => setWizard(false)} />
 
   const alert = state.startError
-    ? `O Saga não conseguiu iniciar a conexão com o WhatsApp (${state.startError}). Clique em Reconectar para tentar de novo; se continuar, copie o diagnóstico em Configurações e mande para o suporte.`
+    ? `O SagaZap não conseguiu iniciar a conexão com o WhatsApp (${state.startError}). Clique em Reconectar para tentar de novo; se continuar, copie o diagnóstico em Configurações e mande para o suporte.`
     : connAlert(state.conn)
   return (
     <div className="app">

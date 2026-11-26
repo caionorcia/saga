@@ -70,7 +70,7 @@ describe('Configurações › Cópia de segurança', () => {
     fireEvent.click(toggle)
     await waitFor(() => expect(toggle.checked).toBe(false))
     fireEvent.click(screen.getByRole('button', { name: 'Escolher pasta' }))
-    expect(await screen.findByText(/OneDrive\\Saga/)).toBeTruthy()
+    expect(await screen.findByText(/OneDrive\\SagaZap/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Tirar a senha' }))
     await waitFor(() => expect(ctl.calls.some((c) => c.method === 'setAutoBackup' && (c.args[0] as { password?: string }).password === '')).toBe(true))
   })

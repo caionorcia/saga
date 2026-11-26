@@ -138,11 +138,11 @@ export function Settings({ focus }: { focus?: { id: string; seq: number } | null
             Mostrar o botão Enviar nas sugestões
           </label>
           <p className="muted small">
-            Cada envio pede a sua confirmação. O Saga só responde a quem mandou mensagem nos últimos 30 dias e envia no
+            Cada envio pede a sua confirmação. O SagaZap só responde a quem mandou mensagem nos últimos 30 dias e envia no
             máximo uma mensagem a cada 30 a 90 segundos (40 por hora, 200 por dia).
           </p>
           <fieldset className="send-options" disabled={!s.directSend}>
-            <legend className="sr-only">Como o Saga envia</legend>
+            <legend className="sr-only">Como o SagaZap envia</legend>
             <label className="check">
               <input type="checkbox" checked={s.sendTyping} onChange={(e) => void save({ sendTyping: e.target.checked })} />
               Mostrar "digitando…" antes de enviar
@@ -175,7 +175,7 @@ export function Settings({ focus }: { focus?: { id: string; seq: number } | null
               onKeyDown={(e) => e.key === 'Enter' && saveCap()}
             />
           </div>
-          <p className="muted small">Ao chegar nesse valor, o Saga para de usar IA paga até o dia seguinte.</p>
+          <p className="muted small">Ao chegar nesse valor, o SagaZap para de usar IA paga até o dia seguinte.</p>
         </section>
 
         <BackupSection />
@@ -186,7 +186,7 @@ export function Settings({ focus }: { focus?: { id: string; seq: number } | null
           <h2>Windows</h2>
           <label className="check">
             <input type="checkbox" checked={s.startWithWindows} onChange={(e) => void save({ startWithWindows: e.target.checked })} />
-            Iniciar o Saga junto com o Windows
+            Iniciar o SagaZap junto com o Windows
           </label>
         </section>
 
@@ -194,7 +194,7 @@ export function Settings({ focus }: { focus?: { id: string; seq: number } | null
           <h2>Ritmo dos downloads</h2>
           <p>
             Um áudio a cada 4 a 12 segundos, no máximo 300 por hora e 2.000 por dia. Nos primeiros 15 minutos depois de abrir o
-            Saga ele anda na metade da velocidade. Isso protege a sua conta e não pode ser alterado.
+            SagaZap ele anda na metade da velocidade. Isso protege a sua conta e não pode ser alterado.
           </p>
         </section>
 
@@ -328,7 +328,7 @@ function SendHoursSection({ schedule, disabled, onSave }: { schedule: SendSchedu
         </p>
       )}
       <p className="muted small">
-        {draft.enabled ? `Agora: ${scheduleSummary(draft)}. ` : 'Desligado: o Saga pode enviar a qualquer hora. '}
+        {draft.enabled ? `Agora: ${scheduleSummary(draft)}. ` : 'Desligado: o SagaZap pode enviar a qualquer hora. '}
         Vale o relógio deste computador (fuso {localTimeZone()}).
       </p>
     </div>
@@ -407,7 +407,7 @@ function UpdatesSection() {
         </button>
       </div>
       <p className="muted small">
-        O Saga procura sozinho a cada hora e quando você abre a janela. Se preferir, baixe a versão nova em{' '}
+        O SagaZap procura sozinho a cada hora e quando você abre a janela. Se preferir, baixe a versão nova em{' '}
         <a href="https://github.com/caionorcia/saga/releases/latest" target="_blank" rel="noreferrer">
           github.com/caionorcia/saga/releases
         </a>{' '}
@@ -457,7 +457,7 @@ function AlertQualitySection() {
       <h2 id="quality-title">Qualidade dos alertas</h2>
       <p className="muted small">
         Suas avaliações (👍 e 👎 nos alertas, "Faltou um alerta?" e "Não precisa responder") dos últimos {q?.days ?? 30} dias.
-        O Saga usa os exemplos para errar menos.
+        O SagaZap usa os exemplos para errar menos.
       </p>
       {q && (
         <table className="quality-table">
@@ -489,9 +489,9 @@ function AlertQualitySection() {
             <tr>
               <th scope="col">Lista</th>
               <th scope="col" title="Conversas que você tirou com &quot;Não precisa responder&quot;">Removidos por você</th>
-              <th scope="col" title="Conversas que o Saga tirou e você devolveu com &quot;Precisa sim&quot;">Devolvidos</th>
-              <th scope="col" title="Decisões do Saga que você confirmou com 👍">Confirmados</th>
-              <th scope="col">% de acerto do Saga</th>
+              <th scope="col" title="Conversas que o SagaZap tirou e você devolveu com &quot;Precisa sim&quot;">Devolvidos</th>
+              <th scope="col" title="Decisões do SagaZap que você confirmou com 👍">Confirmados</th>
+              <th scope="col">% de acerto do SagaZap</th>
             </tr>
           </thead>
           <tbody>

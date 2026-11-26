@@ -83,7 +83,7 @@ export function readZip(buf: Buffer, accept: (path: string) => boolean, limits: 
   const cdSize = buf.readUInt32LE(eocd + 12)
   const cdOffset = buf.readUInt32LE(eocd + 16)
   if (count === 0xffff || cdOffset === 0xffffffff || cdSize === 0xffffffff) {
-    throw new KbImportError('Este .zip usa um formato (ZIP64) que o Saga não lê. Descompacte e importe a pasta.')
+    throw new KbImportError('Este .zip usa um formato (ZIP64) que o SagaZap não lê. Descompacte e importe a pasta.')
   }
   if (count > MAX_ENTRIES) throw new KbImportError('O .zip tem arquivos demais.')
   if (cdOffset + cdSize > buf.length) throw new KbImportError('O arquivo .zip está incompleto ou corrompido.')

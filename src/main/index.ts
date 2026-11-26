@@ -10,15 +10,13 @@ import { SagaService } from '../core/service'
 import { createDiagLog, diagnosticsText, type DiagLog } from './diagLog'
 import { isAppUrl, isExternalHttpUrl, type AppOrigin } from './guards'
 import { registerIpc } from './ipc'
+import { LOGIN_ITEM_NAME, userDataDir } from './appPaths'
 import { THEME_ARG, type ThemePref } from '../shared/api'
 import { createSettingsStore, safeStorageCipher } from './settings'
 import { startUpdater, updatesEnabled, type Updater } from './updater'
 import { initialUpdaterModel } from './updaterState'
+import { TRAY_ICON_1X, TRAY_ICON_2X } from './trayIcon'
 import { MIN_SIZE, WINDOW_STATE_KEY, parseWindowState, serializeWindowState, windowCreateOptions } from './windowState'
-
-// círculo verde 16x16 (sem arquivo de recurso para empacotar)
-const TRAY_ICON =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAaUlEQVR4nGNQXZjNgAMbqC7MjoJiA1zqsAm2qi7M/o8Dt+IzgF11YfZdPJph+C5ULYYBxGhGNgTFAHzOxusdmAGkaoZhBlhok2uAAQM0msg1IIoqBlDsBYoDkSrRSHFCokpSpjgzkZWdAS3a2/Bb52t3AAAAAElFTkSuQmCC'
 
 protocol.registerSchemesAsPrivileged([
   { scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }
@@ -30,13 +28,17 @@ let service: SagaService | null = null
 let quitting = false
 let stopped = false
 
+// a pasta de dados continua `%APPDATA%\saga` depois do nome SagaZap (banco, sessão do WhatsApp, chaves, registros):
+// fixada antes de qualquer `getPath('userData')`, inclusive a trava de instância única e o `safeStorage`
+app.setPath('userData', userDataDir(app.getPath('appData')))
+
 /** registro de diagnóstico em `<userData>/logs/saga.log` (nunca chaves, mensagens ou o QR) */
 const diagLog: DiagLog = createDiagLog(join(app.getPath('userData'), 'logs'))
 const errDetail = (e: unknown) => (e instanceof Error ? (e.stack ?? e.message) : String(e)).slice(0, 1500)
 
 function versionsHeader(): Record<string, string> {
   return {
-    Saga: app.getVersion(),
+    SagaZap: app.getVersion(),
     Electron: process.versions.electron ?? '?',
     Node: process.versions.node,
     Chrome: process.versions.chrome ?? '?',
@@ -177,8 +179,9 @@ function updateTrayMenu(paused: boolean): void {
 }
 
 function applyLoginItem(openAtLogin: boolean): void {
-  // em desenvolvimento registraria o electron.exe; só no app instalado
-  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin })
+  // em desenvolvimento registraria o electron.exe; só no app instalado. Roda a cada início: depois da atualização
+  // que trocou Saga.exe por SagaZap.exe, o mesmo valor do registro passa a apontar para o executável novo
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin, name: LOGIN_ITEM_NAME, path: process.execPath })
 }
 
 function main(): void {
@@ -327,8 +330,11 @@ function main(): void {
     // abrir a janela (inclusive pela bandeja) também procura uma versão nova, se a última procura foi há um tempo
     win.on('show', () => updater?.onActivity())
     win.on('focus', () => updater?.onActivity())
-    tray = new Tray(nativeImage.createFromDataURL(TRAY_ICON))
-    tray.setToolTip('Saga')
+    // ícone do SagaZap (variante para 16 px), com a versão de 32 px para telas em 200%
+    const trayImage = nativeImage.createFromDataURL(TRAY_ICON_1X)
+    trayImage.addRepresentation({ scaleFactor: 2, dataURL: TRAY_ICON_2X })
+    tray = new Tray(trayImage)
+    tray.setToolTip('SagaZap')
     tray.on('click', showWindow)
     updateTrayMenu(false)
     let lastPaused = false

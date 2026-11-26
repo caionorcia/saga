@@ -100,11 +100,11 @@ export function connectionLabel(
 export function connAlert(conn: AppState['conn']): string | null {
   switch (conn) {
     case 'stopped_restricted':
-      return 'O WhatsApp sinalizou uma restrição na sua conta. O Saga parou tudo e não vai tentar de novo sozinho. Use o WhatsApp só pelo celular por alguns dias; quando quiser voltar a usar o Saga, clique em Reconectar.'
+      return 'O WhatsApp sinalizou uma restrição na sua conta. O SagaZap parou tudo e não vai tentar de novo sozinho. Use o WhatsApp só pelo celular por alguns dias; quando quiser voltar a usar o SagaZap, clique em Reconectar.'
     case 'stopped_outdated':
-      return 'O WhatsApp recusou a conexão mesmo depois de o Saga buscar a versão mais nova do WhatsApp Web. Clique em Reconectar para tentar de novo; se continuar, atualize o Saga para a versão mais nova.'
+      return 'O WhatsApp recusou a conexão mesmo depois de o SagaZap buscar a versão mais nova do WhatsApp Web. Clique em Reconectar para tentar de novo; se continuar, atualize o SagaZap para a versão mais nova.'
     case 'stopped_replaced':
-      return 'O WhatsApp deste computador foi conectado em outro lugar. O Saga parou para não disputar a conexão. Feche o outro aparelho ou programa e clique em Reconectar.'
+      return 'O WhatsApp deste computador foi conectado em outro lugar. O SagaZap parou para não disputar a conexão. Feche o outro aparelho ou programa e clique em Reconectar.'
     case 'stopped_logged_out':
       return 'Este computador foi desvinculado do WhatsApp pelo celular. Clique em Reconectar para mostrar um QR Code novo e vincular de novo. As conversas já importadas continuam guardadas.'
     default:
@@ -122,9 +122,9 @@ export function qrProblem(conn: AppState['conn']): string | null {
   if (alert) return alert.replace(/Reconectar/g, 'Tentar de novo')
   switch (conn) {
     case 'manual_retry_needed':
-      return 'O Saga tentou falar com o WhatsApp várias vezes, sem sucesso, e parou para não insistir. Confira a internet e clique em Tentar de novo.'
+      return 'O SagaZap tentou falar com o WhatsApp várias vezes, sem sucesso, e parou para não insistir. Confira a internet e clique em Tentar de novo.'
     case 'waiting_retry':
-      return 'A conexão com o WhatsApp falhou. O Saga vai tentar de novo sozinho; se preferir, clique em Tentar de novo.'
+      return 'A conexão com o WhatsApp falhou. O SagaZap vai tentar de novo sozinho; se preferir, clique em Tentar de novo.'
     default:
       return null
   }
@@ -172,12 +172,12 @@ const EVENT_LABELS: Record<string, string> = {
   ipc_refused: 'Chamada bloqueada por segurança',
   reconcile_error: 'Erro ao conferir mensagens enviadas',
   emit_error: 'Erro ao atualizar a tela',
-  start_error: 'Erro ao iniciar o Saga',
+  start_error: 'Erro ao iniciar o SagaZap',
   transcribe_budget: 'Teto de gasto atingido: transcrições pausadas',
   transcribe_offline: 'Sem internet: transcrição adiada',
   update_error: 'Erro ao procurar ou baixar atualização',
-  update_available: 'Nova versão do Saga disponível',
-  update_downloaded: 'Nova versão do Saga baixada',
+  update_available: 'Nova versão do SagaZap disponível',
+  update_downloaded: 'Nova versão do SagaZap baixada',
   wa_open: 'WhatsApp conectado',
   wa_qr: 'QR Code gerado',
   wa_closed: 'Conexão com o WhatsApp caiu',
@@ -208,7 +208,7 @@ export function updateErrorText(message: string | null): string {
 
 /** O resultado da última procura por atualização, para Configurações › Atualizações. */
 export function updateCheckText(c: AppState['updateCheck'], update: AppState['update']): string {
-  if (!c.enabled) return 'Este Saga não procura atualizações sozinho (versão de desenvolvimento).'
+  if (!c.enabled) return 'Este SagaZap não procura atualizações sozinho (versão de desenvolvimento).'
   if (c.checking) return 'Procurando uma versão nova…'
   if (c.lastCheckAt === null) return 'Ainda não procurou nesta sessão.'
   const when = `${sameDay(c.lastCheckAt, Date.now()) ? 'hoje' : formatDay(c.lastCheckAt)}, às ${formatTime(c.lastCheckAt)}`

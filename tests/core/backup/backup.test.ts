@@ -195,7 +195,7 @@ describe('cópia de segurança', () => {
     for (let i = 200; i < 260; i++) bad[i] ^= 0xff
     expect(t.mgr.open(bad)).toMatchObject({ status: 'error', code: 'corrupted' })
     expect(t.mgr.open(bytes.subarray(0, bytes.length - 30))).toMatchObject({ status: 'error', code: 'corrupted' })
-    expect(t.mgr.open(Buffer.from('não sou um zip'))).toMatchObject({ status: 'error', code: 'invalid', message: 'Este arquivo não é uma cópia de segurança do Saga.' })
+    expect(t.mgr.open(Buffer.from('não sou um zip'))).toMatchObject({ status: 'error', code: 'invalid', message: 'Este arquivo não é uma cópia de segurança do SagaZap.' })
     expect(t.mgr.open(writeZip([{ path: 'outro.txt', data: Buffer.from('x') }]))).toMatchObject({ status: 'error', code: 'invalid' })
     const future = writeZip([
       { path: 'manifest.json', data: Buffer.from(JSON.stringify({ format: 'saga-backup', version: BACKUP_VERSION + 1, createdAt: NOW, appVersion: '9.0.0', encrypted: false })) },
@@ -235,7 +235,7 @@ describe('cópia de segurança', () => {
     expect(mgr.runAutoIfDue()).toBe('off')
     mgr.setAuto({ enabled: true })
     expect(mgr.runAutoIfDue()).toBe('off')
-    const folder = join(dir, 'Google Drive', 'Saga')
+    const folder = join(dir, 'Google Drive', 'SagaZap')
     mgr.setAutoFolder(folder)
     // cópias antigas já na pasta (e um arquivo qualquer, que não é apagado)
     mkdirSync(folder, { recursive: true })
@@ -255,7 +255,7 @@ describe('cópia de segurança', () => {
     // de novo no mesmo dia: não
     clock.advance(DAY)
     expect(mgr.runAutoIfDue()).toBe('not_due')
-    expect(diag.filter((d) => d.startsWith('auto_backup') || d.startsWith('backup_export')).join('\n')).not.toMatch(/Google|Saga-copia|Ana/)
+    expect(diag.filter((d) => d.startsWith('auto_backup') || d.startsWith('backup_export')).join('\n')).not.toMatch(/Google|SagaZap-copia|Ana/)
   })
 
   it('pasta que não dá para gravar: registra o erro e mostra na tela', () => {
@@ -272,8 +272,24 @@ describe('cópia de segurança', () => {
     expect(autoBackupDue(NOW - 6 * DAY, NOW)).toBe(false)
     expect(autoBackupDue(NOW - 7 * DAY, NOW)).toBe(true)
     expect(autoBackupDue(NOW + DAY, NOW)).toBe(true)
-    expect(backupFileName(new Date(2026, 10, 3, 10).getTime())).toBe('Saga-copia-2026-11-03.sagabackup')
+    expect(backupFileName(new Date(2026, 10, 3, 10).getTime())).toBe('SagaZap-copia-2026-11-03.sagabackup')
     expect(rotateBackups(dir)).toBe(0)
+  })
+
+  it('rotação: as cópias antigas (Saga-copia-…) e as novas (SagaZap-copia-…) entram juntas, pela data', () => {
+    const names = [
+      'Saga-copia-2026-10-01.sagabackup',
+      'Saga-copia-2026-10-08.sagabackup',
+      'Saga-copia-2026-10-15.sagabackup',
+      'SagaZap-copia-2026-10-22.sagabackup',
+      'SagaZap-copia-2026-10-29.sagabackup',
+      'SagaZap-copia-2026-11-05.sagabackup',
+      'SagaZap-copia-2026-11-05-2.sagabackup'
+    ]
+    for (const n of names) writeFileSync(join(dir, n), 'x')
+    writeFileSync(join(dir, 'outro-arquivo.sagabackup'), 'x')
+    expect(rotateBackups(dir, 5)).toBe(2)
+    expect(readdirSync(dir).sort()).toEqual([...names.slice(2), 'outro-arquivo.sagabackup'].sort())
   })
 
   it('a cópia é um .zip de verdade (Windows abre) com o manifesto', () => {

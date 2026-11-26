@@ -76,7 +76,7 @@ export interface ContactRow {
   /** tipos de alerta ativos, do mais grave para o menos grave */
   alerts: AlertKind[]
   /**
-   * entra em "Para responder": aguarda resposta e nem o Saga nem o mentor decidiram que a última mensagem do contato
+   * entra em "Para responder": aguarda resposta e nem o SagaZap nem o mentor decidiram que a última mensagem do contato
    * dispensa resposta (agradecimento, "ok", emoji, conversa de grupo que não é com o mentor…)
    */
   needsReply: boolean
@@ -106,7 +106,7 @@ export interface ReplyFeedbackRow {
   msgId: string
   alertId: number | null
   verdict: ReplyVerdict
-  /** o que o Saga achava na hora: true/false, ou null (não tinha decidido: deixava na lista) */
+  /** o que o SagaZap achava na hora: true/false, ou null (não tinha decidido: deixava na lista) */
   appNeeds: boolean | null
   appReason: string | null
   appSource: string | null
@@ -294,7 +294,7 @@ export const groupAnswerReason = (g: GroupAnswer) => `Respondido no grupo ${g.na
 
 /**
  * Decisão vigente: a do mentor vence; depois a regra do grupo (o mentor escreveu num grupo do contato depois da
- * mensagem dele); depois a do Saga (regra de agradecimento ou IA). Sem nenhuma, null.
+ * mensagem dele); depois a do SagaZap (regra de agradecimento ou IA). Sem nenhuma, null.
  */
 function decisionOf(r: Row, group: GroupAnswer | null): ReplyDecision | null {
   const user = bit(r.rc_user_needs)
@@ -811,7 +811,7 @@ export class Repo {
   }
 
   /**
-   * A decisão do Saga (regra ou IA) para a última mensagem do contato `msgId`. Mensagem diferente da guardada:
+   * A decisão do SagaZap (regra ou IA) para a última mensagem do contato `msgId`. Mensagem diferente da guardada:
    * a linha recomeça (a decisão do mentor, que era sobre a mensagem antiga, sai). `true` se algo mudou.
    */
   setAppReply(a: { jid: string; msgId: string; needs: boolean; reason: string | null; source: 'rule' | 'ai'; model?: string | null }): boolean {
@@ -830,7 +830,7 @@ export class Repo {
     return true
   }
 
-  /** A decisão do mentor para a última mensagem do contato `msgId` (vence a do Saga). `true` se algo mudou. */
+  /** A decisão do mentor para a última mensagem do contato `msgId` (vence a do SagaZap). `true` se algo mudou. */
   setUserReply(jid: string, msgId: string, needs: boolean): boolean {
     const cur = this.getReplyCheck(jid)
     if (cur && cur.msgId === msgId && cur.userNeeds === needs) return false

@@ -1,6 +1,6 @@
 appId: br.com.saga.mentoria
-productName: Saga
-copyright: Saga
+productName: SagaZap
+copyright: SagaZap
 directories:
   output: dist
   buildResources: build
@@ -20,8 +20,8 @@ nsis:
   allowToChangeInstallationDirectory: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Saga
-  artifactName: Saga-Setup-${version}.${ext}
+  shortcutName: SagaZap
+  artifactName: SagaZap-Setup-${version}.${ext}
 linux:
   target: dir
   icon: build/icon.png

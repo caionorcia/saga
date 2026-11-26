@@ -1,5 +1,5 @@
 /**
- * Cópia de segurança (v0.3.1): exportar e restaurar o que o Saga aprendeu (respostas aprovadas, nomes e notas,
+ * Cópia de segurança (v0.3.1): exportar e restaurar o que o SagaZap aprendeu (respostas aprovadas, nomes e notas,
  * avaliações, base de conhecimento e configurações sem segredo). Só tipos e constantes.
  */
 
@@ -62,9 +62,9 @@ export type BackupRestoreResult =
 export type BackupErrorCode = 'invalid' | 'corrupted' | 'version' | 'wrong_password' | 'expired' | 'failed'
 
 export const BACKUP_ERROR_TEXT: Record<BackupErrorCode, string> = {
-  invalid: 'Este arquivo não é uma cópia de segurança do Saga.',
+  invalid: 'Este arquivo não é uma cópia de segurança do SagaZap.',
   corrupted: 'A cópia está danificada ou incompleta. Tente outra cópia.',
-  version: 'Esta cópia foi feita por uma versão mais nova do Saga. Atualize o Saga e tente de novo.',
+  version: 'Esta cópia foi feita por uma versão mais nova do SagaZap. Atualize o SagaZap e tente de novo.',
   wrong_password: 'Senha incorreta. Confira e tente de novo.',
   expired: 'Escolha o arquivo da cópia de novo.',
   failed: 'Não foi possível restaurar a cópia. Nada foi alterado.'

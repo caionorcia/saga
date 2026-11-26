@@ -1,10 +1,10 @@
 {
   "name": "saga",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
-  "author": "Saga",
+  "author": "SagaZap",
   "type": "module",
-  "description": "Saga - assistente de respostas do WhatsApp do mentor",
+  "description": "SagaZap - assistente de respostas do WhatsApp do mentor",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

@@ -54,8 +54,8 @@ describe('registro de diagnóstico', () => {
   it('texto do diagnóstico: cabeçalho e as últimas linhas', () => {
     const log = createDiagLog(tmp)
     for (let i = 0; i < 5; i++) log.write('ev', String(i))
-    const t = diagnosticsText(log, { 'Saga': '0.1.1', 'Electron': '45' }, 3)
-    expect(t).toMatch(/^=== Diagnóstico do Saga ===\nSaga: 0.1.1\nElectron: 45\nRegistro: 3 linhas/)
+    const t = diagnosticsText(log, { 'SagaZap': '0.1.1', 'Electron': '45' }, 3)
+    expect(t).toMatch(/^=== Diagnóstico do SagaZap ===\nSagaZap: 0.1.1\nElectron: 45\nRegistro: 3 linhas/)
     expect(t.trim().split('\n').slice(-3).map((l) => l.split(' ').at(-1))).toEqual(['2', '3', '4'])
     expect(diagnosticsText(createDiagLog(join(tmp, 'vazio')), {})).toMatch(/\(registro vazio\)/)
   })

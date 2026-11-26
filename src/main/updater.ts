@@ -123,7 +123,7 @@ export function startUpdater(deps: UpdaterDeps): Updater {
     isReady: () => model.update.status === 'ready',
     install() {
       if (model.update.status !== 'ready') return false
-      // isSilent=false (mostra o instalador), isForceRunAfter=true (abre o Saga de novo)
+      // isSilent=false (mostra o instalador), isForceRunAfter=true (abre o SagaZap de novo)
       autoUpdater.quitAndInstall(false, true)
       return true
     },

@@ -714,7 +714,7 @@ export class SagaService extends EventEmitter {
     if (changed) this.markContacts()
   }
 
-  /** 👍 no "O Saga acha que esta conversa não precisa de resposta". */
+  /** 👍 no "O SagaZap acha que esta conversa não precisa de resposta". */
   async confirmNoReply(jid: string): Promise<void> {
     const changed = confirmNoReply(this.repo, jid)
     this.diag('reply_feedback', 'verdict=reply_ok')
@@ -1280,13 +1280,13 @@ export class SagaService extends EventEmitter {
    */
   private recoverSends(): void {
     for (const s of this.repo.sends.listByStatus('queued', 'typing')) {
-      if (this.repo.sends.transition(s.id, s.attempt, ['queued', 'typing'], 'expired', { error: 'o Saga fechou antes de enviar' })) {
-        this.sendDiag('send_expired', s, 'o Saga fechou antes de enviar')
+      if (this.repo.sends.transition(s.id, s.attempt, ['queued', 'typing'], 'expired', { error: 'o SagaZap fechou antes de enviar' })) {
+        this.sendDiag('send_expired', s, 'o SagaZap fechou antes de enviar')
       }
     }
     for (const s of this.repo.sends.listByStatus('sending')) {
-      if (this.repo.sends.transition(s.id, s.attempt, ['sending'], 'unknown', { error: 'o Saga fechou durante o envio' })) {
-        this.sendDiag('send_unknown', s, 'o Saga fechou durante o envio')
+      if (this.repo.sends.transition(s.id, s.attempt, ['sending'], 'unknown', { error: 'o SagaZap fechou durante o envio' })) {
+        this.sendDiag('send_unknown', s, 'o SagaZap fechou durante o envio')
       }
     }
     for (const s of this.repo.sends.listByStatus('unknown')) {

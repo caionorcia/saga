@@ -46,9 +46,9 @@ export interface KbFileView {
   /** nome para exibir (sem número nem extensão) */
   title: string
   role: KbRole
-  /** o papel que o Saga escolheu ao importar (o mentor pode trocar) */
+  /** o papel que o SagaZap escolheu ao importar (o mentor pode trocar) */
   autoRole: KbRole
-  /** por que o Saga escolheu esse papel, em pt-BR */
+  /** por que o SagaZap escolheu esse papel, em pt-BR */
   roleReason: string
   enabled: boolean
   /** bytes do texto */

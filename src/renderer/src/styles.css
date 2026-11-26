@@ -166,7 +166,8 @@ label { font-weight: 600; font-size: 14px; display: block; margin: 12px 0 4px; }
 /* contatos */
 .contacts { position: relative; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
 .contacts-head { padding: 12px 14px; border-bottom: 1px solid var(--border); }
-.brand { font-size: 20px; color: var(--accent-text); margin-bottom: 8px; letter-spacing: .3px; }
+.brand { font-size: 20px; color: var(--accent-text); margin-bottom: 8px; letter-spacing: .3px; display: flex; align-items: center; gap: 8px; }
+.brand-mark { width: 22px; height: 22px; flex: none; }
 .kind-filter { display: flex; background: var(--seg-bg); border: 1px solid var(--border); border-radius: 8px; padding: 2px; margin-bottom: 8px; }
 .kind-filter button { flex: 1; min-width: 0; border: 0; background: none; border-radius: 6px; padding: 5px 4px; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kind-filter button:hover { color: var(--text); }

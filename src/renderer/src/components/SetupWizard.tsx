@@ -42,17 +42,17 @@ export function SetupWizard({ state, onFinish }: Props) {
 function Welcome({ onNext }: { onNext: () => void }) {
   return (
     <>
-      <h1>Bem-vindo ao Saga</h1>
+      <h1>Bem-vindo ao SagaZap</h1>
       <p>
-        O Saga lê as conversas do seu WhatsApp, transcreve os áudios e sugere respostas para você revisar. Ele
+        O SagaZap lê as conversas do seu WhatsApp, transcreve os áudios e sugere respostas para você revisar. Ele
         <strong> só envia uma mensagem quando você clica em Enviar e confirma</strong>; se preferir, copie o texto e cole no
         WhatsApp.
       </p>
       <div className="notice" role="note">
         <strong>Antes de começar, um aviso importante</strong>
         <p>
-          O Saga se conecta ao WhatsApp como um aparelho vinculado (o mesmo que o WhatsApp Web). Esse tipo de uso não é
-          oficial, e existe um pequeno risco de o WhatsApp limitar a conta. Para reduzir esse risco, o Saga vai devagar,
+          O SagaZap se conecta ao WhatsApp como um aparelho vinculado (o mesmo que o WhatsApp Web). Esse tipo de uso não é
+          oficial, e existe um pequeno risco de o WhatsApp limitar a conta. Para reduzir esse risco, o SagaZap vai devagar,
           só responde a quem falou com você nos últimos 30 dias, só envia o que você confirma e só marca como lida a
           conversa que você respondeu.
         </p>
@@ -111,7 +111,7 @@ function KeyStep({ kind, onNext, onBack }: { kind: Extract<KeyKind, 'groq' | 'cl
               com a sua conta (pode ser a do Google).
             </li>
             <li>
-              Clique em <strong>Create API Key</strong>, dê um nome (por exemplo, Saga) e confirme.
+              Clique em <strong>Create API Key</strong>, dê um nome (por exemplo, SagaZap) e confirme.
             </li>
             <li>Copie a chave que aparece (começa com “gsk_”) e cole abaixo.</li>
           </ol>
@@ -205,7 +205,7 @@ function ImportStep({ state, onFinish }: { state: AppState; onFinish: () => void
   return (
     <>
       <h1>Importando as conversas</h1>
-      <p>O Saga está trazendo os últimos 30 dias de conversas e baixando os áudios, aos poucos, para não sobrecarregar o WhatsApp. Você já pode começar a usar enquanto isso.</p>
+      <p>O SagaZap está trazendo os últimos 30 dias de conversas e baixando os áudios, aos poucos, para não sobrecarregar o WhatsApp. Você já pode começar a usar enquanto isso.</p>
       <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label="Progresso da importação">
         <div style={{ width: `${pct}%` }} />
       </div>

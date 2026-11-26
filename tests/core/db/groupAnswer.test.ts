@@ -122,7 +122,7 @@ describe('"Respondido no grupo": a regra', () => {
     expect(contact(G_TURMA).needsReply).toBe(true)
   })
 
-  it('o mentor disse "Precisa sim": volta para a lista e grava a avaliação (o Saga tinha tirado pelo grupo)', () => {
+  it('o mentor disse "Precisa sim": volta para a lista e grava a avaliação (o SagaZap tinha tirado pelo grupo)', () => {
     repo.setGroupMembers(G_ANA, [ANA])
     add(ANA, { minutesAgo: 60 })
     add(G_ANA, { minutesAgo: 30, fromMe: true })
@@ -133,7 +133,7 @@ describe('"Respondido no grupo": a regra', () => {
     expect(repo.triageCounts().awaiting).toBe(1)
     const [f] = repo.listReplyFeedback()
     expect(f).toMatchObject({ verdict: 'reply_needed', appNeeds: false, appSource: 'group', appReason: 'Respondido no grupo Mentoria Ana' })
-    expect(replyCsvDetail(f)).toBe('Saga (grupo): não precisa responder — Respondido no grupo Mentoria Ana')
+    expect(replyCsvDetail(f)).toBe('SagaZap (grupo): não precisa responder — Respondido no grupo Mentoria Ana')
   })
 
   it('👍 na decisão do grupo grava "reply_ok"', () => {

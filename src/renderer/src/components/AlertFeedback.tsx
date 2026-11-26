@@ -131,7 +131,7 @@ export function MissedAlertDialog({
       canSave={kind !== null}
       onSubmit={() => onSave(kind!, msgId || null, text.trim() || null)}
     >
-      <p className="muted small">Conte qual sinal o Saga deixou passar. Ele cria o alerta e aprende com o exemplo.</p>
+      <p className="muted small">Conte qual sinal o SagaZap deixou passar. Ele cria o alerta e aprende com o exemplo.</p>
       <fieldset className="fb-kinds">
         <legend>Tipo de alerta</legend>
         {AI_ALERT_KINDS.map((k) => (
@@ -176,7 +176,7 @@ export function NoReplyDialog({ name, onClose, onSave }: { name?: string; onClos
         ) : (
           'A conversa sai de "Para responder" até chegar outra mensagem.'
         )}{' '}
-        O Saga aprende com o exemplo.
+        O SagaZap aprende com o exemplo.
       </p>
       <fieldset className="fb-reasons">
         <legend className="sr-only">Motivo</legend>
@@ -218,4 +218,4 @@ export function Toast({ text, seq, onDone }: { text: string; seq: number; onDone
   )
 }
 
-export const THANKS = 'Obrigado — o Saga vai aprender com isso'
+export const THANKS = 'Obrigado — o SagaZap vai aprender com isso'

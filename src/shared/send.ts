@@ -103,7 +103,7 @@ export const SEND_REFUSAL_TEXT: Record<SendRefusal, string> = {
   disabled: 'O envio direto está desligado nas Configurações.',
   empty: 'A resposta está vazia.',
   too_long: 'A resposta é longa demais para enviar de uma vez.',
-  no_recent_contact: 'O Saga só envia para quem mandou mensagem nos últimos 30 dias (responder, nunca iniciar conversa).',
+  no_recent_contact: 'O SagaZap só envia para quem mandou mensagem nos últimos 30 dias (responder, nunca iniciar conversa).',
   unknown_chat: 'Conversa não encontrada.',
   offline: 'O WhatsApp não está conectado. Envie quando ele voltar (a faixa de cima mostra "Conectado").',
   in_flight: 'O envio anterior desta resposta ainda está em andamento. Espere um pouco e clique em Conferir.',

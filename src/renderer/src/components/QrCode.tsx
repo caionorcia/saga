@@ -35,7 +35,7 @@ export function QrCode({ state }: { state: AppState }) {
   }, [waiting])
 
   const problem = state.startError
-    ? `O Saga não conseguiu iniciar a conexão (${state.startError}). Clique em Tentar de novo.`
+    ? `O SagaZap não conseguiu iniciar a conexão (${state.startError}). Clique em Tentar de novo.`
     : qrProblem(state.conn)
   const failed = !!state.startError || needsManualReconnect(state.conn) || state.conn === 'waiting_retry'
   const label = connectionLabel(state.conn, false, state.retryAt)

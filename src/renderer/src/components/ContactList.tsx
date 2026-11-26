@@ -88,16 +88,16 @@ function writeFocus(on: boolean): void {
 }
 
 /**
- * Pede a resposta do mentor (fica normal no "Foco"): aguarda resposta e nem o Saga nem o mentor disseram que não
+ * Pede a resposta do mentor (fica normal no "Foco"): aguarda resposta e nem o SagaZap nem o mentor disseram que não
  * precisa (inclui "Respondido no grupo" como não precisa). Conversa escondida (de versões antigas) nunca pede.
  */
 export const needsMentor = (c: Contact): boolean => c.needsReply && !c.hidden
 
 const byWait = (a: Contact, b: Contact) => (a.waitingSince ?? Infinity) - (b.waitingSince ?? Infinity)
 
-/** Entra em "Para responder": espera resposta e nem o Saga nem o mentor disseram que não precisa. */
+/** Entra em "Para responder": espera resposta e nem o SagaZap nem o mentor disseram que não precisa. */
 const inAwaiting = (c: Contact) => c.needsReply && c.waitingSince !== null
-/** A última mensagem é do contato, mas o Saga ou o mentor decidiram que não precisa de resposta. */
+/** A última mensagem é do contato, mas o SagaZap ou o mentor decidiram que não precisa de resposta. */
 const noReply = (c: Contact) => c.awaitingReply && !c.needsReply && !c.hidden
 
 /** Aplica o recorte e a ordem: "Para responder" = quem espera há mais tempo primeiro; "Com alerta" = mais grave primeiro. */
@@ -261,7 +261,10 @@ export function ContactList({ selected, onSelect, request, onOpenHit }: Props) {
     <nav className={`contacts${focus ? ' is-focus' : ''}`} aria-label="Conversas">
       <div className="contacts-head">
         <div className="brand-row">
-          <h1 className="brand">Saga</h1>
+          <h1 className="brand">
+            <img className="brand-mark" src="./favicon.svg" alt="" width={22} height={22} />
+            SagaZap
+          </h1>
           <button
             type="button"
             className={`focus-toggle${focus ? ' is-active' : ''}`}

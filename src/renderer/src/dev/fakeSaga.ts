@@ -145,7 +145,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     }
     return best
   }
-  /** a decisão vigente (null = ninguém decidiu, ou o mentor falou por último): mentor > grupo > Saga */
+  /** a decisão vigente (null = ninguém decidiu, ou o mentor falou por último): mentor > grupo > SagaZap */
   const decisionOf = (c: DemoContact): ReplyDecision | null => {
     const last = lastOf(c)
     if (!last || last.fromMe) return null
@@ -364,7 +364,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   }
 
   /** cópia de segurança de demonstração (nada é gravado) */
-  const backup: BackupStatus = { lastAt: now - 3 * 86_400_000, auto: { enabled: true, folder: 'C:\\Users\\Mentor\\Google Drive\\Saga', hasPassword: true, lastAt: now - 3 * 86_400_000, lastError: null } }
+  const backup: BackupStatus = { lastAt: now - 3 * 86_400_000, auto: { enabled: true, folder: 'C:\\Users\\Mentor\\Google Drive\\SagaZap', hasPassword: true, lastAt: now - 3 * 86_400_000, lastError: null } }
   const backupCounts = (withMessages: boolean): BackupCounts => ({
     approvedReplies: 42,
     contacts: 9,
@@ -489,7 +489,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       record('confirmNoReply', [jid], undefined)
       const c = find(jid)
       const app = c ? decisionOf(c) : null
-      if (!c || !app || app.by === 'user' || app.needed) throw new Error('o Saga não decidiu que esta conversa dispensa resposta')
+      if (!c || !app || app.by === 'user' || app.needed) throw new Error('o SagaZap não decidiu que esta conversa dispensa resposta')
       saveReplyFeedback(jid, { verdict: 'reply_ok', appNeeds: false, reasonCode: null })
       replies.set(jid, { msgId: lastOf(c).id, decision: { needed: false, by: 'user', reason: null } })
       contactListeners.forEach((l) => l())
@@ -736,7 +736,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     },
     chooseBackupFolder: async () => {
       record('chooseBackupFolder', [], undefined)
-      backup.auto.folder = 'C:\\Users\\Mentor\\OneDrive\\Saga'
+      backup.auto.folder = 'C:\\Users\\Mentor\\OneDrive\\SagaZap'
       return structuredClone(backup)
     },
     setAutoBackup: async (patch) => {

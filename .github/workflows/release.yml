@@ -40,5 +40,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          gh release create "v$VERSION" dist/Saga-Setup-$VERSION.exe dist/Saga-Setup-$VERSION.exe.blockmap dist/latest.yml \
-            --target "$GITHUB_SHA" --latest --title "Saga $VERSION" --notes "Saga $VERSION — instale com o arquivo Saga-Setup-$VERSION.exe"
+          gh release create "v$VERSION" dist/SagaZap-Setup-$VERSION.exe dist/SagaZap-Setup-$VERSION.exe.blockmap dist/latest.yml \
+            --target "$GITHUB_SHA" --latest --title "SagaZap $VERSION" --notes "SagaZap $VERSION — instale com o arquivo SagaZap-Setup-$VERSION.exe"

@@ -8,7 +8,7 @@ import { SINGLE_FILE_EXT } from '../core/kb/importer'
 import { backupFileName } from '../core/backup/manager'
 import { BACKUP_ERROR_TEXT, BACKUP_EXT } from '../shared/backup'
 
-/** maior arquivo de cópia que o Saga abre */
+/** maior arquivo de cópia que o SagaZap abre */
 const BACKUP_MAX_BYTES = 900 * 1024 * 1024
 
 type Handlers = { [M in InvokeMethod]: (...args: Parameters<SagaApi[M]>) => ReturnType<SagaApi[M]> }
@@ -90,7 +90,7 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     saveSettings: async (patch) => {
       const r = await service.saveSettings(patch ?? {})
       if (!r.ok && r.code === 'encryption_unavailable') {
-        dialog.showErrorBox('Saga', 'A criptografia do Windows não está disponível. A chave não foi salva.')
+        dialog.showErrorBox('SagaZap', 'A criptografia do Windows não está disponível. A chave não foi salva.')
       }
       if (r.ok) opts.onSettingsSaved?.()
       return r
@@ -143,7 +143,7 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
       const dlgOpts = {
         title: 'Exportar cópia de segurança',
         defaultPath: join(app.getPath('documents'), backupFileName(Date.now())),
-        filters: [{ name: 'Cópia de segurança do Saga', extensions: [BACKUP_EXT] }]
+        filters: [{ name: 'Cópia de segurança do SagaZap', extensions: [BACKUP_EXT] }]
       }
       const r = w ? await dialog.showSaveDialog(w, dlgOpts) : await dialog.showSaveDialog(dlgOpts)
       if (r.canceled || !r.filePath) return { status: 'canceled' }
@@ -160,7 +160,7 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
       const dlgOpts: Electron.OpenDialogOptions = {
         title: 'Restaurar cópia de segurança',
         properties: ['openFile'],
-        filters: [{ name: 'Cópia de segurança do Saga', extensions: [BACKUP_EXT, 'zip'] }]
+        filters: [{ name: 'Cópia de segurança do SagaZap', extensions: [BACKUP_EXT, 'zip'] }]
       }
       const r = w ? await dialog.showOpenDialog(w, dlgOpts) : await dialog.showOpenDialog(dlgOpts)
       if (r.canceled || !r.filePaths[0]) return { status: 'canceled' }

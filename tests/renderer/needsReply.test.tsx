@@ -28,7 +28,7 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('ContactList: "Não precisa responder" em "Para responder"', () => {
-  it('a conversa que o Saga decidiu que não precisa de resposta fica fora da lista; em "Todos" aparece sem o selo', async () => {
+  it('a conversa que o SagaZap decidiu que não precisa de resposta fica fora da lista; em "Todos" aparece sem o selo', async () => {
     install()
     render(<ContactList selected={null} onSelect={() => {}} />)
     await waitFor(() => expect(names()).toContain('Mastermind Vendas 2026'))
@@ -113,11 +113,11 @@ describe('Conversation: "Para responder"', () => {
     expect(screen.getByRole('region', { name: 'Para responder' }).textContent).toMatch(/Você marcou/)
   })
 
-  it('decisão do Saga: aviso com o motivo; "Precisa sim" devolve à lista e registra a correção', async () => {
+  it('decisão do SagaZap: aviso com o motivo; "Precisa sim" devolve à lista e registra a correção', async () => {
     const { ctl, rerender } = await open(MASTERMIND)
     const note = screen.getByRole('region', { name: 'Para responder' })
     expect(note.textContent).toContain(
-      'O Saga acha que esta conversa não precisa de resposta: Conversa entre participantes do grupo; ninguém falou com você.'
+      'O SagaZap acha que esta conversa não precisa de resposta: Conversa entre participantes do grupo; ninguém falou com você.'
     )
     fireEvent.click(within(note).getByRole('button', { name: 'Precisa sim' }))
     expect(ctl.calls.find((c) => c.method === 'setNeedsReply')!.args).toEqual([MASTERMIND, true, undefined])
@@ -129,9 +129,9 @@ describe('Conversation: "Para responder"', () => {
     expect((await ctl.api.getState()).triage.awaiting).toBe(7)
   })
 
-  it('decisão do Saga: 👍 confirma (reply_ok) e a conversa continua fora da lista', async () => {
+  it('decisão do SagaZap: 👍 confirma (reply_ok) e a conversa continua fora da lista', async () => {
     const { ctl, rerender } = await open(MASTERMIND)
-    fireEvent.click(within(screen.getByRole('region', { name: 'Para responder' })).getByRole('button', { name: 'O Saga acertou' }))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Para responder' })).getByRole('button', { name: 'O SagaZap acertou' }))
     expect(ctl.calls.find((c) => c.method === 'confirmNoReply')!.args).toEqual([MASTERMIND])
     expect(screen.getByRole('status').textContent).toMatch(/aprender/)
     await rerender()

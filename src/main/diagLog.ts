@@ -84,7 +84,7 @@ export function diagnosticsText(log: DiagLog, header: Record<string, string>, li
   const head = Object.entries(header).map(([k, v]) => `${k}: ${v}`)
   const body = log.tail(lines)
   return [
-    '=== Diagnóstico do Saga ===',
+    '=== Diagnóstico do SagaZap ===',
     ...head,
     `Registro: ${body.length} linhas mais recentes`,
     '',

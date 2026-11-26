@@ -77,7 +77,7 @@ export function KnowledgeBaseSection() {
     <section aria-labelledby="kb-title" className="kb-section">
       <h2 id="kb-title">Base de conhecimento</h2>
       <p className="muted small">
-        Importe o material do seu método (um pacote .zip, uma skill .skill, uma pasta ou arquivos .md, .txt e .docx). O Saga usa as regras em
+        Importe o material do seu método (um pacote .zip, uma skill .skill, uma pasta ou arquivos .md, .txt e .docx). O SagaZap usa as regras em
         toda sugestão e busca os trechos que ajudam a responder cada mensagem. Fica tudo só neste computador.
       </p>
       <p className="notice kb-warn" role="note">
@@ -175,7 +175,7 @@ export function KnowledgeBaseSection() {
                       <select
                         aria-label={`Papel de ${f.title}`}
                         value={f.role}
-                        title={f.role === f.autoRole ? `Escolhido pelo Saga: ${f.roleReason}` : 'Escolhido por você'}
+                        title={f.role === f.autoRole ? `Escolhido pelo SagaZap: ${f.roleReason}` : 'Escolhido por você'}
                         onChange={(e) => void change(() => window.saga.kbUpdateFile(f.id, { role: e.target.value as KbRole }))}
                       >
                         {KB_ROLES.map((r) => (
