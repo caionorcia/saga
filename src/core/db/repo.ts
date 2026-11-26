@@ -2,6 +2,8 @@ import type { DatabaseSync } from 'node:sqlite'
 import { systemClock, type Clock } from '../clock'
 import type { NormalizedMessage } from '../types'
 import { ALERT_KINDS, AI_ALERT_KINDS, GROUP_ANSWER_MAX_MEMBERS, alertSeverity, type AlertKind } from '../../shared/triage'
+import type { KbSource } from '../../shared/kb'
+import { KbRepo } from './kbRepo'
 import type { GroupAnswer, ReasonCode, ReplyDecision, ReplyDecisionSource, ReplyReasonCode, ReplyVerdict, Verdict } from '../../shared/feedback'
 
 /** Qualidade da fonte do nome guardado em `push_name` (maior vence; empate: o mais novo). */
@@ -149,6 +151,8 @@ export interface AnalysisRow {
   transcriptFp: string
   /** áudios do contexto que ainda estavam sendo transcritos quando a análise foi feita */
   pendingAudios: number
+  /** trechos de conhecimento da base usados no pedido ("Baseado em"); vazio sem base */
+  sources?: KbSource[]
 }
 
 export interface ApprovedRow {
@@ -316,6 +320,18 @@ const GROUP_ANSWER_SQL = (cjid: string, since: string) => `(
        OR EXISTS (SELECT 1 FROM message_targets t WHERE t.msg_id = gm.id AND t.target_jid = ${cjid}))
    ORDER BY gm.ts DESC LIMIT 1)`
 
+function parseSources(json: unknown): KbSource[] {
+  if (typeof json !== 'string') return []
+  try {
+    const v = JSON.parse(json) as unknown
+    return Array.isArray(v)
+      ? v.filter((x): x is KbSource => !!x && typeof x.chunkId === 'number' && typeof x.breadcrumb === 'string')
+      : []
+  } catch {
+    return []
+  }
+}
+
 function toApproved(r: Row): ApprovedRow {
   return {
     id: r.id,
@@ -363,10 +379,15 @@ export function formatPhone(jid: string): string {
 }
 
 export class Repo {
+  /** base de conhecimento (v0.3.0) */
+  readonly kb: KbRepo
+
   constructor(
     private readonly db: DatabaseSync,
     private readonly clock: Clock = systemClock
-  ) {}
+  ) {
+    this.kb = new KbRepo(db, clock)
+  }
 
   // --- contatos ---
 
@@ -911,12 +932,12 @@ export class Repo {
     provider: string,
     summary: string,
     suggestions: string[],
-    extra: { transcriptFp?: string; pendingAudios?: number } = {}
+    extra: { transcriptFp?: string; pendingAudios?: number; sources?: KbSource[] } = {}
   ): void {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO analyses(jid, last_msg_id, provider, summary, suggestions_json, created_at, transcript_fp, pending_audios)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR REPLACE INTO analyses(jid, last_msg_id, provider, summary, suggestions_json, created_at, transcript_fp, pending_audios, sources_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         jid,
@@ -926,7 +947,8 @@ export class Repo {
         JSON.stringify(suggestions),
         this.clock.now(),
         extra.transcriptFp ?? '',
-        extra.pendingAudios ?? 0
+        extra.pendingAudios ?? 0,
+        JSON.stringify(extra.sources ?? [])
       )
   }
 
@@ -941,7 +963,8 @@ export class Repo {
       suggestions: JSON.parse(r.suggestions_json) as string[],
       createdAt: r.created_at,
       transcriptFp: r.transcript_fp ?? '',
-      pendingAudios: r.pending_audios ?? 0
+      pendingAudios: r.pending_audios ?? 0,
+      sources: parseSources(r.sources_json)
     }
   }
 

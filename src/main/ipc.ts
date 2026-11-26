@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { SagaService } from '../core/service'
 import { EVENTS, INVOKE_METHODS, invokeChannel, type InvokeMethod, type SagaApi, type UpdateCheck } from '../shared/api'
 import { validateIpcArgs } from './guards'
+import { SINGLE_FILE_EXT } from '../core/kb/importer'
 
 type Handlers = { [M in InvokeMethod]: (...args: Parameters<SagaApi[M]>) => ReturnType<SagaApi[M]> }
 
@@ -94,7 +95,35 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     openLogsFolder: async () => {
       await opts.openLogsFolder?.()
     },
-    audioUrl: (id) => service.audioUrl(String(id))
+    audioUrl: (id) => service.audioUrl(String(id)),
+    kbList: () => service.kbList(),
+    kbImport: async (kind) => {
+      const w = opts.getWindow()
+      const dlgOpts: Electron.OpenDialogOptions =
+        kind === 'folder'
+          ? { title: 'Escolha a pasta do pacote', properties: ['openDirectory'] }
+          : { title: 'Escolha o pacote ou a skill', properties: ['openFile'], filters: [{ name: 'Pacote ou skill', extensions: ['zip', 'skill'] }] }
+      const r = w ? await dialog.showOpenDialog(w, dlgOpts) : await dialog.showOpenDialog(dlgOpts)
+      // o caminho vem do diálogo do sistema (escolha do usuário), nunca da interface
+      if (r.canceled || !r.filePaths[0]) return { status: 'canceled' }
+      return service.kbImportPackage(r.filePaths[0], kind === 'folder' ? 'folder' : 'archive')
+    },
+    kbAddFile: async () => {
+      const w = opts.getWindow()
+      const dlgOpts: Electron.OpenDialogOptions = {
+        title: 'Adicionar arquivo à base de conhecimento',
+        properties: ['openFile'],
+        filters: [{ name: 'Texto (.md, .txt, .docx)', extensions: [...SINGLE_FILE_EXT] }]
+      }
+      const r = w ? await dialog.showOpenDialog(w, dlgOpts) : await dialog.showOpenDialog(dlgOpts)
+      if (r.canceled || !r.filePaths[0]) return { status: 'canceled' }
+      return service.kbAddFile(r.filePaths[0])
+    },
+    kbAddText: (title, text) => service.kbAddText(String(title), String(text)),
+    kbUpdateFile: (id, patch) => service.kbUpdateFile(Number(id), patch),
+    kbSetPackageEnabled: (id, enabled) => service.kbSetPackageEnabled(Number(id), enabled === true),
+    kbRemovePackage: (id) => service.kbRemovePackage(Number(id)),
+    kbGetChunk: (id) => service.kbGetChunk(Number(id))
   }
 
   for (const m of INVOKE_METHODS) {

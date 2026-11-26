@@ -65,6 +65,31 @@ function writeView(view: ContactView): void {
   }
 }
 
+/** "Foco": apaga as conversas que não pedem resposta (lembrado só neste computador). */
+const FOCUS_KEY = 'saga.focus'
+
+function readFocus(): boolean {
+  try {
+    return localStorage.getItem(FOCUS_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeFocus(on: boolean): void {
+  try {
+    localStorage.setItem(FOCUS_KEY, on ? '1' : '0')
+  } catch {
+    // sem armazenamento: vale só até fechar
+  }
+}
+
+/**
+ * Pede a resposta do mentor (fica normal no "Foco"): aguarda resposta e nem o Saga nem o mentor disseram que não
+ * precisa (inclui "Respondido no grupo" como não precisa). Conversa escondida nunca pede.
+ */
+export const needsMentor = (c: Contact): boolean => c.needsReply && !c.hidden
+
 const byWait = (a: Contact, b: Contact) => (a.waitingSince ?? Infinity) - (b.waitingSince ?? Infinity)
 
 /** Entra em "Para responder": espera resposta e nem o Saga nem o mentor disseram que não precisa. */
@@ -109,6 +134,7 @@ export function ContactList({ selected, onSelect, request }: Props) {
   const [showHidden, setShowHidden] = useState(false)
   const [kind, setKindState] = useState<ContactKind>(readKind)
   const [view, setViewState] = useState<ContactView>(readView)
+  const [focus, setFocusState] = useState<boolean>(readFocus)
   const now = useNow()
   const [query, setQuery] = useState('')
   const [menuJid, setMenuJid] = useState<string | null>(null)
@@ -143,6 +169,11 @@ export function ContactList({ selected, onSelect, request }: Props) {
     writeKind(k)
     setContacts(null)
     setKindState(k)
+  }
+
+  const toggleFocus = () => {
+    writeFocus(!focus)
+    setFocusState(!focus)
   }
 
   const setView = (v: ContactView) => {
@@ -203,9 +234,25 @@ export function ContactList({ selected, onSelect, request }: Props) {
   const editingContact = editing ? contacts?.find((c) => c.jid === editing.jid) : undefined
 
   return (
-    <nav className="contacts" aria-label="Conversas">
+    <nav className={`contacts${focus ? ' is-focus' : ''}`} aria-label="Conversas">
       <div className="contacts-head">
-        <h1 className="brand">Saga</h1>
+        <div className="brand-row">
+          <h1 className="brand">Saga</h1>
+          <button
+            type="button"
+            className={`focus-toggle${focus ? ' is-active' : ''}`}
+            aria-pressed={focus}
+            title={
+              focus
+                ? 'Foco ligado: as conversas que não pedem a sua resposta ficam apagadas. Clique para desligar.'
+                : 'Foco: apaga as conversas que não pedem a sua resposta, sem tirá-las da lista'
+            }
+            onClick={toggleFocus}
+          >
+            <FocusIcon />
+            Foco
+          </button>
+        </div>
         <div className="view-filter" role="group" aria-label="Fila do dia">
           <button
             type="button"
@@ -262,7 +309,10 @@ export function ContactList({ selected, onSelect, request }: Props) {
           <li className="empty">{query ? 'Nada encontrado.' : view === 'all' ? EMPTY[kind] : VIEW_EMPTY[view]}</li>
         )}
         {visible.map((c) => (
-          <li key={c.jid} className={`contact${c.jid === selected ? ' is-selected' : ''}${c.hidden ? ' is-hidden' : ''}`}>
+          <li
+            key={c.jid}
+            className={`contact${c.jid === selected ? ' is-selected' : ''}${c.hidden ? ' is-hidden' : ''}${focus && !needsMentor(c) ? ' is-dim' : ''}`}
+          >
             <button
               type="button"
               className="contact-main"
@@ -382,6 +432,15 @@ export function ContactList({ selected, onSelect, request }: Props) {
         />
       )}
     </nav>
+  )
+}
+
+function FocusIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="8" cy="8" r="2.4" fill="currentColor" />
+    </svg>
   )
 }
 

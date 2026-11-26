@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { Clock } from '../clock'
 import type { AnalysisRow, MessageRow, Repo } from '../db/repo'
 import { selectExamples } from '../memory/memory'
+import { knowledgeFor, sourcesOf, type KbContext } from '../kb/retrieve'
 import type { RateLimiter } from '../queue/limiter'
 import { BudgetExceededError, type CostTracker } from './budget'
 import { InvalidOutputError, buildPrompt, parseSuggestions } from './prompt'
@@ -180,6 +181,8 @@ export interface AnalysisDeps {
   clock: Clock
   /** injetável nos testes; padrão setTimeout */
   sleep?: (ms: number) => Promise<void>
+  /** registro de diagnóstico (só contagens: nunca texto das mensagens nem da base) */
+  diag?: (kind: string, detail: string) => void
 }
 
 const MAX_ATTEMPTS = 2
@@ -255,6 +258,28 @@ export function isAnalysisFresh(repo: Repo, jid: string, ctx: AnalysisContext = 
   return !!last && !!cached && cached.lastMsgId === last.id && cached.transcriptFp === ctx.transcriptFp
 }
 
+/** Texto para a busca na base: as mensagens novas do contato (com transcrições); sem novas, as 3 últimas dele. */
+export function knowledgeQuery(newMessages: MessageRow[], priorMessages: MessageRow[]): string {
+  const theirs = newMessages.filter((m) => !m.fromMe)
+  const src = theirs.length ? theirs : priorMessages.filter((m) => !m.fromMe).slice(-3)
+  return src.map(textOf).filter(Boolean).join('\n')
+}
+
+/** A base nunca derruba a sugestão: se a busca falhar, segue sem ela. */
+function safeKnowledge(deps: AnalysisDeps, newMessages: MessageRow[], priorMessages: MessageRow[]): KbContext | null {
+  try {
+    const k = knowledgeFor(deps.repo.kb, knowledgeQuery(newMessages, priorMessages))
+    if (k) {
+      const n = (kind: string) => k.chunks.filter((c) => c.kind === kind).length
+      deps.diag?.('kb_used', `regras=${k.rules.length} caracteres, trechos=${k.chunks.length} (conhecimento=${n('conhecimento')}, interno=${n('interno')})`)
+    }
+    return k
+  } catch (e) {
+    deps.diag?.('kb_error', e instanceof Error ? e.name : 'erro')
+    return null
+  }
+}
+
 /**
  * Gera (ou devolve do cache, se a última mensagem e as transcrições do contexto não mudaram) a análise do contato;
  * o prompt pede como retomar quando não há novas.
@@ -274,13 +299,15 @@ export async function generateAnalysis(
   if (!opts.force && isAnalysisFresh(repo, jid, ctx)) return repo.getAnalysis(jid)!
 
   const contact = repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)
+  const knowledge = safeKnowledge(deps, newMessages, priorMessages)
   const prompt = buildPrompt({
     contactName: contact?.displayName ?? jid,
     notes: contact?.notes ?? null,
     newMessages,
     priorMessages,
     examples: selectExamples(repo, jid, contextText),
-    isGroup: contact?.isGroup ?? false
+    isGroup: contact?.isGroup ?? false,
+    knowledge
   })
 
   let lastErr: unknown
@@ -303,7 +330,8 @@ export async function generateAnalysis(
       const parsed = parseSuggestions(res.text)
       repo.saveAnalysis(jid, lastId, llm.name, parsed.summary, parsed.suggestions, {
         transcriptFp: ctx.transcriptFp,
-        pendingAudios: ctx.pendingAudios
+        pendingAudios: ctx.pendingAudios,
+        sources: sourcesOf(knowledge)
       })
       return repo.getAnalysis(jid)!
     } catch (e) {

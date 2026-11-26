@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AiErrorCode, Analysis, MessageView } from '../../../shared/api'
+import type { AiErrorCode, Analysis, KbSource, MessageView } from '../../../shared/api'
+import { KbSources } from './KbSources'
 
 type View =
   | { kind: 'loading' }
@@ -220,6 +221,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
           original={text}
           analysisLastMsgId={analysis.lastMsgId}
           drafts={drafts}
+          sources={analysis.sources}
         />
       ))}
       <div className="sug-footer">
@@ -242,7 +244,8 @@ function SuggestionCard({
   index,
   original,
   analysisLastMsgId,
-  drafts
+  drafts,
+  sources
 }: {
   jid: string
   index: number
@@ -250,6 +253,8 @@ function SuggestionCard({
   /** a análise que gerou esta sugestão: o contexto salvo na memória é o dela */
   analysisLastMsgId: string
   drafts: DraftStore
+  /** trechos de conhecimento da base usados na geração ("Baseado em") */
+  sources?: KbSource[]
 }) {
   const key = draftKey(jid, index)
   const [text, setText] = useState(() => {
@@ -301,6 +306,7 @@ function SuggestionCard({
           setCopied(false)
         }}
       />
+      <KbSources sources={sources} />
       {failed && (
         <p className="field-error" role="alert">
           {failed}

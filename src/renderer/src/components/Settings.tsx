@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { AlertQuality, AppState, KeyKind, ThemePref, RecentEvent, SaveSettingsInput, SettingsView } from '../../../shared/api'
 import { ALERT_LABELS, eventLabel, formatDay, formatTime, updateCheckText } from '../format'
 import { DiagnosticsActions } from './Diagnostics'
+import { KnowledgeBaseSection } from './KnowledgeBase'
 import { UpdateNotice } from './UpdateNotice'
 import { THEME_LABELS, setThemePref, useTheme } from '../theme'
 
@@ -108,6 +109,8 @@ export function Settings() {
             onChange={(v) => void save({ transcriber: v })}
           />
         </section>
+
+        <KnowledgeBaseSection />
 
         <section>
           <h2>Gasto</h2>

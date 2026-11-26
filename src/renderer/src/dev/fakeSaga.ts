@@ -5,6 +5,7 @@
 import { loadDemo, loadDemoFeedback, loadDemoReplyFeedback, type DemoContact, type DemoFeedback, type DemoReplyFeedback } from '../../../core/demo'
 import type { GroupAnswer, ReplyDecision } from '../../../shared/feedback'
 import { GROUP_ANSWER_MAX_MEMBERS } from '../../../shared/triage'
+import { createFakeKb } from './fakeKb'
 import { AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../../shared/triage'
 import type {
   Alert,
@@ -33,7 +34,7 @@ export const DEFAULT_STATE: AppState = {
   update: { status: 'none' },
   updateCheck: {
     enabled: true,
-    currentVersion: '0.2.3',
+    currentVersion: '0.3.0',
     checking: false,
     lastCheckAt: null,
     lastResult: null,
@@ -58,6 +59,8 @@ export interface FakeOptions {
   aiDelayMs?: number
   /** tema salvo (padrão: Automático) */
   theme?: SettingsView['theme']
+  /** sem base de conhecimento de demonstração */
+  emptyKb?: boolean
 }
 
 const EXTRA_SUGGESTION = 'Combinado! Qualquer coisa me avisa por aqui.'
@@ -66,6 +69,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   const now = opts.now ?? Date.now()
   const demo: DemoContact[] = loadDemo(now)
   const state: AppState = { ...DEFAULT_STATE, ...opts.state }
+  const kb = createFakeKb(now, { empty: opts.emptyKb })
   const hidden = new Set<string>()
   const names = new Map<string, string>()
   const notes = new Map<string, string>(demo.flatMap((c) => (c.notes ? [[c.jid, c.notes] as const] : [])))
@@ -230,9 +234,14 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       }
       analyses.set(jid, a)
     }
+    // "Baseado em": as mensagens do contato desde a última do mentor
+    let i = c.messages.length
+    while (i > 0 && !c.messages[i - 1].fromMe) i--
+    const asked = c.messages.slice(i).map((m) => m.text ?? m.transcript ?? '').join('\n')
+    const sources = kb.sourcesFor(asked)
     return {
       ok: true,
-      analysis: { jid, lastMsgId, provider: a.provider, summary: a.summary, suggestions: a.suggestions, createdAt: generation, transcriptFp: '', pendingAudios }
+      analysis: { jid, lastMsgId, provider: a.provider, summary: a.summary, suggestions: a.suggestions, createdAt: generation, transcriptFp: '', pendingAudios, sources }
     }
   }
 
@@ -468,7 +477,15 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       ].slice(0, limit),
     copyDiagnostics: async () => record('copyDiagnostics', [], 42),
     openLogsFolder: async () => record('openLogsFolder', [], undefined),
-    audioUrl: async (id) => `saga-media://audio/${id}`
+    audioUrl: async (id) => `saga-media://audio/${id}`,
+    kbList: () => kb.kbList(),
+    kbImport: async (kind) => record('kbImport', [kind], await kb.kbImport(kind)),
+    kbAddFile: async () => record('kbAddFile', [], await kb.kbAddFile()),
+    kbAddText: async (title, text) => record('kbAddText', [title, text], await kb.kbAddText(title, text)),
+    kbUpdateFile: async (id, patch) => record('kbUpdateFile', [id, patch], await kb.kbUpdateFile(id, patch)),
+    kbSetPackageEnabled: async (id, enabled) => record('kbSetPackageEnabled', [id, enabled], await kb.kbSetPackageEnabled(id, enabled)),
+    kbRemovePackage: async (id) => record('kbRemovePackage', [id], await kb.kbRemovePackage(id)),
+    kbGetChunk: (id) => kb.kbGetChunk(id)
   }
 
   return {

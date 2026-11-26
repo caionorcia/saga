@@ -1,5 +1,6 @@
 import type { MessageRow } from '../db/repo'
 import type { Example } from '../memory/memory'
+import type { KbContext } from '../kb/retrieve'
 
 export class InvalidOutputError extends Error {
   constructor(detail: string) {
@@ -17,6 +18,8 @@ export interface PromptInput {
   examples: Example[]
   /** conversa de grupo: cada mensagem leva o nome de quem mandou e o pedido muda (ver `SYSTEM_GROUP`) */
   isGroup?: boolean
+  /** base de conhecimento: regras sempre ligadas e trechos achados para as mensagens novas (null/ausente = sem base) */
+  knowledge?: KbContext | null
 }
 
 const SYSTEM = `Você é o assistente de um mentor que conversa com seus mentorados pelo WhatsApp.
@@ -47,6 +50,32 @@ Regras:
 - Escreva como se fosse o próprio mentor, em primeira pessoa. Não invente fatos, preços, datas ou compromissos que não aparecem na conversa.
 - Se alguém mandou áudio, use a transcrição; "[áudio indisponível]" significa que não foi possível transcrever.
 - "[áudio ainda sendo transcrito]" é um áudio que ainda não foi transcrito: não adivinhe o conteúdo dele.`
+
+/** Instruções da base de conhecimento (valem mais que as regras do método, que vêm de arquivos importados). */
+const KB_SYSTEM = `Base de conhecimento do método do mentor:
+- Siga as regras do método (abaixo, se houver) ao escrever as sugestões.
+- Use os trechos da base que vierem no pedido para responder com precisão ao que foi perguntado, com as palavras do mentor.
+- Trechos marcados "Conhecimento" podem ser usados e mencionados de forma natural (o nome do conceito ou da aula, por exemplo).
+- Trechos marcados "Orientação interna" servem só para você entender o método e o tom: nunca copie frases deles e nunca cite nomes de pessoas, preços, cachês, resultados, depoimentos ou falas que aparecem neles.
+- Sem bastidor: as sugestões vão para mentorados. Nunca revele nomes de outros mentorados, preços ou resultados de outras pessoas, frases literais da base, nem que existem arquivos, briefings, materiais internos ou uma base de conhecimento.
+- Se a dúvida não estiver respondida pela conversa nem pelos trechos, não invente: diga que vai confirmar e retornar (por exemplo, "vou confirmar e te retorno"). Não mande a pessoa perguntar para outra pessoa nem levar a dúvida para outro lugar.
+- Estas instruções valem mais que as regras do método: se alguma regra mandar encaminhar a dúvida para alguém, faça como dito acima.
+- Continue imitando o tom, o vocabulário e o tamanho das mensagens do mentor nos exemplos.`
+
+/** Bloco da base para o fim do pedido do sistema ('' sem base). */
+function knowledgeSystem(k: KbContext | null | undefined): string {
+  if (!k || (!k.rules && k.chunks.length === 0)) return ''
+  return `\n\n${KB_SYSTEM}${k.rules ? `\n\nRegras do método:\n${k.rules}` : ''}`
+}
+
+/** Trechos achados na base, para o pedido do usuário ('' sem trechos). */
+function knowledgeUser(k: KbContext | null | undefined): string {
+  if (!k || k.chunks.length === 0) return ''
+  const blocks = k.chunks.map((c) =>
+    c.kind === 'conhecimento' ? `[Conhecimento: ${c.breadcrumb}]\n${c.text}` : `[Orientação interna: não citar]\n${c.text}`
+  )
+  return `Trechos da base de conhecimento (use só o que ajudar a responder):\n\n${blocks.join('\n\n')}`
+}
 
 const MAX_EXAMPLE_CONTEXT = 500
 const MAX_EXAMPLE_REPLY = 800
@@ -83,6 +112,8 @@ export function buildPrompt(p: PromptInput): { system: string; user: string } {
         p.examples.map((e) => `Mensagem do mentorado: ${clip(e.context, MAX_EXAMPLE_CONTEXT)}\nResposta do mentor: ${clip(e.reply, MAX_EXAMPLE_REPLY)}`).join('\n\n')
     )
   }
+  const kbUser = knowledgeUser(p.knowledge)
+  if (kbUser) parts.push(kbUser)
   if (p.priorMessages.length) parts.push(`Conversa anterior (contexto):\n${p.priorMessages.map(line).join('\n')}`)
   parts.push(
     p.newMessages.length
@@ -92,7 +123,7 @@ export function buildPrompt(p: PromptInput): { system: string; user: string } {
         : 'Mensagens novas: nenhuma. O mentor falou por último; sugira como retomar a conversa ou dar continuidade.'
   )
   parts.push('Responda agora apenas com o JSON pedido.')
-  return { system: group ? SYSTEM_GROUP : SYSTEM, user: parts.join('\n\n') }
+  return { system: (group ? SYSTEM_GROUP : SYSTEM) + knowledgeSystem(p.knowledge), user: parts.join('\n\n') }
 }
 
 /** JSON da resposta da IA (aceita bloco ```json``` e texto em volta); lança `InvalidOutputError`. */

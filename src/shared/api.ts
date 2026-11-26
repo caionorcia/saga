@@ -7,10 +7,12 @@ import { ALERT_KINDS, type AlertKind } from './triage'
 import type { QueueStats } from '../core/queue/queue'
 import type { ConnState } from '../core/wa/client'
 import type { KeyKind, Provider, Settings, SettingsPatch, ThemePref, TranscriberKind } from '../core/settings'
+import type { KbChunkView, KbFilePatch, KbImportResult, KbPackageView, KbRole, KbSource } from './kb'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind, ThemePref }
 export type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason }
+export type { KbChunkView, KbFilePatch, KbImportResult, KbPackageView, KbRole, KbSource }
 export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
@@ -227,6 +229,25 @@ export interface SagaApi {
 
   /** `saga-media://audio/<id>` do áudio original, ou null se ainda não foi baixado */
   audioUrl(id: string): Promise<string | null>
+
+  // --- base de conhecimento (Configurações › Base de conhecimento) ---
+  /** pacotes importados e os "Arquivos avulsos", com os arquivos */
+  kbList(): Promise<KbPackageView[]>
+  /**
+   * "Importar pacote / skill": abre o diálogo do sistema (`archive` = .zip/.skill; `folder` = uma pasta) e importa.
+   * Um pacote com o mesmo nome é substituído de uma vez.
+   */
+  kbImport(kind: 'archive' | 'folder'): Promise<KbImportResult>
+  /** "Adicionar arquivo": abre o diálogo (.md, .txt, .docx) e põe nos "Arquivos avulsos" */
+  kbAddFile(): Promise<KbImportResult>
+  /** "Colar texto": título + texto para os "Arquivos avulsos" */
+  kbAddText(title: string, text: string): Promise<KbImportResult>
+  /** troca o papel e/ou liga/desliga um arquivo */
+  kbUpdateFile(fileId: number, patch: KbFilePatch): Promise<void>
+  kbSetPackageEnabled(packageId: number, enabled: boolean): Promise<void>
+  kbRemovePackage(packageId: number): Promise<void>
+  /** o texto de um trecho ("Baseado em"); null se ele não existe mais (pacote reimportado ou removido) */
+  kbGetChunk(chunkId: number): Promise<KbChunkView | null>
 }
 
 /** Métodos chamados por `ipcRenderer.invoke('saga:<nome>')`. */
@@ -262,7 +283,15 @@ export const INVOKE_METHODS = [
   'recentEvents',
   'copyDiagnostics',
   'openLogsFolder',
-  'audioUrl'
+  'audioUrl',
+  'kbList',
+  'kbImport',
+  'kbAddFile',
+  'kbAddText',
+  'kbUpdateFile',
+  'kbSetPackageEnabled',
+  'kbRemovePackage',
+  'kbGetChunk'
 ] as const satisfies ReadonlyArray<keyof SagaApi>
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]

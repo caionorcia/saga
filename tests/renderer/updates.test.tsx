@@ -17,7 +17,7 @@ describe('Configurações › Atualizações', () => {
     window.saga = ctl.api
     render(<Settings />)
     await waitFor(() => expect(section()).toBeTruthy())
-    expect(within(section()).getByText('0.2.3')).toBeTruthy()
+    expect(within(section()).getByText('0.3.0')).toBeTruthy()
     expect(within(section()).getByText('Ainda não procurou nesta sessão.')).toBeTruthy()
     fireEvent.click(within(section()).getByRole('button', { name: 'Verificar agora' }))
     await waitFor(() => expect(within(section()).getByText(/você já está na versão mais nova/)).toBeTruthy())

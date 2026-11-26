@@ -5,6 +5,7 @@ import { posix, win32 } from 'node:path'
 import { ALERT_KINDS, CONTACT_KINDS, type InvokeMethod } from '../shared/api'
 import { REASON_CODES, REASON_TEXT_MAX, REPLY_REASON_CODES } from '../shared/feedback'
 import { AI_ALERT_KINDS } from '../shared/triage'
+import { KB_LIMITS, KB_ROLES } from '../shared/kb'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -113,6 +114,12 @@ const SETTINGS_FIELDS: Record<string, (v: unknown) => boolean> = {
   theme: (v) => v === 'system' || v === 'light' || v === 'dark'
 }
 
+/** Papel e/ou "Usar" de um arquivo da base (pelo menos um dos dois). */
+function isKbPatch(p: unknown): boolean {
+  if (!isObj(p) || Object.keys(p).length === 0 || !Object.keys(p).every((k) => k === 'role' || k === 'enabled')) return false
+  return (p.role === undefined || (KB_ROLES as readonly unknown[]).includes(p.role)) && (p.enabled === undefined || isBool(p.enabled))
+}
+
 const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   getState: () => true,
   listContacts: ([h, k]) => isBool(h) && (k === undefined || (CONTACT_KINDS as readonly unknown[]).includes(k)),
@@ -155,7 +162,16 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   recentEvents: ([n]) => typeof n === 'number' && Number.isInteger(n) && n > 0 && n <= 200,
   copyDiagnostics: (a) => a.length === 0,
   openLogsFolder: (a) => a.length === 0,
-  audioUrl: ([id]) => nonEmpty(id)
+  audioUrl: ([id]) => nonEmpty(id),
+  kbList: (a) => a.length === 0,
+  kbImport: (a) => a.length === 1 && (a[0] === 'archive' || a[0] === 'folder'),
+  kbAddFile: (a) => a.length === 0,
+  kbAddText: (a) =>
+    a.length === 2 && nonEmpty(a[0]) && a[0].length <= KB_LIMITS.titleChars && nonEmpty(a[1]) && a[1].length <= KB_LIMITS.pasteChars,
+  kbUpdateFile: (a) => a.length === 2 && isId(a[0]) && isKbPatch(a[1]),
+  kbSetPackageEnabled: (a) => a.length === 2 && isId(a[0]) && isBool(a[1]),
+  kbRemovePackage: (a) => a.length === 1 && isId(a[0]),
+  kbGetChunk: (a) => a.length === 1 && isId(a[0])
 }
 
 /** Lança `InvalidIpcArgsError` se os argumentos vindos da interface não tiverem o formato esperado. */

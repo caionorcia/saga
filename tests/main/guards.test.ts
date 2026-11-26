@@ -275,3 +275,47 @@ describe('alertas', () => {
     bad('exportAlertFeedback', { anonymize: true, path: 'C:\\x.csv' })
   })
 })
+
+describe('base de conhecimento', () => {
+  const ok = (m: any, ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).not.toThrow()
+  const bad = (m: any, ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).toThrow(InvalidIpcArgsError)
+
+  it('importar e adicionar: o caminho nunca vem da interface (só o tipo do diálogo)', () => {
+    ok('kbList')
+    bad('kbList', 1)
+    ok('kbImport', 'archive')
+    ok('kbImport', 'folder')
+    bad('kbImport', '/home/x/pacote.zip')
+    bad('kbImport')
+    bad('kbImport', 'archive', '/tmp/a.zip')
+    ok('kbAddFile')
+    bad('kbAddFile', 'C:\\x.md')
+  })
+
+  it('colar texto: título e texto não vazios, dentro dos limites', () => {
+    ok('kbAddText', 'Dúvidas', 'texto')
+    bad('kbAddText', '', 'texto')
+    bad('kbAddText', 'Dúvidas', '   ')
+    bad('kbAddText', 'x'.repeat(121), 'texto')
+    bad('kbAddText', 'Dúvidas', 'x'.repeat(200_001))
+    bad('kbAddText', 'Dúvidas')
+  })
+
+  it('arquivo e pacote: id inteiro positivo; papel conhecido e/ou "Usar" booleano', () => {
+    ok('kbUpdateFile', 3, { role: 'interno' })
+    ok('kbUpdateFile', 3, { enabled: false })
+    ok('kbUpdateFile', 3, { role: 'desligado', enabled: true })
+    bad('kbUpdateFile', 3, {})
+    bad('kbUpdateFile', 3, { role: 'secreto' })
+    bad('kbUpdateFile', 3, { enabled: 'sim' })
+    bad('kbUpdateFile', 3, { role: 'regras', path: '/etc' })
+    bad('kbUpdateFile', 0, { role: 'regras' })
+    ok('kbSetPackageEnabled', 1, true)
+    bad('kbSetPackageEnabled', 1, 'true')
+    ok('kbRemovePackage', 2)
+    bad('kbRemovePackage', '2')
+    ok('kbGetChunk', 9)
+    bad('kbGetChunk', 1.5)
+    bad('kbGetChunk')
+  })
+})

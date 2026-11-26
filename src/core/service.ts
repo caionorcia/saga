@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { basename } from 'node:path'
 import { systemClock, type Clock } from './clock'
 import type { AlertKind, AlertRow, ContactKind, ContactRow, MessageRow, Repo } from './db/repo'
@@ -32,6 +32,8 @@ import {
   type Transcriber
 } from './ai/transcriber'
 import { reconcileSaved, reconcileSent, saveApproved } from './memory/memory'
+import { KbImportError, importArchive, importFolder, importPastedText, importSingleFile, type KbPackageDraft } from './kb/importer'
+import { KB_LIMITS, type KbChunkView, type KbFilePatch, type KbImportResult, type KbPackageView } from '../shared/kb'
 import { audioUrlFor } from './media'
 import { LIMITS, RateLimiter, type LimiterName } from './queue/limiter'
 import { JobQueue, type JobType } from './queue/queue'
@@ -757,7 +759,8 @@ export class SagaService extends EventEmitter {
           limiter: this.limiters.llm,
           cost: this.cost,
           capUsd: s.dailyCapUsd,
-          clock: this.clock
+          clock: this.clock,
+          diag: (k, d) => this.diag(k, d)
         },
         jid,
         { force }
@@ -877,5 +880,65 @@ export class SagaService extends EventEmitter {
 
   testKey(kind: KeyKind, key: string): Promise<boolean> {
     return testKey(kind, key, { fetchImpl: this.fetchImpl })
+  }
+
+  // --- base de conhecimento ---
+
+  async kbList(): Promise<KbPackageView[]> {
+    return this.repo.kb.listPackages()
+  }
+
+  /** Importa (ou reimporta, trocando o de mesmo nome) um pacote: `.zip`/`.skill` ou uma pasta, pelo caminho escolhido no diálogo. */
+  async kbImportPackage(path: string, kind: 'archive' | 'folder'): Promise<KbImportResult> {
+    return this.kbImport(() => {
+      if (kind === 'folder') return importFolder(path)
+      if (statSync(path).size > KB_LIMITS.archiveBytes) throw new KbImportError('O arquivo é grande demais (máximo de 25 MB).')
+      return importArchive(readFileSync(path), path)
+    }, 'package')
+  }
+
+  /** "Adicionar arquivo": um .md, .txt ou .docx para os "Arquivos avulsos" (substitui o de mesmo nome). */
+  async kbAddFile(path: string): Promise<KbImportResult> {
+    return this.kbImport(() => importSingleFile(path), 'manual')
+  }
+
+  /** "Colar texto": título + texto para os "Arquivos avulsos" (substitui o de mesmo título). */
+  async kbAddText(title: string, text: string): Promise<KbImportResult> {
+    return this.kbImport(() => importPastedText(title, text), 'manual')
+  }
+
+  private kbImport(make: () => KbPackageDraft, mode: 'package' | 'manual'): KbImportResult {
+    try {
+      const draft = make()
+      const { replaced } = mode === 'package' ? this.repo.kb.replacePackage(draft) : this.repo.kb.upsertManualFiles(draft)
+      const sections = draft.files.reduce((n, f) => n + f.sections, 0)
+      // só contagens: nunca nomes de arquivos nem texto da base no registro
+      this.repo.logEvent(
+        'kb_import',
+        `${draft.files.length} arquivo(s), ${sections} seção(ões), ${draft.skipped} ignorado(s), ${draft.duplicates} repetido(s)${replaced ? ', substituiu a versão anterior' : ''}`
+      )
+      return { status: 'imported', packageName: draft.name, files: draft.files.length, sections, skipped: draft.skipped, duplicates: draft.duplicates, replaced }
+    } catch (e) {
+      const message = e instanceof KbImportError ? e.message : 'Não foi possível importar. Confira se o arquivo não está aberto em outro programa.'
+      this.repo.logEvent('kb_import_error', e instanceof KbImportError ? 'arquivo recusado' : e instanceof Error ? e.name : 'erro')
+      return { status: 'error', message }
+    }
+  }
+
+  async kbUpdateFile(fileId: number, patch: KbFilePatch): Promise<void> {
+    if (!this.repo.kb.updateFile(fileId, patch)) throw new Error('arquivo não encontrado')
+  }
+
+  async kbSetPackageEnabled(packageId: number, enabled: boolean): Promise<void> {
+    if (!this.repo.kb.setPackageEnabled(packageId, enabled)) throw new Error('pacote não encontrado')
+  }
+
+  async kbRemovePackage(packageId: number): Promise<void> {
+    if (!this.repo.kb.deletePackage(packageId)) throw new Error('pacote não encontrado')
+    this.repo.logEvent('kb_removed', '1 pacote')
+  }
+
+  async kbGetChunk(chunkId: number): Promise<KbChunkView | null> {
+    return this.repo.kb.getChunk(chunkId)
   }
 }
