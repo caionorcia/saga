@@ -4,7 +4,7 @@
   "private": true,
   "author": "Saga",
   "type": "module",
-  "description": "Saga - leitor somente leitura do WhatsApp do mentor",
+  "description": "Saga - assistente de respostas do WhatsApp do mentor",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AiErrorCode, Analysis, KbSource, MessageView } from '../../../shared/api'
+import type { AiErrorCode, Analysis, KbSource, MessageView, SendView } from '../../../shared/api'
 import { KbSources } from './KbSources'
+import { SendDialog, SendStatus } from './SendDialog'
 
 type View =
   | { kind: 'loading' }
@@ -74,6 +75,11 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
   const [chosen, setChosen] = useState<number | null>(null)
   const [showOthers, setShowOthers] = useState(false)
   const [announce, setAnnounce] = useState('')
+  /** "Envio direto" ligado nas Configurações (o botão Enviar só aparece assim) */
+  const [directSend, setDirectSend] = useState(false)
+  /** os envios desta conversa e a resposta (memória) da escolha atual: o cartão escolhido mostra o envio dela */
+  const [sends, setSends] = useState<SendView[]>([])
+  const [chosenReplyId, setChosenReplyId] = useState<number | null>(null)
   const ownDrafts = useRef<DraftStore>(new Map())
   const drafts = draftsProp ?? ownDrafts.current
   const draftsRef = useRef(drafts)
@@ -120,6 +126,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
             clearDrafts(draftsRef.current, jid)
             current.current = r.analysis
             setChosen(r.analysis.chosenIndex ?? null)
+            setChosenReplyId(r.analysis.chosenReplyId ?? null)
             setShowOthers(false)
             setView({ kind: 'ready', analysis: r.analysis })
             onAnalysisRef.current?.(r.analysis)
@@ -177,6 +184,25 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
     }
     apply(() => window.saga.getAnalysis(jid, { onlyIfNeeded: true }), true)
   }, [apply, jid])
+
+  useEffect(() => {
+    let alive = true
+    window.saga
+      .getSettings()
+      .then((st) => alive && setDirectSend(st.directSend))
+      .catch(() => {})
+    const refresh = () =>
+      void window.saga
+        .listSends(jid)
+        .then((l) => alive && setSends(l))
+        .catch(() => {})
+    refresh()
+    const off = window.saga.onSends(jid, refresh)
+    return () => {
+      alive = false
+      off()
+    }
+  }, [jid])
 
   useEffect(() => {
     load()
@@ -240,7 +266,8 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
 
   const { analysis } = view
   const collapsed = chosen !== null && !showOthers
-  const choose = (i: number) => {
+  const choose = (i: number, replyId?: number) => {
+    if (replyId !== undefined) setChosenReplyId(replyId)
     setChosen(i)
     setShowOthers(false)
     setAnnounce('Resposta escolhida')
@@ -271,7 +298,11 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
           chosen={chosen === i}
           out={collapsed && chosen !== i}
           persistedChoice={analysis.chosenIndex === i}
-          onChoose={() => choose(i)}
+          persistedReplyId={analysis.chosenIndex === i ? (analysis.chosenReplyId ?? null) : null}
+          onChoose={(replyId) => choose(i, replyId)}
+          directSend={directSend}
+          send={chosen === i ? (sends.find((x) => x.replyId === chosenReplyId) ?? null) : null}
+          onQueued={(send) => setSends((cur) => [send, ...cur.filter((x) => x.id !== send.id)])}
         />
       ))}
       {collapsed && (
@@ -304,7 +335,11 @@ function SuggestionCard({
   chosen,
   out,
   persistedChoice,
-  onChoose
+  persistedReplyId,
+  onChoose,
+  directSend,
+  send,
+  onQueued
 }: {
   jid: string
   index: number
@@ -320,7 +355,15 @@ function SuggestionCard({
   out: boolean
   /** a escolha veio do banco (conversa reaberta): a resposta já foi salva antes */
   persistedChoice: boolean
-  onChoose: () => void
+  /** o id dessa resposta salva (para o envio reaproveitar, sem duplicar na memória) */
+  persistedReplyId: number | null
+  /** escolheu este cartão; `replyId` = a resposta salva na memória */
+  onChoose: (replyId?: number) => void
+  /** mostra o botão Enviar (Configurações › Envio direto) */
+  directSend: boolean
+  /** o envio da resposta escolhida (só no cartão escolhido) */
+  send: SendView | null
+  onQueued: (send: SendView) => void
 }) {
   const key = draftKey(jid, index)
   const [text, setText] = useState(() => {
@@ -330,6 +373,8 @@ function SuggestionCard({
   const [saved, setSaved] = useState(persistedChoice)
   /** último texto gravado na memória: copiar só salva de novo se o texto mudou */
   const lastSaved = useRef<string | null>(persistedChoice ? text : null)
+  const lastSavedId = useRef<number | null>(persistedChoice ? persistedReplyId : null)
+  const [sending, setSending] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
   const [copied, setCopied] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
@@ -346,7 +391,7 @@ function SuggestionCard({
   const persist = async (): Promise<boolean> => {
     if (lastSaved.current === text) return true
     try {
-      await window.saga.saveReply({ jid, originalSuggestion: original, finalText: text, analysisLastMsgId, chosenIndex: index })
+      lastSavedId.current = await window.saga.saveReply({ jid, originalSuggestion: original, finalText: text, analysisLastMsgId, chosenIndex: index })
       lastSaved.current = text
       setSaved(true)
       return true
@@ -358,7 +403,7 @@ function SuggestionCard({
 
   const save = async () => {
     setFailed(null)
-    if (await persist()) onChoose()
+    if (await persist()) onChoose(lastSavedId.current ?? undefined)
   }
 
   // copiar também ensina o sistema: salva a versão copiada (se ainda não está salva) e escolhe este cartão
@@ -374,8 +419,22 @@ function SuggestionCard({
     clearTimeout(copyTimer.current)
     copyTimer.current = setTimeout(() => setCopied(false), COPIED_MS)
     await persist()
-    onChoose()
+    onChoose(lastSavedId.current ?? undefined)
   }
+
+  /** "Enviar" confirmado no diálogo: a resposta foi escolhida e salva (com o texto final) e o envio está na fila */
+  const queued = (finalText: string, sv: SendView) => {
+    setSending(false)
+    setText(finalText)
+    drafts.set(key, { original, text: finalText })
+    lastSaved.current = finalText
+    lastSavedId.current = sv.replyId
+    setSaved(true)
+    onQueued(sv)
+    onChoose(sv.replyId)
+  }
+  /** o envio da escolha está acontecendo ou já saiu: não oferece Enviar de novo */
+  const sendBusy = !!send && (send.status === 'queued' || send.status === 'typing' || send.status === 'sending' || send.status === 'sent')
 
   const id = `sug-${index}`
   return (
@@ -398,6 +457,8 @@ function SuggestionCard({
         id={id}
         value={text}
         rows={5}
+        // o texto na fila é o que vai sair: não muda enquanto o envio não termina
+        readOnly={!!send && (send.status === 'queued' || send.status === 'typing' || send.status === 'sending')}
         onChange={(e) => {
           setText(e.target.value)
           drafts.set(key, { original, text: e.target.value })
@@ -415,10 +476,30 @@ function SuggestionCard({
         <button type="button" className={saved ? 'btn btn-done' : 'btn'} onClick={save} disabled={saved || !text.trim()}>
           {saved ? 'Salvo ✓' : 'Salvar'}
         </button>
-        <button type="button" className={copied ? 'btn btn-done' : 'btn btn-primary'} onClick={copy}>
+        <button type="button" className={copied ? 'btn btn-done' : directSend ? 'btn' : 'btn btn-primary'} onClick={copy}>
           {copied ? 'Copiado ✓' : 'Copiar'}
         </button>
+        {directSend && !sendBusy && (
+          <button type="button" className="btn btn-primary" onClick={() => setSending(true)} disabled={!text.trim()}>
+            Enviar
+          </button>
+        )}
       </div>
+      {send && <SendStatus send={send} onResend={() => setSending(true)} />}
+      {sending && (
+        <SendDialog
+          jid={jid}
+          text={text}
+          extras={{
+            replyId: lastSaved.current === text.trim() || lastSaved.current === text ? lastSavedId.current : null,
+            originalSuggestion: original,
+            analysisLastMsgId,
+            chosenIndex: index
+          }}
+          onClose={() => setSending(false)}
+          onQueued={queued}
+        />
+      )}
     </div>
   )
 }

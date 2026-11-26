@@ -12,7 +12,7 @@ export interface LimitConfig {
   minBilledSec?: number
 }
 
-export type LimiterName = 'wa_media' | 'wa_profile' | 'groq_audio' | 'llm' | 'classify'
+export type LimiterName = 'wa_media' | 'wa_profile' | 'groq_audio' | 'llm' | 'classify' | 'wa_send'
 
 export const LIMITS: Record<LimiterName, LimitConfig> = {
   wa_media: { minGapMs: 4000, maxGapMs: 12000, perHour: 300, perDay: 2000 },
@@ -27,7 +27,12 @@ export const LIMITS: Record<LimiterName, LimitConfig> = {
   },
   llm: { minGapMs: 0, maxGapMs: 1000, perHour: 600, perDay: 2000 },
   /** alertas em segundo plano (IA gratuita): uma conversa a cada 20–40 s, no máximo 60 por hora e 400 por dia */
-  classify: { minGapMs: 20_000, maxGapMs: 40_000, perHour: 60, perDay: 400 }
+  classify: { minGapMs: 20_000, maxGapMs: 40_000, perHour: 60, perDay: 400 },
+  /**
+   * envio direto (v0.4.0): uma mensagem a cada 30–90 s (sorteio; o dobro no aquecimento), no máximo 40 por hora e 200 por
+   * dia. O primeiro envio sai na hora se os tetos permitem.
+   */
+  wa_send: { minGapMs: 30_000, maxGapMs: 90_000, perHour: 40, perDay: 200 }
 }
 
 const HOUR = 3_600_000

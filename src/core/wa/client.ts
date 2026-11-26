@@ -25,6 +25,9 @@ import { useAtomicAuthState, type AtomicAuthState } from './authState'
 import { isGroupJid, normalize, participantJids, stripDevice, toPhoneJid, type ParticipantLike } from './normalize'
 import { ReconnectPolicy, classifyDisconnect } from './reconnect'
 import { WaVersionResolver, formatWaVersion, type WaVersionFetcher } from './version'
+import { chatHash, hasRecentContactMessage, pickQuote, quotedMessage, unreadKeys, type WaKey } from '../send/logic'
+import { verifyUnknownSend } from '../send/verify'
+import { DEFAULT_SEND_OPTIONS, SEND_LIMITS, typingMs, type SendOptions } from '../../shared/send'
 
 export type ConnState =
   | 'connecting'
@@ -38,8 +41,11 @@ export type ConnState =
   | 'manual_retry_needed'
 
 /**
- * O pedaço do socket do Baileys que o cliente usa. De propósito não inclui nada que envie
- * mensagem, recibo de leitura ou presença, nem nada que altere grupos.
+ * O pedaço do socket do Baileys que o cliente usa. Nada que altere grupos, contatos ou conversas.
+ *
+ * Os três métodos de escrita (`sendPresenceUpdate`, `sendMessage`, `readMessages`) são chamados SÓ por `executeSend`,
+ * o handler do job `send_message`, que só existe depois de o mentor confirmar o envio (token de uso único do
+ * `prepareSend`). Nenhum outro caminho do app escreve no WhatsApp.
  */
 export interface WaSocket {
   ev: { on(event: string, listener: (arg: any) => void): unknown }
@@ -47,6 +53,12 @@ export interface WaSocket {
   signalRepository?: { lidMapping?: { getPNForLID(lid: string): Promise<string | null> } }
   /** só leitura (uma consulta IQ): os grupos de que o mentor participa, com o assunto e os participantes. Sempre pela fila. */
   groupFetchAllParticipating?(): Promise<Record<string, { id?: string; subject?: string | null; participants?: ParticipantLike[] | null }>>
+  /** só `executeSend`: "digitando…" na conversa, "parou" e, no fim, de volta a indisponível */
+  sendPresenceUpdate?(type: 'composing' | 'paused' | 'unavailable', toJid?: string): Promise<void>
+  /** só `executeSend`: a resposta confirmada pelo mentor */
+  sendMessage?(jid: string, content: { text: string }, options?: { quoted?: unknown }): Promise<{ key?: { id?: string | null } | null } | undefined>
+  /** só `executeSend`: as mensagens do contato nessa conversa (e só nela) ficam lidas ao responder */
+  readMessages?(keys: WaKey[]): Promise<void>
 }
 
 export type SocketFactory = (config: UserFacingSocketConfig) => WaSocket
@@ -77,7 +89,12 @@ export interface WhatsAppClientDeps {
    * Nunca recebe conteúdo de mensagens, chaves nem o conteúdo do QR.
    */
   diag?: (kind: string, detail: string) => void
+  /** opções do envio direto, lidas na hora de cada envio (padrão: tudo ligado) */
+  sendOptions?: () => SendOptions
 }
+
+/** sem conexão aberta quando o envio chega na vez: espera 30 s (o envio expira se passar de 10 min na fila) */
+const SEND_DEFER_MS = 30_000
 
 const DAY = 86_400_000
 const HISTORY_WINDOW_MS = 30 * DAY
@@ -181,11 +198,13 @@ interface GroupLike {
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 /**
- * Cliente do WhatsApp do mentor como aparelho conectado, SOMENTE LEITURA.
- * Nunca envia mensagens, recibos de leitura nem presença; nunca pede reenvio de mídia.
+ * Cliente do WhatsApp do mentor como aparelho conectado. Lê; só escreve por um caminho: `executeSend`, o handler do job
+ * `send_message` (uma resposta confirmada pelo mentor), que mostra "digitando…", envia, marca como lidas as mensagens
+ * daquela conversa e volta a indisponível. Fora dele nunca envia mensagens, recibos de leitura nem presença; nunca pede
+ * reenvio de mídia.
  *
  * Eventos: `'qr'(dataUrl)`, `'status'(ConnState)`, `'message'(NormalizedMessage)`,
- * `'disk'(low: boolean)` (só quando muda), `'contacts'()` (nomes de contatos mudaram).
+ * `'disk'(low: boolean)` (só quando muda), `'contacts'()` (nomes de contatos mudaram), `'send'(jid)` (um envio mudou de estado).
  */
 export class WhatsAppClient extends EventEmitter {
   private readonly policy: ReconnectPolicy
@@ -233,6 +252,9 @@ export class WhatsAppClient extends EventEmitter {
    */
   private knownNames = new Map<string, { name: string; rank: number }>()
   private work: Promise<void> = Promise.resolve()
+  /** o envio com o pedido ao WhatsApp em andamento (o socket caindo agora deixa o estado desconhecido) */
+  private sendingId: number | null = null
+  private readonly rng: () => number
 
   constructor(private readonly deps: WhatsAppClientDeps) {
     super()
@@ -245,9 +267,12 @@ export class WhatsAppClient extends EventEmitter {
     this.baileysLogger = makeBaileysLogger(deps.diag)
     deps.queue.register('download_audio', (p, signal) => this.downloadAudio(p, signal))
     deps.queue.register('fetch_profile', (p) => this.fetchProfile(p))
-    // downloads e consultas ao WhatsApp só com a conexão aberta
+    deps.queue.register('send_message', (p) => this.executeSend(p))
+    this.rng = deps.rng ?? Math.random
+    // downloads, consultas e envios ao WhatsApp só com a conexão aberta
     deps.queue.pauseType('download_audio')
     deps.queue.pauseType('fetch_profile')
+    deps.queue.pauseType('send_message')
   }
 
   getStatus(): ConnState | null {
@@ -284,6 +309,7 @@ export class WhatsAppClient extends EventEmitter {
     this.dropSocket()
     this.deps.queue.pauseType('download_audio')
     this.deps.queue.pauseType('fetch_profile')
+    this.deps.queue.pauseType('send_message')
     await this.whenIdle()
     await this.auth?.close()
   }
@@ -345,6 +371,7 @@ export class WhatsAppClient extends EventEmitter {
     if (s !== 'open') {
       this.deps.queue.pauseType('download_audio')
       this.deps.queue.pauseType('fetch_profile')
+      this.deps.queue.pauseType('send_message')
       this.clearDiskTimer()
     }
     if (this.status === s) return
@@ -413,6 +440,7 @@ export class WhatsAppClient extends EventEmitter {
 
   /** Invalida o socket atual (os eventos dele passam a ser ignorados) e o fecha. */
   private dropSocket(): void {
+    this.sendInterrupted('a conexão foi refeita durante o envio')
     this.gen++
     const s = this.sock
     this.sock = null
@@ -546,6 +574,7 @@ export class WhatsAppClient extends EventEmitter {
     }
     this.setStatus('open')
     this.deps.queue.resumeType('fetch_profile')
+    this.deps.queue.resumeType('send_message')
     this.deps.repo.logEvent('wa_open', 'conectado')
     const gen = this.gen
     await this.checkDisk()
@@ -623,6 +652,7 @@ export class WhatsAppClient extends EventEmitter {
   private async onClose(error: unknown): Promise<void> {
     if (!this.running) return
     // um socket fecha uma vez só: eventos seguintes dele são ignorados
+    this.sendInterrupted('a conexão caiu durante o envio')
     this.gen++
     this.sock = null
     this.clearStable()
@@ -978,5 +1008,131 @@ export class WhatsAppClient extends EventEmitter {
       if (this.deps.repo.setGroupMembers(g.id, jids, g.participants.length)) changed = true
     }
     return { count, changed }
+  }
+
+  // --- envio direto (o ÚNICO caminho que escreve no WhatsApp) ---
+
+  private sendOptions(): SendOptions {
+    try {
+      return this.deps.sendOptions?.() ?? DEFAULT_SEND_OPTIONS
+    } catch {
+      return DEFAULT_SEND_OPTIONS
+    }
+  }
+
+  private emitSend(jid: string): void {
+    this.emit('send', jid)
+  }
+
+  /** O socket caiu (ou foi refeito) com o pedido de envio em andamento: o estado fica desconhecido até conferir. */
+  private sendInterrupted(reason: string): void {
+    const id = this.sendingId
+    if (id === null) return
+    try {
+      const s = this.deps.repo.sends.get(id)
+      if (s && this.deps.repo.sends.transition(id, ['sending'], 'unknown', { error: reason })) {
+        this.diag('send_unknown', `send #${id} chat=${chatHash(s.jid)} ${reason}`)
+        verifyUnknownSend(this.deps.repo, { ...s, status: 'unknown' })
+        this.emitSend(s.jid)
+      }
+    } catch {
+      // banco fechado: a recuperação ao abrir cuida disso
+    }
+  }
+
+  private wait(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms))
+  }
+
+  /**
+   * Job `send_message` (`{ sendId }`): um envio que o mentor confirmou. Confere de novo as regras (ainda na fila há menos
+   * de 10 min, envio direto ligado, o contato falou nos últimos 30 dias, conexão aberta) e então:
+   * "digitando…" proporcional ao texto → "parou" → envia (nos grupos, citando a mensagem respondida) → marca como lidas
+   * as mensagens do contato SÓ dessa conversa → volta a indisponível. Nunca tenta de novo sozinho: uma falha antes do
+   * envio fica `failed`; uma queda durante o envio fica `unknown` (e é conferida na conversa).
+   */
+  private async executeSend(payload: { sendId?: unknown }): Promise<void> {
+    const { repo, clock } = this.deps
+    const id = Number(payload?.sendId)
+    const s = Number.isSafeInteger(id) ? repo.sends.get(id) : null
+    if (!s || s.status !== 'queued') return
+    const tag = `send #${s.id} chat=${chatHash(s.jid)}`
+    const opts = this.sendOptions()
+    const expire = (why: string) => {
+      if (repo.sends.transition(s.id, ['queued'], 'expired', { error: why })) {
+        this.diag('send_expired', `${tag} ${why}`)
+        this.emitSend(s.jid)
+      }
+    }
+    const fail = (from: Array<'queued' | 'typing'>, why: string) => {
+      if (repo.sends.transition(s.id, from, 'failed', { error: why })) {
+        this.diag('send_failed', `${tag} ${why}`)
+        this.emitSend(s.jid)
+      }
+    }
+    if (!opts.enabled) return expire('envio direto desligado')
+    if (clock.now() - s.queuedAt > SEND_LIMITS.queuedMaxMs) return expire('mais de 10 min na fila')
+    const sock = this.sock
+    const gen = this.gen
+    if (!sock || this.status !== 'open' || !sock.sendMessage) throw new DeferJobError('sem conexão aberta para enviar', SEND_DEFER_MS)
+    const messages = repo.listMessages(s.jid, 300)
+    // responder, nunca iniciar conversa
+    if (!hasRecentContactMessage(messages, clock.now())) return fail(['queued'], 'sem mensagem do contato nos últimos 30 dias')
+    const quote = isGroupJid(s.jid) && opts.quoteInGroups ? pickQuote(messages) : null
+    const keys = opts.markRead ? unreadKeys(messages) : []
+    if (!repo.sends.transition(s.id, ['queued'], 'typing', { startedAt: clock.now() })) return
+    this.diag('send_typing', tag)
+    this.emitSend(s.jid)
+    let presence = false
+    try {
+      if (opts.typing && sock.sendPresenceUpdate) {
+        try {
+          presence = true
+          await sock.sendPresenceUpdate('composing', s.jid)
+          await this.wait(typingMs(s.text, this.rng()))
+          await sock.sendPresenceUpdate('paused', s.jid)
+        } catch (e) {
+          return fail(['typing'], `"digitando" falhou: ${errMsg(e).slice(0, 120)}`)
+        }
+      }
+      if (gen !== this.gen || this.status !== 'open') return fail(['typing'], 'a conexão caiu antes de enviar')
+      if (!repo.sends.transition(s.id, ['typing'], 'sending')) return
+      this.sendingId = s.id
+      let res: Awaited<ReturnType<NonNullable<WaSocket['sendMessage']>>>
+      try {
+        res = await sock.sendMessage(s.jid, { text: s.text }, quote ? { quoted: quotedMessage(quote) } : undefined)
+      } catch (e) {
+        // o pedido pode ter saído: nunca reenviar no escuro
+        if (repo.sends.transition(s.id, ['sending'], 'unknown', { error: `envio sem confirmação: ${errMsg(e).slice(0, 120)}` })) {
+          this.diag('send_unknown', `${tag} o WhatsApp não confirmou o envio`)
+          verifyUnknownSend(repo, { ...s, status: 'unknown', startedAt: s.startedAt ?? clock.now() })
+          this.emitSend(s.jid)
+        }
+        return
+      } finally {
+        this.sendingId = null
+      }
+      presence = true
+      if (repo.sends.transition(s.id, ['sending', 'unknown'], 'sent', { sentAt: clock.now(), waMsgId: res?.key?.id ?? null, error: null })) {
+        repo.setApprovedSentText(s.replyId, s.text)
+        this.diag('send_sent', `${tag}${quote ? ' com citação' : ''}`)
+        this.emitSend(s.jid)
+      }
+      if (keys.length && sock.readMessages && gen === this.gen) {
+        try {
+          await sock.readMessages(keys)
+        } catch {
+          // marcar como lida é um extra: a mensagem já saiu
+        }
+      }
+    } finally {
+      if (presence && sock.sendPresenceUpdate && gen === this.gen) {
+        try {
+          await sock.sendPresenceUpdate('unavailable')
+        } catch {
+          // a conexão pode ter caído: ao reconectar o app já se apresenta indisponível
+        }
+      }
+    }
   }
 }

@@ -8,6 +8,7 @@ import { AI_ALERT_KINDS } from '../shared/triage'
 import { KB_LIMITS, KB_ROLES } from '../shared/kb'
 import { SEARCH_KINDS, SEARCH_LIMITS, SEARCH_PERIODS } from '../shared/search'
 import { BACKUP_PASSWORD_MAX, BACKUP_PASSWORD_MIN } from '../shared/backup'
+import { SEND_LIMITS } from '../shared/send'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -113,7 +114,11 @@ const SETTINGS_FIELDS: Record<string, (v: unknown) => boolean> = {
   startWithWindows: isBool,
   claudeModel: isStr,
   groqModel: isStr,
-  theme: (v) => v === 'system' || v === 'light' || v === 'dark'
+  theme: (v) => v === 'system' || v === 'light' || v === 'dark',
+  directSend: isBool,
+  sendTyping: isBool,
+  sendMarkRead: isBool,
+  sendQuoteInGroups: isBool
 }
 
 /** Papel e/ou "Usar" de um arquivo da base (pelo menos um dos dois). */
@@ -157,6 +162,25 @@ function isAutoBackupPatch(p: unknown): boolean {
   return (p.enabled === undefined || isBool(p.enabled)) && (p.password === undefined || p.password === '' || isPassword(p.password))
 }
 
+const isSendText = (v: unknown): v is string => nonEmpty(v) && [...v].length <= SEND_LIMITS.textChars
+const isUuid = (v: unknown) => isStr(v) && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)
+const SEND_REPLY_FIELDS = new Set(['token', 'jid', 'text', 'replyId', 'originalSuggestion', 'analysisLastMsgId', 'chosenIndex'])
+
+/** "Enviar": o token do `prepareSend`, a conversa e o texto, mais (opcionais) os dados da sugestão escolhida. */
+function isSendReply(i: unknown): boolean {
+  if (!isObj(i) || !Object.keys(i).every((k) => SEND_REPLY_FIELDS.has(k))) return false
+  return (
+    isUuid(i.token) &&
+    nonEmpty(i.jid) &&
+    i.jid.length <= 200 &&
+    isSendText(i.text) &&
+    (i.replyId === undefined || i.replyId === null || isId(i.replyId)) &&
+    (i.originalSuggestion === undefined || i.originalSuggestion === null || isStr(i.originalSuggestion)) &&
+    (i.analysisLastMsgId === undefined || i.analysisLastMsgId === null || isStr(i.analysisLastMsgId)) &&
+    (i.chosenIndex === undefined || (typeof i.chosenIndex === 'number' && Number.isInteger(i.chosenIndex) && i.chosenIndex >= 0 && i.chosenIndex < 20))
+  )
+}
+
 const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   getState: () => true,
   listContacts: ([h, k]) => isBool(h) && (k === undefined || (CONTACT_KINDS as readonly unknown[]).includes(k)),
@@ -188,6 +212,12 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
     (i.analysisLastMsgId === null || i.analysisLastMsgId === undefined || isStr(i.analysisLastMsgId)) &&
     (i.chosenIndex === undefined || (typeof i.chosenIndex === 'number' && Number.isInteger(i.chosenIndex) && i.chosenIndex >= 0 && i.chosenIndex < 20)),
   copyToClipboard: ([t]) => isStr(t),
+  prepareSend: (a) =>
+    a.length === 1 && isObj(a[0]) && Object.keys(a[0]).every((k) => k === 'jid' || k === 'text') && nonEmpty(a[0].jid) && a[0].jid.length <= 200 && isSendText(a[0].text),
+  sendReply: (a) => a.length === 1 && isSendReply(a[0]),
+  cancelSend: (a) => a.length === 1 && isId(a[0]),
+  listSends: (a) => a.length === 1 && nonEmpty(a[0]) && a[0].length <= 200,
+  checkSend: (a) => a.length === 1 && isId(a[0]),
   renameContact: ([j, n]) => nonEmpty(j) && isStr(n),
   setNotes: ([j, t]) => nonEmpty(j) && isStr(t),
   pauseAll: () => true,

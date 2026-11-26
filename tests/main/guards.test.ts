@@ -109,6 +109,48 @@ describe('validateIpcArgs', () => {
     bad('saveSettings', { dailyCapUsd: '2' })
     bad('saveSettings', { outro: 1 })
     bad('saveSettings', null)
+    // v0.4.0: envio direto e as três opções, só sim/não
+    ok('saveSettings', { directSend: false, sendTyping: true, sendMarkRead: false, sendQuoteInGroups: true })
+    bad('saveSettings', { directSend: 'off' })
+    bad('saveSettings', { sendTyping: 1 })
+  })
+
+  describe('envio direto', () => {
+    const TOKEN = '0f8e4f9a-3c1b-4d2e-9a7b-1c2d3e4f5a6b'
+    const JID = '5547999998888@s.whatsapp.net'
+
+    it('prepareSend: só jid e texto (não vazio, até 4096 caracteres)', () => {
+      ok('prepareSend', { jid: JID, text: 'Oi!' })
+      bad('prepareSend', { jid: JID, text: '' })
+      bad('prepareSend', { jid: '', text: 'Oi' })
+      bad('prepareSend', { jid: JID, text: 'x'.repeat(4097) })
+      bad('prepareSend', { jid: JID, text: 'Oi', token: TOKEN })
+      bad('prepareSend', JID, 'Oi')
+    })
+
+    it('sendReply: exige o token no formato, o jid e o texto; campos extras recusados', () => {
+      ok('sendReply', { token: TOKEN, jid: JID, text: 'Oi!' })
+      ok('sendReply', { token: TOKEN, jid: JID, text: 'Oi!', replyId: 3, originalSuggestion: 'Oi', analysisLastMsgId: 'm1', chosenIndex: 1 })
+      ok('sendReply', { token: TOKEN, jid: JID, text: 'Oi!', replyId: null, originalSuggestion: null, analysisLastMsgId: null })
+      bad('sendReply', { jid: JID, text: 'Oi!' })
+      bad('sendReply', { token: 'qualquer', jid: JID, text: 'Oi!' })
+      bad('sendReply', { token: TOKEN, jid: JID, text: '  ' })
+      bad('sendReply', { token: TOKEN, jid: JID, text: 'Oi!', replyId: 0 })
+      bad('sendReply', { token: TOKEN, jid: JID, text: 'Oi!', chosenIndex: -1 })
+      bad('sendReply', { token: TOKEN, jid: JID, text: 'Oi!', quoted: { id: 'x' } })
+      bad('sendReply', { token: TOKEN, jid: JID, text: 'Oi!', to: '5511@s.whatsapp.net' })
+    })
+
+    it('cancelSend/checkSend: id inteiro positivo; listSends: um jid', () => {
+      ok('cancelSend', 1)
+      bad('cancelSend', '1')
+      bad('cancelSend', 0)
+      ok('checkSend', 2)
+      bad('checkSend', 1.5)
+      ok('listSends', JID)
+      bad('listSends', '')
+      bad('listSends', JID, 2)
+    })
   })
 })
 

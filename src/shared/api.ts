@@ -18,6 +18,7 @@ import type {
   BackupRestoreResult,
   BackupStatus
 } from './backup'
+import type { PrepareSendInput, PrepareSendResult, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView } from './send'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind, ThemePref }
@@ -25,6 +26,7 @@ export type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateRea
 export type { KbChunkView, KbFilePatch, KbImportResult, KbPackageView, KbRole, KbSource }
 export type { SearchFilters, SearchResult, SearchSummaryResult }
 export type { AutoBackupPatch, BackupExportOptions, BackupExportResult, BackupOpenResult, BackupRestoreMode, BackupRestoreResult, BackupStatus }
+export type { PrepareSendInput, PrepareSendResult, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView }
 export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
@@ -179,6 +181,8 @@ export interface SagaApi {
   onContactsChanged(cb: () => void): Unsubscribe
   /** chegou mensagem (ou transcrição) desse contato: chamar `listMessages(jid)` de novo */
   onMessages(jid: string, cb: () => void): Unsubscribe
+  /** um envio dessa conversa mudou de estado: chamar `listSends(jid)` de novo */
+  onSends(jid: string, cb: () => void): Unsubscribe
 
   /**
    * `kind`: todas (padrão), só individuais ou só grupos. `includeHidden`: desde a v0.3.0 a interface não esconde mais
@@ -219,6 +223,21 @@ export interface SagaApi {
   /** grava em `approved_replies`; devolve o id */
   saveReply(input: SaveReplyInput): Promise<number>
   copyToClipboard(text: string): Promise<void>
+
+  // --- envio direto (v0.4.0): só com a confirmação do mentor a cada envio ---
+  /**
+   * O diálogo "Enviar" abriu: confere as regras (envio direto ligado, o contato falou nos últimos 30 dias) e devolve
+   * para quem vai, a citação (grupos) e uma confirmação de uso único para exatamente este jid + texto (5 min). Não envia.
+   */
+  prepareSend(input: PrepareSendInput): Promise<PrepareSendResult>
+  /** "Enviar" no diálogo: exige o token do `prepareSend` (mesmo jid e texto); escolhe a sugestão e põe na fila */
+  sendReply(input: SendReplyInput): Promise<SendReplyResult>
+  /** "Cancelar envio" (só enquanto está na fila); `true` se cancelou */
+  cancelSend(id: number): Promise<boolean>
+  /** os envios recentes da conversa, mais novos primeiro */
+  listSends(jid: string): Promise<SendView[]>
+  /** "Conferir": procura de novo na conversa um envio de estado desconhecido */
+  checkSend(id: number): Promise<SendView | null>
 
   renameContact(jid: string, name: string): Promise<void>
   setNotes(jid: string, text: string): Promise<void>
@@ -308,6 +327,11 @@ export const INVOKE_METHODS = [
   'regenerate',
   'saveReply',
   'copyToClipboard',
+  'prepareSend',
+  'sendReply',
+  'cancelSend',
+  'listSends',
+  'checkSend',
   'renameContact',
   'setNotes',
   'pauseAll',
@@ -365,5 +389,7 @@ export const EVENTS = {
   state: 'saga:event:state',
   contacts: 'saga:event:contacts',
   /** argumento: jid */
-  messages: 'saga:event:messages'
+  messages: 'saga:event:messages',
+  /** argumento: jid (um envio dessa conversa mudou) */
+  sends: 'saga:event:sends'
 } as const

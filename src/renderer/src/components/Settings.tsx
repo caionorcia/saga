@@ -111,6 +111,33 @@ export function Settings() {
           />
         </section>
 
+        <section aria-labelledby="send-title-settings">
+          <h2 id="send-title-settings">Envio direto</h2>
+          <label className="check">
+            <input type="checkbox" checked={s.directSend} onChange={(e) => void save({ directSend: e.target.checked })} />
+            Mostrar o botão Enviar nas sugestões
+          </label>
+          <p className="muted small">
+            Cada envio pede a sua confirmação. O Saga só responde a quem mandou mensagem nos últimos 30 dias e envia no
+            máximo uma mensagem a cada 30 a 90 segundos (40 por hora, 200 por dia).
+          </p>
+          <fieldset className="send-options" disabled={!s.directSend}>
+            <legend className="sr-only">Como o Saga envia</legend>
+            <label className="check">
+              <input type="checkbox" checked={s.sendTyping} onChange={(e) => void save({ sendTyping: e.target.checked })} />
+              Mostrar "digitando…" antes de enviar
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={s.sendMarkRead} onChange={(e) => void save({ sendMarkRead: e.target.checked })} />
+              Marcar como lidas as mensagens da conversa respondida
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={s.sendQuoteInGroups} onChange={(e) => void save({ sendQuoteInGroups: e.target.checked })} />
+              Nos grupos, citar a mensagem que está sendo respondida
+            </label>
+          </fieldset>
+        </section>
+
         <KnowledgeBaseSection />
 
         <section>

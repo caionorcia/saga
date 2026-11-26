@@ -45,6 +45,22 @@ import { EncryptionUnavailableError, SettingsStore, testKey, type Cipher, type K
 import type { NormalizedMessage } from './types'
 import { WhatsAppClient, type ConnState, type WhatsAppClientDeps } from './wa/client'
 import type { WaVersionFetcher } from './wa/version'
+import { formatPhone } from './db/repo'
+import { sendJobKey, type SendRow } from './db/sendRepo'
+import { SendGate } from './send/gate'
+import { chatHash, hasRecentContactMessage, pickQuote, textHash } from './send/logic'
+import { verifyUnknownSend } from './send/verify'
+import {
+  NOT_CONFIRMED_TEXT,
+  SEND_LIMITS,
+  SEND_REFUSAL_TEXT,
+  type PrepareSendInput,
+  type PrepareSendResult,
+  type SendRefusal,
+  type SendReplyInput,
+  type SendReplyResult,
+  type SendView
+} from '../shared/send'
 import type {
   AiErrorCode,
   AnalysisResult,
@@ -64,7 +80,7 @@ const UNHIDDEN_KEY = 'migration.unhidden_jids'
 
 /** O que o serviço usa do cliente do WhatsApp (o real ou um falso nos testes / modo SAGA_FAKE_WA). */
 export interface WaClientLike {
-  on(event: 'qr' | 'status' | 'message' | 'disk' | 'contacts', listener: (arg: any) => void): unknown
+  on(event: 'qr' | 'status' | 'message' | 'disk' | 'contacts' | 'send', listener: (arg: any) => void): unknown
   start(): Promise<void>
   stop(): Promise<void>
   manualReconnect(): Promise<void>
@@ -125,6 +141,10 @@ const WAITING_REFRESH_MS = 5 * 60_000
 const CLASSIFY_PRIORITY = -1
 const WAITING_DETAIL = 'Sem resposta há mais de 2 dias.'
 const DEFAULT_STOP_TIMEOUT_MS = 5_000
+/** os envios confirmados passam na frente dos áudios e dos alertas (cada tipo tem o seu ritmo) */
+const SEND_PRIORITY = 20
+/** de quanto em quanto tempo os envios parados na fila há mais de 10 min voltam a "aguardando confirmação" */
+const SEND_SWEEP_MS = 15_000
 
 /** Espera `p` por até `ms`; erros de `p` (agora ou depois) nunca escapam. */
 async function withDeadline(p: Promise<unknown>, ms: number): Promise<void> {
@@ -180,7 +200,7 @@ const AI_MESSAGES: Record<AiErrorCode, string> = {
  * Junta todos os módulos do core: fila, limitadores, cliente do WhatsApp, transcrição, IA e memória.
  * O processo principal só repassa chamadas (IPC) e eventos para cá.
  *
- * Eventos: `'state'(AppState)`, `'contacts'()`, `'messages'(jid)`.
+ * Eventos: `'state'(AppState)`, `'contacts'()`, `'messages'(jid)`, `'sends'(jid)` (um envio dessa conversa mudou).
  */
 export class SagaService extends EventEmitter {
   readonly queue: JobQueue
@@ -227,6 +247,10 @@ export class SagaService extends EventEmitter {
   /** por conversa: horário da mensagem mais nova que pediu classificação (pedidos durante um job em andamento) */
   private classifyWanted = new Map<string, number>()
   private waitingTimer: ReturnType<typeof setInterval> | null = null
+  /** confirmações de envio (tokens de uso único do `prepareSend`) */
+  private readonly sendGate: SendGate
+  private pendingSendJids = new Set<string>()
+  private sendSweepTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(opts: SagaServiceOpts) {
     super()
@@ -241,6 +265,7 @@ export class SagaService extends EventEmitter {
     this.llmFactory = opts.llmFactory ?? ((kind, key, o) => createLlm(kind, key, o))
     this.transcriberFactory = opts.transcriberFactory ?? ((kind, key, o) => createTranscriber(kind, key, fetch, o))
     this.cost = new CostTracker(repo, clock)
+    this.sendGate = new SendGate(clock)
     this.backup = new BackupManager({
       repo,
       settings: opts.settings,
@@ -260,13 +285,15 @@ export class SagaService extends EventEmitter {
       wa_profile: lim('wa_profile'),
       groq_audio: lim('groq_audio'),
       llm: lim('llm'),
-      classify: lim('classify')
+      classify: lim('classify'),
+      wa_send: lim('wa_send')
     }
     const byType: Record<JobType, RateLimiter> = {
       download_audio: this.limiters.wa_media,
       transcribe: this.limiters.groq_audio,
       fetch_profile: this.limiters.wa_profile,
-      classify: this.limiters.classify
+      classify: this.limiters.classify,
+      send_message: this.limiters.wa_send
     }
     this.queue = new JobQueue(repo, clock, byType, { diag: (k, d) => this.diag(k, d) })
 
@@ -302,6 +329,17 @@ export class SagaService extends EventEmitter {
       )
     })
     this.queue.onJobFailed((job) => {
+      if (job.type === 'send_message') {
+        // estourou o prazo ou deu erro inesperado: nunca tenta de novo sozinho (o envio mostra o estado certo)
+        try {
+          repo.markJobDone(job.id)
+          this.sendJobFailed(job.payload)
+        } catch {
+          // banco fechado
+        }
+        this.markState()
+        return
+      }
       if (job.type === 'classify') {
         // alertas são um extra: um job que estourou o prazo 3 vezes não vira "áudios com falha" na barra de status
         try {
@@ -359,8 +397,10 @@ export class SagaService extends EventEmitter {
       limiters: Object.values(this.limiters),
       hasFreeSpace: opts.hasFreeSpace ?? defaultHasFreeSpace,
       ...(opts.fetchWaVersion ? { fetchWaVersion: opts.fetchWaVersion } : {}),
-      ...(opts.diag ? { diag: opts.diag } : {})
+      ...(opts.diag ? { diag: opts.diag } : {}),
+      sendOptions: () => this.settings.sendOptions()
     })
+    this.wa.on('send', (jid: string) => this.markSends(jid))
     this.wa.on('qr', (dataUrl: string) => {
       this.qr = dataUrl
       this.markState()
@@ -384,7 +424,11 @@ export class SagaService extends EventEmitter {
       }
       try {
         // o mentor respondeu: os alertas de antes se resolvem (o desânimo fica até o mentor resolver)
-        if (m.fromMe) repo.dismissAlertsUpTo(m.jid, RESOLVED_BY_REPLY, m.ts)
+        if (m.fromMe) {
+          repo.dismissAlertsUpTo(m.jid, RESOLVED_BY_REPLY, m.ts)
+          // um envio de estado desconhecido nessa conversa: a mensagem apareceu?
+          this.verifyUnknownSends(m.jid)
+        }
         else {
           // só "obrigado", "ok" ou emoji: sai de "Para responder" na hora, sem IA (e mesmo sem chave da Groq)
           applyReplyRule(repo, m.jid)
@@ -431,6 +475,8 @@ export class SagaService extends EventEmitter {
   }
 
   private async doStart(): Promise<void> {
+    // antes da fila: envios que não saíram nunca saem sozinhos depois de reiniciar
+    this.recoverSends()
     this.queue.recoverAfterCrash()
     this.requeueUnhidden()
     for (const l of Object.values(this.limiters)) l.startWarmup()
@@ -445,6 +491,16 @@ export class SagaService extends EventEmitter {
         }
       }, WAITING_REFRESH_MS)
       ;(this.waitingTimer as { unref?: () => void }).unref?.()
+    }
+    if (!this.sendSweepTimer) {
+      this.sendSweepTimer = setInterval(() => {
+        try {
+          this.expireStaleSends()
+        } catch {
+          // banco fechado
+        }
+      }, SEND_SWEEP_MS)
+      ;(this.sendSweepTimer as { unref?: () => void }).unref?.()
     }
     const stopped = this.repo.getSetting(STOPPED_STATE) as ConnState | null
     // parada guardada que não vale mais entre reinícios (ex.: versão desatualizada da 0.1.0): descarta
@@ -475,6 +531,8 @@ export class SagaService extends EventEmitter {
       this.emitTimer = null
       if (this.waitingTimer) clearInterval(this.waitingTimer)
       this.waitingTimer = null
+      if (this.sendSweepTimer) clearInterval(this.sendSweepTimer)
+      this.sendSweepTimer = null
       const timeoutMs = opts.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
       await withDeadline(this.queue.stop(), timeoutMs)
       await withDeadline(this.wa.stop(), timeoutMs)
@@ -560,6 +618,19 @@ export class SagaService extends EventEmitter {
     this.scheduleEmit()
   }
 
+  private markSends(jid: string): void {
+    this.pendingSendJids.add(jid)
+    this.scheduleEmit()
+  }
+
+  onSends(jid: string, cb: () => void): Unsubscribe {
+    const l = (j: string) => {
+      if (j === jid) cb()
+    }
+    this.on('sends', l)
+    return () => this.off('sends', l)
+  }
+
   private markMessages(jid: string): void {
     this.pendingJids.add(jid)
     this.pendingContacts = true
@@ -573,14 +644,17 @@ export class SagaService extends EventEmitter {
     this.emitTimer = setTimeout(() => {
       this.emitTimer = null
       const jids = [...this.pendingJids]
+      const sendJids = [...this.pendingSendJids]
       const contacts = this.pendingContacts
       const state = this.pendingState
       this.pendingJids.clear()
+      this.pendingSendJids.clear()
       this.pendingContacts = false
       this.pendingState = false
       try {
         if (contacts) this.emit('contacts')
         for (const j of jids) this.emit('messages', j)
+        for (const j of sendJids) this.emit('sends', j)
         if (state) this.emit('state', this.state())
       } catch (e) {
         this.repo.logEvent('emit_error', e instanceof Error ? e.message : String(e))
@@ -980,10 +1054,197 @@ export class SagaService extends EventEmitter {
   }
 
   async retryFailedJobs(): Promise<number> {
-    const failed = this.repo.listJobs('failed')
+    // envios nunca voltam por aqui: só com uma nova confirmação do mentor
+    const failed = this.repo.listJobs('failed').filter((j) => j.type !== 'send_message')
     for (const j of failed) this.queue.retryFailed(j.id)
     this.markState()
     return failed.length
+  }
+
+  // --- envio direto (v0.4.0) ---
+
+  private sendDiag(kind: string, s: Pick<SendRow, 'id' | 'jid' | 'attempt'>, extra = ''): void {
+    const job = this.repo.jobIdByKey(sendJobKey(s))
+    this.diag(kind, `send #${s.id}${job !== null ? ` job #${job}` : ''} chat=${chatHash(s.jid)}${extra ? ` ${extra}` : ''}`)
+  }
+
+  /** As regras que valem antes de qualquer envio: envio direto ligado, texto válido, conversa conhecida, contato recente. */
+  private sendRefusal(jid: string, text: string): SendRefusal | null {
+    if (!this.settings.sendOptions().enabled) return 'disabled'
+    const t = text.trim()
+    if (!t) return 'empty'
+    if ([...t].length > SEND_LIMITS.textChars) return 'too_long'
+    if (!this.repo.listContacts({ includeHidden: true }).some((c) => c.jid === jid)) return 'unknown_chat'
+    if (!hasRecentContactMessage(this.repo.listMessages(jid, 300), this.clock.now())) return 'no_recent_contact'
+    return null
+  }
+
+  /**
+   * O diálogo "Enviar" abriu: confere as regras e devolve o que mostrar (para quem, a citação no grupo) e uma
+   * confirmação de uso único para exatamente este jid + texto (vale 5 min). Não envia nada.
+   */
+  async prepareSend(input: PrepareSendInput): Promise<PrepareSendResult> {
+    const jid = input.jid
+    const text = input.text.trim()
+    const refusal = this.sendRefusal(jid, text)
+    if (refusal) return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
+    const contact = this.repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)!
+    const options = this.settings.sendOptions()
+    let quote: { senderName: string; text: string } | null = null
+    if (contact.isGroup && options.quoteInGroups) {
+      const q = pickQuote(this.repo.listMessages(jid, 300))
+      if (q) {
+        const body = q.text ?? (q.transcriptStatus === 'done' ? q.transcript : null) ?? (q.kind === 'audio' ? '[áudio]' : '')
+        quote = { senderName: q.senderLabel ?? 'Participante', text: body.length > 140 ? `${body.slice(0, 139)}…` : body }
+      }
+    }
+    const phone = contact.isGroup || jid.endsWith('@lid') ? null : formatPhone(jid)
+    const { token, expiresAt } = this.sendGate.issue(jid, text)
+    return { ok: true, preview: { token, expiresAt, jid, text, recipient: { name: contact.displayName, phone, isGroup: contact.isGroup }, quote, options } }
+  }
+
+  /**
+   * "Enviar" no diálogo de confirmação: exige o token do `prepareSend` para exatamente este jid + texto (uso único,
+   * 5 min). Escolhe a sugestão (salva na memória com as não escolhidas, como Copiar/Salvar) e põe o envio na fila.
+   * A mesma resposta com o mesmo texto nunca vira dois envios.
+   */
+  async sendReply(input: SendReplyInput): Promise<SendReplyResult> {
+    const jid = input.jid
+    const text = input.text.trim()
+    if (!this.sendGate.consume(input.token, jid, text)) {
+      this.diag('send_refused', `chat=${chatHash(jid)} sem confirmação válida`)
+      return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
+    }
+    const refusal = this.sendRefusal(jid, text)
+    if (refusal) {
+      this.diag('send_refused', `chat=${chatHash(jid)} ${refusal}`)
+      return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
+    }
+    const reused = input.replyId ? this.repo.getApproved(input.replyId) : null
+    const replyId =
+      reused && reused.jid === jid && reused.finalText.trim() === text
+        ? reused.id
+        : await this.saveReply({
+            jid,
+            originalSuggestion: input.originalSuggestion ?? null,
+            finalText: text,
+            analysisLastMsgId: input.analysisLastMsgId ?? null,
+            ...(input.chosenIndex !== undefined ? { chosenIndex: input.chosenIndex } : {})
+          })
+    const { send, created } = this.repo.sends.enqueue({ idemKey: `${replyId}:${textHash(text)}`, replyId, jid, text })
+    if (created) {
+      this.queue.enqueue('send_message', sendJobKey(send), { sendId: send.id }, SEND_PRIORITY)
+      this.sendDiag('send_queued', send, send.attempt > 1 ? `tentativa ${send.attempt}` : '')
+    }
+    this.markSends(jid)
+    this.markState()
+    return { ok: true, send: this.sendViews([send])[0] }
+  }
+
+  /** "Cancelar envio": só enquanto está na fila (depois do "digitando…" não dá mais). `true` se cancelou. */
+  async cancelSend(id: number): Promise<boolean> {
+    const s = this.repo.sends.get(id)
+    if (!s || !this.repo.sends.transition(id, ['queued'], 'canceled')) return false
+    this.sendDiag('send_canceled', s)
+    this.markSends(s.jid)
+    return true
+  }
+
+  /** Os envios recentes de uma conversa (mais novos primeiro), com a estimativa de quando os da fila saem. */
+  async listSends(jid: string): Promise<SendView[]> {
+    return this.sendViews(this.repo.sends.listForJid(jid))
+  }
+
+  /** "Conferir": procura de novo a mensagem na conversa; devolve o envio como ficou. */
+  async checkSend(id: number): Promise<SendView | null> {
+    const s = this.repo.sends.get(id)
+    if (!s) return null
+    if (verifyUnknownSend(this.repo, s)) {
+      this.sendDiag('send_sent', s, 'achada na conversa')
+      this.markSends(s.jid)
+    }
+    return this.sendViews([this.repo.sends.get(id)!])[0]
+  }
+
+  private sendViews(rows: SendRow[]): SendView[] {
+    const now = this.clock.now()
+    const queued = this.repo.sends.listByStatus('queued')
+    const gap = LIMITS.wa_send.minGapMs
+    let next = Math.max(now, this.limiters.wa_send.nextAllowedAt(now))
+    const eta = new Map<number, number>()
+    for (const q of queued) {
+      eta.set(q.id, next)
+      next += gap
+    }
+    const waitingFor = this.queue.isPaused() ? 'paused' : this.wa.getStatus() !== 'open' ? 'connection' : null
+    return rows.map((r) => ({
+      id: r.id,
+      jid: r.jid,
+      replyId: r.replyId,
+      text: r.text,
+      status: r.status,
+      queuedAt: r.queuedAt,
+      etaAt: r.status === 'queued' ? (eta.get(r.id) ?? now) : null,
+      waitingFor: r.status === 'queued' ? waitingFor : null,
+      sentAt: r.sentAt,
+      error: r.error
+    }))
+  }
+
+  /** Envio na fila há mais de 10 min (pausa, sem conexão): volta a "aguardando confirmação"; nunca sai atrasado. */
+  private expireStaleSends(): void {
+    const cut = this.clock.now() - SEND_LIMITS.queuedMaxMs
+    for (const s of this.repo.sends.listByStatus('queued')) {
+      if (s.queuedAt > cut) continue
+      if (this.repo.sends.transition(s.id, ['queued'], 'expired', { error: 'mais de 10 min na fila' })) {
+        this.sendDiag('send_expired', s, 'mais de 10 min na fila')
+        this.markSends(s.jid)
+      }
+    }
+  }
+
+  /**
+   * Ao abrir o app: nada sai sozinho. Os da fila (e os que estavam no "digitando…", que ainda não tinham saído) voltam a
+   * "aguardando confirmação"; um que estava no meio do envio fica desconhecido e é conferido na conversa.
+   */
+  private recoverSends(): void {
+    for (const s of this.repo.sends.listByStatus('queued', 'typing')) {
+      if (this.repo.sends.transition(s.id, ['queued', 'typing'], 'expired', { error: 'o Saga fechou antes de enviar' })) {
+        this.sendDiag('send_expired', s, 'o Saga fechou antes de enviar')
+      }
+    }
+    for (const s of this.repo.sends.listByStatus('sending')) {
+      if (this.repo.sends.transition(s.id, ['sending'], 'unknown', { error: 'o Saga fechou durante o envio' })) {
+        this.sendDiag('send_unknown', s, 'o Saga fechou durante o envio')
+      }
+    }
+    for (const s of this.repo.sends.listByStatus('unknown')) {
+      if (verifyUnknownSend(this.repo, s)) this.sendDiag('send_sent', s, 'achada na conversa')
+    }
+    this.repo.finishPendingJobs('send_message')
+  }
+
+  private verifyUnknownSends(jid: string): void {
+    for (const s of this.repo.sends.listForJid(jid)) {
+      if (s.status === 'unknown' && verifyUnknownSend(this.repo, s)) {
+        this.sendDiag('send_sent', s, 'achada na conversa')
+        this.markSends(jid)
+      }
+    }
+  }
+
+  /** O job do envio estourou o prazo (ou lançou): o envio fica no estado certo, nunca volta para a fila sozinho. */
+  private sendJobFailed(payload: unknown): void {
+    const id = Number((payload as { sendId?: unknown } | null)?.sendId)
+    const s = Number.isSafeInteger(id) ? this.repo.sends.get(id) : null
+    if (!s) return
+    if (this.repo.sends.transition(id, ['queued', 'typing'], 'failed', { error: 'não chegou a enviar' })) {
+      this.sendDiag('send_failed', s, 'não chegou a enviar')
+    } else if (this.repo.sends.transition(id, ['sending'], 'unknown', { error: 'o WhatsApp não respondeu' })) {
+      this.sendDiag('send_unknown', s, 'o WhatsApp não respondeu')
+      verifyUnknownSend(this.repo, { ...s, status: 'unknown' })
+    }
+    this.markSends(s.jid)
   }
 
   // --- configurações ---
@@ -1008,6 +1269,15 @@ export class SagaService extends EventEmitter {
     // uma chave nova pode destravar as transcrições pausadas por falta de chave (ou chave recusada)
     // e um teto novo pode destravar as pausadas pelo gasto
     if (patch.groqKey || patch.openaiKey || patch.transcriber || patch.dailyCapUsd !== undefined) this.queue.resumeType('transcribe')
+    // envio direto desligado: o que estava na fila não sai (volta a "aguardando confirmação")
+    if (patch.directSend === false) {
+      for (const s of this.repo.sends.listByStatus('queued')) {
+        if (this.repo.sends.transition(s.id, ['queued'], 'expired', { error: 'envio direto desligado' })) {
+          this.sendDiag('send_expired', s, 'envio direto desligado')
+          this.markSends(s.jid)
+        }
+      }
+    }
     this.markState()
     return { ok: true, settings: this.settings.get() }
   }

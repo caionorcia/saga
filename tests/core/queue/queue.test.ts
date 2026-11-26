@@ -172,6 +172,68 @@ describe('JobQueue', () => {
     db2.close() // no Windows o arquivo aberto não pode ser apagado no afterEach
   })
 
+  describe('send_message: nunca tenta de novo sozinho', () => {
+    const withSend = () => {
+      const lim = { ...makeLimiters(clock), send_message: new RateLimiter(LIMITS.wa_send, clock, () => 0) }
+      return new JobQueue(repo, clock, lim)
+    }
+
+    it('um erro é definitivo na primeira vez (sem espera e nova tentativa)', async () => {
+      const sq = withSend()
+      let calls = 0
+      const failed: string[] = []
+      sq.onJobFailed((j) => failed.push(j.key))
+      sq.register('send_message', async () => {
+        calls++
+        throw new Error('caiu')
+      })
+      sq.enqueue('send_message', 'send:1:1', { sendId: 1 })
+      expect(await sq.tick()).toBe('ran')
+      expect(failed).toEqual(['send:1:1'])
+      clock.advance(24 * 3_600_000)
+      expect(await sq.tick()).toBe('idle')
+      expect(calls).toBe(1)
+      expect(repo.jobCounts('send_message')).toMatchObject({ failed: 1, pending: 0 })
+    })
+
+    it('o app fechou com o envio rodando: falha definitiva, não volta para a fila', async () => {
+      const sq = withSend()
+      let calls = 0
+      sq.register('send_message', async () => {
+        calls++
+      })
+      sq.enqueue('send_message', 'send:2:1', { sendId: 2 })
+      repo.markJobRunning(repo.nextPendingJob('send_message', clock.now())!.id)
+      expect(sq.recoverAfterCrash()).toBe(1)
+      clock.advance(24 * 3_600_000)
+      expect(await sq.tick()).toBe('idle')
+      expect(calls).toBe(0)
+    })
+
+    it('tipo pausado (WhatsApp fora do ar) ou "Pausar tudo": nada roda; envios esperam 30–90 s entre si', async () => {
+      const sq = withSend()
+      const ran: number[] = []
+      sq.register('send_message', async (p) => {
+        ran.push((p as { sendId: number }).sendId)
+      })
+      sq.enqueue('send_message', 'send:1:1', { sendId: 1 })
+      sq.enqueue('send_message', 'send:2:1', { sendId: 2 })
+      sq.pause()
+      expect(await sq.tick()).toBe('paused')
+      sq.resume()
+      sq.pauseType('send_message')
+      expect(await sq.tick()).toBe('idle')
+      sq.resumeType('send_message')
+      expect(await sq.tick()).toBe('ran')
+      expect(await sq.tick()).toBe('waiting')
+      clock.advance(29_999)
+      expect(await sq.tick()).toBe('waiting')
+      clock.advance(1)
+      expect(await sq.tick()).toBe('ran')
+      expect(ran).toEqual([1, 2])
+    })
+  })
+
   it('job que derruba o app em laço vira failed na 3ª queda', () => {
     q.enqueue('download_audio', 'k', {})
     for (let i = 0; i < 3; i++) {
@@ -459,8 +521,8 @@ describe('JobQueue', () => {
       expect(diag[0]).toMatch(/^queue_summary /)
     })
 
-    it('prazos padrão: download 120 s, transcrição 180 s, perfil 60 s, alertas 90 s', () => {
-      expect(DEFAULT_JOB_TIMEOUTS_MS).toEqual({ download_audio: 120_000, transcribe: 180_000, fetch_profile: 60_000, classify: 90_000 })
+    it('prazos padrão: download 120 s, transcrição 180 s, perfil 60 s, alertas 90 s, envio 60 s', () => {
+      expect(DEFAULT_JOB_TIMEOUTS_MS).toEqual({ download_audio: 120_000, transcribe: 180_000, fetch_profile: 60_000, classify: 90_000, send_message: 60_000 })
     })
   })
 

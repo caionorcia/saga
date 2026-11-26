@@ -2,7 +2,7 @@ import type { Clock } from '../clock'
 import type { Repo, JobRow } from '../db/repo'
 import type { RateLimiter } from './limiter'
 
-export type JobType = 'download_audio' | 'transcribe' | 'fetch_profile' | 'classify'
+export type JobType = 'download_audio' | 'transcribe' | 'fetch_profile' | 'classify' | 'send_message'
 /** `signal` é abortado quando o job estoura o prazo do tipo (o resultado atrasado é descartado). */
 export type Handler = (payload: any, signal?: AbortSignal) => Promise<void>
 export type TickResult = 'ran' | 'idle' | 'paused' | 'waiting'
@@ -41,8 +41,16 @@ export const DEFAULT_JOB_TIMEOUTS_MS: Record<JobType, number> = {
   download_audio: 120_000,
   transcribe: 180_000,
   fetch_profile: 60_000,
-  classify: 90_000
+  classify: 90_000,
+  // "digitando…" (até 8,5 s) + o envio + marcar como lida
+  send_message: 60_000
 }
+
+/**
+ * Tipos que nunca tentam de novo sozinhos: uma falha (ou o app fechando no meio) é definitiva. Um envio só sai de novo
+ * com uma nova confirmação do mentor ("nunca reenviar no escuro").
+ */
+export const NO_AUTO_RETRY: ReadonlySet<JobType> = new Set(['send_message'])
 const SUMMARY_EVERY_MS = 5 * 60_000
 
 export interface JobQueueOpts {
@@ -167,7 +175,8 @@ export class JobQueue {
 
   private failJob(job: JobRow, msg: string): void {
     const attempts = job.attempts + 1
-    const next = attempts >= BACKOFF_MS.length ? null : this.clock.now() + BACKOFF_MS[attempts - 1]
+    const final = attempts >= BACKOFF_MS.length || NO_AUTO_RETRY.has(job.type as JobType)
+    const next = final ? null : this.clock.now() + BACKOFF_MS[attempts - 1]
     this.repo.markJobFailed(job.id, attempts, msg, next)
     if (next === null) this.notify(this.failedListeners, { ...job, status: 'failed', attempts, lastError: msg })
   }

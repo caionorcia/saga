@@ -36,8 +36,23 @@ describe('SettingsStore', () => {
       claudeModel: 'claude-opus-5-5',
       groqModel: DEFAULT_GROQ_MODEL,
       theme: 'system',
-      keys: { groq: false, claude: false, openai: false }
+      keys: { groq: false, claude: false, openai: false },
+      // v0.4.0: envio direto ligado, com "digitando…", marcar como lida e citar nos grupos
+      directSend: true,
+      sendTyping: true,
+      sendMarkRead: true,
+      sendQuoteInGroups: true
     })
+  })
+
+  it('envio direto: liga/desliga cada opção; recusa valor que não é sim/não', () => {
+    const st = new SettingsStore(repo, fakeCipher())
+    expect(st.sendOptions()).toEqual({ enabled: true, typing: true, markRead: true, quoteInGroups: true })
+    st.save({ directSend: false, sendMarkRead: false })
+    expect(st.sendOptions()).toEqual({ enabled: false, typing: true, markRead: false, quoteInGroups: true })
+    expect(st.get()).toMatchObject({ directSend: false, sendTyping: true, sendMarkRead: false, sendQuoteInGroups: true })
+    expect(() => st.save({ sendTyping: 'sim' as any })).toThrow(/sendTyping/)
+    expect(st.get().sendTyping).toBe(true)
   })
 
   it('tema: Automático por padrão; salva Claro/Escuro; recusa valor desconhecido sem gravar nada', () => {

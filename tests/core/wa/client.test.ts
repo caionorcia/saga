@@ -10,6 +10,9 @@ import { JobQueue, type JobType } from '../../../src/core/queue/queue'
 import { LIMITS, RateLimiter } from '../../../src/core/queue/limiter'
 import { WhatsAppClient, type ConnState } from '../../../src/core/wa/client'
 import { useAtomicAuthState } from '../../../src/core/wa/authState'
+import { sendJobKey } from '../../../src/core/db/sendRepo'
+import { chatHash } from '../../../src/core/send/logic'
+import { DEFAULT_SEND_OPTIONS, typingMs, type SendOptions } from '../../../src/shared/send'
 
 const DAY = 86_400_000
 const NOW = 1_764_000_000_000
@@ -22,6 +25,12 @@ const OWN_LID = '777000:3@lid'
 const GRP = '120363025555555555@g.us'
 const GRP2 = '120363026666666666@g.us'
 
+/**
+ * Métodos de escrita do socket. Os três primeiros só podem ser chamados pelo caminho de envio (job `send_message`,
+ * criado depois da confirmação do mentor): fora do bloco "envio direto" nenhum teste pode vê-los chamados; dentro dele,
+ * só eles, e só tantas vezes quantos envios saíram da fila. Os outros nunca.
+ */
+const SEND_PATH = ['sendMessage', 'sendPresenceUpdate', 'readMessages'] as const
 const FORBIDDEN = [
   'sendMessage',
   'readMessages',
@@ -120,6 +129,9 @@ describe('WhatsAppClient', () => {
   let fetchVersion: ReturnType<typeof vi.fn>
   let waRevision: number
   let diagLines: Array<[string, string]>
+  /** o bloco "envio direto" libera os métodos do caminho de envio (só eles) */
+  let allowSendPath: boolean
+  let sendOpts: SendOptions
 
   const last = () => sockets[sockets.length - 1]
   const advance = async (ms: number) => {
@@ -144,7 +156,8 @@ describe('WhatsAppClient', () => {
     limiters = {
       download_audio: new RateLimiter(LIMITS.wa_media, clock, () => 0),
       transcribe: new RateLimiter(LIMITS.groq_audio, clock, () => 0),
-      fetch_profile: new RateLimiter(LIMITS.wa_profile, clock, () => 0)
+      fetch_profile: new RateLimiter(LIMITS.wa_profile, clock, () => 0),
+      send_message: new RateLimiter(LIMITS.wa_send, clock, () => 0)
     }
     queue = new JobQueue(repo, clock, limiters)
     sockets = []
@@ -157,7 +170,10 @@ describe('WhatsAppClient', () => {
     waRevision = 1_100_000_001
     fetchVersion = vi.fn(async () => ({ version: [2, 3000, waRevision] as [number, number, number], isLatest: true }))
     diagLines = []
+    allowSendPath = false
+    sendOpts = { ...DEFAULT_SEND_OPTIONS }
     client = new WhatsAppClient({
+      sendOptions: () => sendOpts,
       fetchWaVersion: fetchVersion as any,
       diag: (k, d) => diagLines.push([k, d]),
       repo,
@@ -196,7 +212,18 @@ describe('WhatsAppClient', () => {
 
   afterEach(async () => {
     await client.stop()
-    for (const s of sockets) for (const name of FORBIDDEN) expect(s.spies[name]).not.toHaveBeenCalled()
+    for (const s of sockets) {
+      for (const name of FORBIDDEN) {
+        if (allowSendPath && (SEND_PATH as readonly string[]).includes(name)) continue
+        expect(s.spies[name], name).not.toHaveBeenCalled()
+      }
+    }
+    if (allowSendPath) {
+      // cada sendMessage corresponde a um envio confirmado que saiu da fila (nunca dois para o mesmo envio)
+      const left = repo.sends.listByStatus('typing', 'sending', 'sent', 'failed', 'unknown').length
+      const sent = sockets.reduce((n, s) => n + s.spies.sendMessage.mock.calls.length, 0)
+      expect(sent).toBeLessThanOrEqual(left)
+    }
     vi.useRealTimers()
     rmSync(tmp, { recursive: true, force: true })
   })
@@ -1129,6 +1156,213 @@ describe('WhatsAppClient', () => {
       for (const s of spies) expect(s).not.toHaveBeenCalled()
       client.onResumeFromSleep(3_600_001)
       for (const s of spies) expect(s).toHaveBeenCalledTimes(1)
+    })
+  })
+  describe('envio direto (o único caminho que escreve no WhatsApp)', () => {
+    let log: string[]
+
+    const open = () => emit('connection.update', { connection: 'open' })
+    /** uma resposta aprovada + o envio na fila, como o serviço faz depois da confirmação */
+    const queueSend = (jid: string, text: string) => {
+      const replyId = repo.insertApproved({ jid, contextText: 'ctx', originalSuggestion: text, finalText: text, provider: 'groq' })
+      const { send } = repo.sends.enqueue({ idemKey: `${replyId}:x`, replyId, jid, text })
+      queue.enqueue('send_message', sendJobKey(send), { sendId: send.id }, 20)
+      return send
+    }
+    /** roda um tick da fila deixando o "digitando…" passar */
+    const runSend = async (ms = 20_000) => {
+      const t = queue.tick()
+      await vi.advanceTimersByTimeAsync(ms)
+      return t
+    }
+    const spyLog = (s: FakeSocket) => {
+      s.spies.sendPresenceUpdate.mockImplementation(async (type: string, jid?: string) => void log.push(`presence:${type}${jid ? `:${jid}` : ''}`))
+      s.spies.sendMessage.mockImplementation(async (jid: string) => {
+        log.push(`send:${jid}`)
+        return { key: { id: 'WA-OUT-1' } }
+      })
+      s.spies.readMessages.mockImplementation(async (keys: any[]) => void log.push(`read:${keys.map((k) => k.id).join(',')}`))
+    }
+
+    beforeEach(async () => {
+      allowSendPath = true
+      log = []
+      await emit('messaging-history.set', {
+        chats: [],
+        contacts: [],
+        messages: [
+          wamsg({ id: 'c0', ts: NOW - 3 * 3_600_000, text: 'antes' }),
+          wamsg({ id: 'm0', ts: NOW - 2 * 3_600_000, fromMe: true, text: 'resposta antiga' }),
+          wamsg({ id: 'c1', ts: NOW - 3_600_000, text: 'pergunta 1' }),
+          { ...wamsg({ id: 'c2', ts: NOW - 60_000, text: 'pergunta 2' }), key: { remoteJid: '999:2@lid', remoteJidAlt: JID, fromMe: false, id: 'c2' } },
+          wamsg({ id: 'other', jid: JID2, ts: NOW - 60_000, text: 'outra conversa' }),
+          wamsg({ id: 'g0', jid: GRP, participant: JID2, ts: NOW - 50_000, text: 'me ajuda @mentor?', contextInfo: { mentionedJid: [OWN] } }),
+          wamsg({ id: 'g1', jid: GRP, participant: '888:1@lid', ts: NOW - 40_000, text: 'eu também' })
+        ]
+      })
+    })
+
+    it('sem envio na fila nada é escrito; com a conexão fechada o envio espera (nada chamado)', async () => {
+      queueSend(JID, 'Oi!')
+      // ainda "connecting": o tipo send_message está pausado
+      expect(await queue.tick()).toBe('idle')
+      for (const name of SEND_PATH) expect(last().spies[name]).not.toHaveBeenCalled()
+      await open()
+      await close(408)
+      expect(await queue.tick()).toBe('idle')
+      for (const name of SEND_PATH) expect(last().spies[name]).not.toHaveBeenCalled()
+    })
+
+    it('1:1: "digitando…" pelo tempo do texto → parou → envia sem citar → lidas só desta conversa → indisponível', async () => {
+      await open()
+      spyLog(last())
+      const text = 'Oi! Te respondo já.'
+      const s = queueSend(JID, text)
+      const t = queue.tick()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(log).toEqual([`presence:composing:${JID}`])
+      expect(repo.sends.get(s.id)!.status).toBe('typing')
+      await vi.advanceTimersByTimeAsync(typingMs(text, 0.5) - 1)
+      expect(log).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await t
+      expect(log).toEqual([`presence:composing:${JID}`, `presence:paused:${JID}`, `send:${JID}`, 'read:c1,c2', 'presence:unavailable'])
+      expect(last().spies.sendMessage).toHaveBeenCalledWith(JID, { text }, undefined)
+      // a chave original (o @lid como veio), só as mensagens do contato depois da última resposta do mentor, só desta conversa
+      expect(last().spies.readMessages).toHaveBeenCalledWith([
+        { remoteJid: JID, id: 'c1', fromMe: false },
+        { remoteJid: '999:2@lid', id: 'c2', fromMe: false }
+      ])
+      const after = repo.sends.get(s.id)!
+      expect(after).toMatchObject({ status: 'sent', waMsgId: 'WA-OUT-1', error: null })
+      expect(repo.getApproved(after.replyId)!.sentText).toBe(text)
+      // registro: uma linha por etapa, com o envio e a impressão da conversa; nunca o texto nem o jid
+      const lines = diagLines.filter(([k]) => k.startsWith('send_'))
+      expect(lines.map(([k]) => k)).toEqual(['send_typing', 'send_sent'])
+      for (const [, d] of lines) {
+        expect(d).toContain(`send #${s.id} chat=${chatHash(JID)}`)
+        expect(d).not.toContain(text)
+        expect(d).not.toContain('5547999998888')
+      }
+    })
+
+    it('grupo: cita a mensagem que menciona o mentor (chave original) e marca como lidas só as do grupo', async () => {
+      await open()
+      spyLog(last())
+      queueSend(GRP, 'Claro, vamos ver isso!')
+      await runSend()
+      const [jid, content, opts] = last().spies.sendMessage.mock.calls[0]
+      expect(jid).toBe(GRP)
+      expect(content).toEqual({ text: 'Claro, vamos ver isso!' })
+      expect(opts.quoted.key).toEqual({ remoteJid: GRP, id: 'g0', fromMe: false, participant: JID2 })
+      expect(opts.quoted.message).toEqual({ conversation: 'me ajuda @mentor?' })
+      expect(last().spies.readMessages).toHaveBeenCalledWith([
+        { remoteJid: GRP, id: 'g0', fromMe: false, participant: JID2 },
+        { remoteJid: GRP, id: 'g1', fromMe: false, participant: '888:1@lid' }
+      ])
+    })
+
+    it('grupo sem menção: cita a mais recente do contato; opções desligadas: sem citar, sem "digitando", sem marcar como lida', async () => {
+      await emit('messages.upsert', { messages: [wamsg({ id: 'gm', jid: GRP, fromMe: true, ts: NOW - 30_000, text: 'respondi' }), wamsg({ id: 'g2', jid: GRP, participant: JID2, ts: NOW - 20_000, text: 'valeu, e agora?' })] })
+      await open()
+      spyLog(last())
+      queueSend(GRP, 'Agora é a parte 2.')
+      await runSend()
+      expect(last().spies.sendMessage.mock.calls[0][2].quoted.key.id).toBe('g2')
+
+      sendOpts = { enabled: true, typing: false, markRead: false, quoteInGroups: false }
+      log = []
+      clock.advance(120_000)
+      queueSend(GRP, 'Outra coisa.')
+      await runSend(0)
+      expect(log).toEqual([`send:${GRP}`, 'presence:unavailable'])
+      expect(last().spies.sendMessage.mock.calls[1]).toEqual([GRP, { text: 'Outra coisa.' }, undefined])
+    })
+
+    it('nunca inicia conversa: sem mensagem do contato nos últimos 30 dias → não envia (failed)', async () => {
+      clock.advance(31 * DAY)
+      await open()
+      const s = queueSend(JID, 'Oi, sumido!')
+      await runSend()
+      for (const name of SEND_PATH) expect(last().spies[name]).not.toHaveBeenCalled()
+      expect(repo.sends.get(s.id)).toMatchObject({ status: 'failed' })
+      expect(diagLines.some(([k]) => k === 'send_failed')).toBe(true)
+    })
+
+    it('mais de 10 min na fila, cancelado ou envio direto desligado: não envia', async () => {
+      const old = queueSend(JID, 'velho')
+      clock.advance(10 * 60_000 + 1)
+      await open()
+      await runSend()
+      expect(repo.sends.get(old.id)!.status).toBe('expired')
+
+      const c = queueSend(JID, 'cancelado')
+      repo.sends.transition(c.id, ['queued'], 'canceled')
+      clock.advance(120_000)
+      await runSend()
+      expect(repo.sends.get(c.id)!.status).toBe('canceled')
+
+      sendOpts = { ...sendOpts, enabled: false }
+      const off = queueSend(JID, 'desligado')
+      clock.advance(120_000)
+      await runSend()
+      expect(repo.sends.get(off.id)!.status).toBe('expired')
+      for (const name of SEND_PATH) expect(last().spies[name]).not.toHaveBeenCalled()
+    })
+
+    it('o WhatsApp não confirmou: estado desconhecido (sem reenviar); já aparece na conversa → enviada', async () => {
+      await open()
+      last().spies.sendMessage.mockRejectedValue(new Error('Timed Out'))
+      const s = queueSend(JID, 'Pode sim!')
+      await runSend()
+      expect(repo.sends.get(s.id)).toMatchObject({ status: 'unknown' })
+      expect(diagLines.filter(([k]) => k === 'send_unknown')).toHaveLength(1)
+      clock.advance(3_600_000)
+      await runSend()
+      expect(last().spies.sendMessage).toHaveBeenCalledTimes(1)
+
+      // a mensagem saiu mesmo (o eco chegou antes): conferida na conversa
+      await emit('messages.upsert', { messages: [wamsg({ id: 'echo', fromMe: true, ts: NOW + 3_600_000 + 1_000, text: 'Tudo certo.' })] })
+      const s2 = queueSend(JID, 'Tudo certo.')
+      await runSend()
+      expect(repo.sends.get(s2.id)).toMatchObject({ status: 'sent', waMsgId: 'echo' })
+    })
+
+    it('a conexão cai no meio do envio: desconhecido na hora; a fila nunca reenvia', async () => {
+      await open()
+      let release: (v: unknown) => void = () => {}
+      last().spies.sendMessage.mockImplementation(() => new Promise((r) => (release = r)))
+      const s = queueSend(JID, 'Já vai!')
+      const t = queue.tick()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(repo.sends.get(s.id)!.status).toBe('sending')
+      await close(408)
+      expect(repo.sends.get(s.id)).toMatchObject({ status: 'unknown', error: 'a conexão caiu durante o envio' })
+      // a resposta atrasada do WhatsApp confirma: vira enviada
+      release({ key: { id: 'late' } })
+      await t
+      expect(repo.sends.get(s.id)).toMatchObject({ status: 'sent', waMsgId: 'late' })
+      clock.advance(3_600_000)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(sockets[0].spies.sendMessage).toHaveBeenCalledTimes(1)
+    })
+
+    it('"digitando" falhou ou a conexão caiu durante o "digitando": não enviada (failed), sem enviar', async () => {
+      await open()
+      last().spies.sendPresenceUpdate.mockRejectedValueOnce(new Error('Connection Closed'))
+      const a = queueSend(JID, 'um')
+      await runSend()
+      expect(repo.sends.get(a.id)!.status).toBe('failed')
+
+      clock.advance(120_000)
+      const b = queueSend(JID, 'dois')
+      const t = queue.tick()
+      await vi.advanceTimersByTimeAsync(100)
+      await close(408)
+      await vi.advanceTimersByTimeAsync(10_000)
+      await t
+      expect(repo.sends.get(b.id)).toMatchObject({ status: 'failed', error: 'a conexão caiu antes de enviar' })
+      for (const s of sockets) expect(s.spies.sendMessage).not.toHaveBeenCalled()
     })
   })
 })

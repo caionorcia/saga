@@ -45,14 +45,16 @@ function Welcome({ onNext }: { onNext: () => void }) {
       <h1>Bem-vindo ao Saga</h1>
       <p>
         O Saga lê as conversas do seu WhatsApp, transcreve os áudios e sugere respostas para você revisar. Ele
-        <strong> nunca envia mensagens</strong>: você copia o texto e cola no WhatsApp.
+        <strong> só envia uma mensagem quando você clica em Enviar e confirma</strong>; se preferir, copie o texto e cole no
+        WhatsApp.
       </p>
       <div className="notice" role="note">
         <strong>Antes de começar, um aviso importante</strong>
         <p>
           O Saga se conecta ao WhatsApp como um aparelho vinculado (o mesmo que o WhatsApp Web). Esse tipo de uso não é
-          oficial, e existe um pequeno risco de o WhatsApp limitar a conta. Para reduzir esse risco, o Saga só lê, vai
-          devagar e nunca marca nada como lido.
+          oficial, e existe um pequeno risco de o WhatsApp limitar a conta. Para reduzir esse risco, o Saga vai devagar,
+          só responde a quem falou com você nos últimos 30 dias, só envia o que você confirma e só marca como lida a
+          conversa que você respondeu.
         </p>
       </div>
       <div className="wizard-actions">

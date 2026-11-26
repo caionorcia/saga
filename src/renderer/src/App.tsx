@@ -117,6 +117,22 @@ function Main({
   const [alerts, setAlerts] = useState<Alert[]>([])
   /** a conversa não precisa de resposta e a IA não foi chamada (sem resumo) */
   const [skipped, setSkipped] = useState(false)
+  /** "Envio direto" ligado: o texto do painel fala do botão Enviar */
+  const [directSend, setDirectSend] = useState(false)
+  useEffect(() => {
+    let alive = true
+    try {
+      window.saga
+        .getSettings()
+        .then((st) => alive && setDirectSend(st.directSend === true))
+        .catch(() => {})
+    } catch {
+      // sem configurações: fica o texto de copiar e colar
+    }
+    return () => {
+      alive = false
+    }
+  }, [contact?.jid])
   /** busca geral: a mensagem para rolar e destacar na conversa aberta */
   const [focusMsg, setFocusMsg] = useState<{ jid: string; id: string; seq: number } | null>(null)
 
@@ -187,9 +203,10 @@ function Main({
       <aside className="suggestions" aria-label="Sugestões de resposta">
         <h2>Sugestões de resposta</h2>
         <p className="muted small">
-          {contact?.isGroup
-            ? 'Mensagens para você postar no grupo. Edite como quiser, depois copie e cole no grupo do WhatsApp. O Saga não envia nada.'
-            : 'Edite como quiser, depois copie e cole no WhatsApp. O Saga não envia nada.'}
+          {(contact?.isGroup ? 'Mensagens para você postar no grupo. ' : '') +
+            (directSend
+              ? 'Edite como quiser e clique em Enviar (você confirma cada envio), ou copie e cole no WhatsApp.'
+              : `Edite como quiser, depois copie e cole no ${contact?.isGroup ? 'grupo do ' : ''}WhatsApp.`)}
         </p>
         {contact ? <Suggestions key={contact.jid} jid={contact.jid} drafts={drafts.current} onAnalysis={setAnalysis} onSkipped={setSkipped} onOpenSettings={onOpenSettings} /> : <p className="empty">As sugestões aparecem aqui.</p>}
       </aside>

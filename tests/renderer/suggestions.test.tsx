@@ -28,7 +28,11 @@ function install(getAnalysis: () => Promise<AnalysisResult>): void {
     saveReply: vi.fn(async () => 1),
     copyToClipboard: vi.fn(async () => {}),
     onMessages: vi.fn(() => () => {}),
-    listMessages: vi.fn(async () => [])
+    listMessages: vi.fn(async () => []),
+    // v0.4.0: aqui o envio direto fica desligado (o botão Enviar tem os próprios testes em send.test.tsx)
+    getSettings: vi.fn(async () => ({ directSend: false })),
+    listSends: vi.fn(async () => []),
+    onSends: vi.fn(() => () => {})
   }
   ;(window as unknown as { saga: Partial<SagaApi> }).saga = saga as unknown as Partial<SagaApi>
 }

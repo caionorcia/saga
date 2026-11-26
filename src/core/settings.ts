@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { Repo } from './db/repo'
+import type { SendOptions } from '../shared/send'
 import { DEFAULT_CLAUDE_MODEL, DEFAULT_GROQ_MODEL, SETTING_CLAUDE_MODEL, SETTING_GROQ_MODEL } from './ai/llm'
 
 export type Provider = 'groq' | 'claude'
@@ -19,6 +20,14 @@ export interface Settings {
   groqModel: string
   theme: ThemePref
   keys: Record<KeyKind, boolean>
+  /** v0.4.0: "Envio direto" (padrão: ligado). Desligado, o botão Enviar some */
+  directSend: boolean
+  /** v0.4.0: mostrar "digitando…" antes de enviar (padrão: sim) */
+  sendTyping: boolean
+  /** v0.4.0: marcar como lidas as mensagens da conversa respondida (padrão: sim) */
+  sendMarkRead: boolean
+  /** v0.4.0: nos grupos, citar a mensagem respondida (padrão: sim) */
+  sendQuoteInGroups: boolean
 }
 
 /** Campos ausentes ficam como estão; chave `''` apaga a chave. */
@@ -33,6 +42,10 @@ export interface SettingsPatch {
   claudeModel?: string
   groqModel?: string
   theme?: ThemePref
+  directSend?: boolean
+  sendTyping?: boolean
+  sendMarkRead?: boolean
+  sendQuoteInGroups?: boolean
 }
 
 /** Cifra do sistema (no app, o `safeStorage` do Electron). Injetada para o core não depender do Electron. */
@@ -63,8 +76,15 @@ const K = {
   startWithWindows: 'settings.startWithWindows',
   claudeModel: SETTING_CLAUDE_MODEL,
   groqModel: SETTING_GROQ_MODEL,
-  theme: 'settings.theme'
+  theme: 'settings.theme',
+  directSend: 'settings.directSend',
+  sendTyping: 'settings.sendTyping',
+  sendMarkRead: 'settings.sendMarkRead',
+  sendQuoteInGroups: 'settings.sendQuoteInGroups'
 } as const
+
+/** Opções do envio direto: ligadas até o mentor desligar. */
+const SEND_FLAGS = ['directSend', 'sendTyping', 'sendMarkRead', 'sendQuoteInGroups'] as const
 
 /** Configurações que vão na cópia de segurança (nada de chaves nem do que só vale neste computador). */
 const BACKUP_FIELDS = ['provider', 'transcriber', 'dailyCapUsd', 'claudeModel', 'groqModel', 'theme'] as const
@@ -95,8 +115,21 @@ export class SettingsStore {
       claudeModel: this.repo.getSetting(K.claudeModel) || DEFAULT_CLAUDE_MODEL,
       groqModel: this.repo.getSetting(K.groqModel) || DEFAULT_GROQ_MODEL,
       theme: this.theme(),
-      keys: { groq: this.hasKey('groq'), claude: this.hasKey('claude'), openai: this.hasKey('openai') }
+      keys: { groq: this.hasKey('groq'), claude: this.hasKey('claude'), openai: this.hasKey('openai') },
+      ...this.sendFlags()
     }
+  }
+
+  private sendFlags(): Record<(typeof SEND_FLAGS)[number], boolean> {
+    const out = {} as Record<(typeof SEND_FLAGS)[number], boolean>
+    for (const f of SEND_FLAGS) out[f] = this.repo.getSetting(K[f]) !== '0'
+    return out
+  }
+
+  /** As opções do envio direto, lidas na hora de cada envio. */
+  sendOptions(): SendOptions {
+    const f = this.sendFlags()
+    return { enabled: f.directSend, typing: f.sendTyping, markRead: f.sendMarkRead, quoteInGroups: f.sendQuoteInGroups }
   }
 
   /** O tema escolhido (padrão: Automático). Barato: o processo principal lê antes de abrir a janela. */
@@ -174,6 +207,12 @@ export class SettingsStore {
       writes.push([K.theme, patch.theme])
     }
     if (patch.startWithWindows !== undefined) writes.push([K.startWithWindows, patch.startWithWindows ? '1' : '0'])
+    for (const f of SEND_FLAGS) {
+      const v = patch[f]
+      if (v === undefined) continue
+      if (typeof v !== 'boolean') throw new InvalidSettingError(f)
+      writes.push([K[f], v ? '1' : '0'])
+    }
     for (const f of ['claudeModel', 'groqModel'] as const) {
       const v = patch[f]
       if (v === undefined) continue

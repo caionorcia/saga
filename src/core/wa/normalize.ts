@@ -202,8 +202,17 @@ export function normalize(msg: WAMessage, opts: NormalizeOptions = {}): Normaliz
       ? JSON.stringify({ key, message: msg.message, messageTimestamp: msg.messageTimestamp }, BufferJSON.replacer)
       : null,
     durationSec: b.durationSec,
+    // v0.4.0: a chave original da mensagem do contato (citar nos grupos, marcar como lida ao responder)
+    ...(fromMe ? {} : { waKeyJson: waKeyOf(key) }),
     ...group
   }
+}
+
+/** Só o que identifica a mensagem no WhatsApp: a conversa como veio, o id e (grupos) quem mandou, sem conteúdo. */
+function waKeyOf(key: WAMessage['key']): string {
+  const k: { remoteJid: string | null | undefined; id: string | null | undefined; participant?: string } = { remoteJid: key.remoteJid, id: key.id }
+  if (key.participant) k.participant = key.participant
+  return JSON.stringify(k)
 }
 
 /** O que o cliente lê de um participante de grupo do Baileys (`GroupParticipant`): só as formas do JID. */

@@ -22,4 +22,9 @@ export interface NormalizedMessage {
    * respondi a alguém num grupo grande ("Respondido no grupo")
    */
   targets?: string[]
+  /**
+   * v0.4.0, só nas do contato: a chave original no WhatsApp (`{ remoteJid, id, participant? }`, JSON), para citar a
+   * mensagem num grupo e marcar como lida ao responder. Sem conteúdo.
+   */
+  waKeyJson?: string | null
 }

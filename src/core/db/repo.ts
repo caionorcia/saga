@@ -4,6 +4,7 @@ import type { NormalizedMessage } from '../types'
 import { ALERT_KINDS, AI_ALERT_KINDS, GROUP_ANSWER_MAX_MEMBERS, alertSeverity, type AlertKind } from '../../shared/triage'
 import type { KbSource } from '../../shared/kb'
 import { KbRepo } from './kbRepo'
+import { SendRepo } from './sendRepo'
 import { BackupRepo } from './backupRepo'
 import type { GroupAnswer, ReasonCode, ReplyDecision, ReplyDecisionSource, ReplyReasonCode, ReplyVerdict, Verdict } from '../../shared/feedback'
 
@@ -139,6 +140,8 @@ export interface MessageRow {
   senderLabel: string | null
   /** grupo: a mensagem menciona o mentor ou cita uma mensagem dele */
   mentionsMe: boolean
+  /** v0.4.0, só nas do contato: a chave original no WhatsApp (JSON `{ remoteJid, id, participant? }`) */
+  waKeyJson?: string | null
 }
 
 export interface AnalysisRow {
@@ -381,7 +384,8 @@ function toMessage(r: Row): MessageRow {
     senderLabel: r.sender_jid
       ? (r.s_custom ?? (r.s_rank >= NAME_RANK.profile ? r.s_push : null) ?? r.sender_name ?? r.s_push ?? formatPhone(r.sender_jid))
       : null,
-    mentionsMe: r.mentions_me === 1
+    mentionsMe: r.mentions_me === 1,
+    waKeyJson: r.wa_key_json ?? null
   }
 }
 
@@ -423,6 +427,8 @@ const searchWhere = `AND (?2 = 'all' OR (?2 = 'group') = (c.is_group = 1))
 export class Repo {
   /** base de conhecimento (v0.3.0) */
   readonly kb: KbRepo
+  /** envio direto (v0.4.0) */
+  readonly sends: SendRepo
   /** cópia de segurança (v0.3.1) */
   readonly backup: BackupRepo
 
@@ -431,6 +437,7 @@ export class Repo {
     private readonly clock: Clock = systemClock
   ) {
     this.kb = new KbRepo(db, clock)
+    this.sends = new SendRepo(db, clock)
     this.backup = new BackupRepo(db)
   }
 
@@ -910,8 +917,8 @@ export class Repo {
   insertMessage(m: NormalizedMessage): boolean {
     const res = this.db
       .prepare(
-        `INSERT OR IGNORE INTO messages(id, jid, from_me, ts, kind, text, media_key_json, duration_sec, sender_jid, sender_name, mentions_me)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO messages(id, jid, from_me, ts, kind, text, media_key_json, duration_sec, sender_jid, sender_name, mentions_me, wa_key_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         m.id,
@@ -924,7 +931,8 @@ export class Repo {
         m.durationSec,
         m.senderJid ?? null,
         m.senderName ?? null,
-        m.mentionsMe ? 1 : 0
+        m.mentionsMe ? 1 : 0,
+        m.waKeyJson ?? null
       )
     const inserted = Number(res.changes) > 0
     if (inserted && m.fromMe && m.targets?.length) {
@@ -1137,6 +1145,11 @@ export class Repo {
     return rows.map(toApproved)
   }
 
+  getApproved(id: number): ApprovedRow | null {
+    const r = this.db.prepare('SELECT * FROM approved_replies WHERE id = ?').get(id) as Row | undefined
+    return r ? toApproved(r) : null
+  }
+
   setApprovedSentText(id: number, text: string): void {
     this.db.prepare('UPDATE approved_replies SET sent_text = ? WHERE id = ?').run(text, id)
   }
@@ -1220,6 +1233,18 @@ export class Repo {
         .prepare(`SELECT type, MIN(next_run_at) AS n FROM jobs WHERE status = 'pending' GROUP BY type`)
         .all() as Row[]
     ).map((r) => ({ type: r.type, nextRunAt: r.n }))
+  }
+
+  /** O id do job com essa chave (registro de diagnóstico), ou null. */
+  jobIdByKey(key: string): number | null {
+    const r = this.db.prepare('SELECT id FROM jobs WHERE key = ?').get(key) as Row | undefined
+    return r ? Number(r.id) : null
+  }
+
+  /** Conclui sem rodar os jobs pendentes de um tipo (envios que ficaram na fila quando o app fechou). Quantos. */
+  finishPendingJobs(type: string): number {
+    const res = this.db.prepare(`UPDATE jobs SET status = 'done' WHERE type = ? AND status IN ('pending', 'failed')`).run(type)
+    return Number(res.changes)
   }
 
   markJobRunning(id: number): void {

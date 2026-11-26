@@ -18,8 +18,10 @@ import type {
   MessageView,
   RecentEvent,
   SagaApi,
+  SendView,
   SettingsView
 } from '../../../shared/api'
+import { NOT_CONFIRMED_TEXT, SEND_LIMITS, SEND_REFUSAL_TEXT } from '../../../shared/send'
 
 export const DEFAULT_STATE: AppState = {
   conn: 'open',
@@ -52,6 +54,10 @@ export interface FakeControl {
   setState(patch: Partial<AppState>): void
   /** o que a próxima exportação de avaliações devolve */
   setExportOutcome(o: 'saved' | 'canceled'): void
+  /** muda um envio (pré-visualização e testes: "digitando…", enviada, não sei se foi) e avisa a conversa */
+  setSend(id: number, patch: Partial<SendView>): void
+  /** o último envio criado (ou null) */
+  lastSend(): SendView | null
   calls: Array<{ method: string; args: unknown[] }>
 }
 
@@ -64,6 +70,14 @@ export interface FakeOptions {
   theme?: SettingsView['theme']
   /** sem base de conhecimento de demonstração */
   emptyKb?: boolean
+  /** "Envio direto" (padrão: ligado) */
+  directSend?: boolean
+  /**
+   * envio simulado: em quanto tempo sai da fila (padrão 42 s) e se depois avança sozinho para "digitando…" e "enviada"
+   * (padrão: sim; `false` deixa na fila até `setSend`)
+   */
+  sendEtaMs?: number
+  sendAutoAdvance?: boolean
 }
 
 const EXTRA_SUGGESTION = 'Combinado! Qualquer coisa me avisa por aqui.'
@@ -155,7 +169,11 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     claudeModel: 'claude',
     groqModel: 'groq',
     theme: opts.theme ?? 'system',
-    keys: { groq: true, claude: false, openai: false }
+    keys: { groq: true, claude: false, openai: false },
+    directSend: opts.directSend ?? true,
+    sendTyping: true,
+    sendMarkRead: true,
+    sendQuoteInGroups: true
   }
   const stateListeners = new Set<(s: AppState) => void>()
   const contactListeners = new Set<() => void>()
@@ -165,6 +183,35 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   /** escolha por contato (Copiar/Salvar), guardada com a análise atual; some quando se gera de novo */
   const chosen = new Map<string, { index: number; replyId: number }>()
   const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+  /** envio direto simulado (nada sai daqui) */
+  const sends = new Map<string, SendView[]>()
+  const sendListeners = new Set<{ jid: string; cb: () => void }>()
+  const sendTokens = new Map<string, { jid: string; text: string; expiresAt: number }>()
+  let sendSeq = 0
+  let tokenSeq = 0
+  const notifySends = (jid: string) => sendListeners.forEach((l) => l.jid === jid && l.cb())
+  const findSend = (id: number) => [...sends.values()].flat().find((x) => x.id === id) ?? null
+  const patchSend = (id: number, patch: Partial<SendView>) => {
+    const sv = findSend(id)
+    if (!sv) return
+    Object.assign(sv, patch)
+    notifySends(sv.jid)
+  }
+  /** grupo: a mensagem citada (a mais recente que menciona o mentor depois da última dele; senão a mais recente) */
+  const quoteOf = (c: DemoContact) => {
+    let i = c.messages.length
+    while (i > 0 && !c.messages[i - 1].fromMe) i--
+    const pending = c.messages.slice(i)
+    return [...pending].reverse().find((m) => m.mentionsMe) ?? pending[pending.length - 1] ?? null
+  }
+  const sendRefusal = (jid: string, text: string) => {
+    if (!settings.directSend) return 'disabled' as const
+    if (!text.trim()) return 'empty' as const
+    const c = find(jid)
+    if (!c) return 'unknown_chat' as const
+    if (!c.messages.some((m) => !m.fromMe && m.ts >= Date.now() - SEND_LIMITS.recentContactMs)) return 'no_recent_contact' as const
+    return null
+  }
 
   const snapshot = (): AppState => {
     const visible = demo.filter((c) => !hidden.has(c.jid))
@@ -324,6 +371,11 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       return () => void contactListeners.delete(cb)
     },
     onMessages: () => () => {},
+    onSends: (jid, cb) => {
+      const l = { jid, cb }
+      sendListeners.add(l)
+      return () => void sendListeners.delete(l)
+    },
 
     listContacts: async (includeHidden, kind = 'all') =>
       demo
@@ -474,6 +526,71 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       } catch {
         // sem permissão na pré-visualização: ignora
       }
+    },
+
+    prepareSend: async (input) => {
+      record('prepareSend', [input], undefined)
+      const text = input.text.trim()
+      const code = sendRefusal(input.jid, text)
+      if (code) return { ok: false, code, message: SEND_REFUSAL_TEXT[code] }
+      const c = find(input.jid)!
+      const token = `00000000-0000-4000-9000-${String(++tokenSeq).padStart(12, '0')}`
+      const expiresAt = Date.now() + SEND_LIMITS.tokenTtlMs
+      sendTokens.set(token, { jid: input.jid, text, expiresAt })
+      const q = c.isGroup && settings.sendQuoteInGroups ? quoteOf(c) : null
+      const body = q ? (q.text ?? q.transcript ?? '[áudio]') : ''
+      return {
+        ok: true,
+        preview: {
+          token,
+          expiresAt,
+          jid: input.jid,
+          text,
+          recipient: { name: displayName(c), phone: c.isGroup ? null : formatDemoPhone(c.jid), isGroup: c.isGroup },
+          quote: q ? { senderName: q.senderName ?? 'Participante', text: body.length > 140 ? `${body.slice(0, 139)}…` : body } : null,
+          options: { enabled: settings.directSend, typing: settings.sendTyping, markRead: settings.sendMarkRead, quoteInGroups: settings.sendQuoteInGroups }
+        }
+      }
+    },
+    sendReply: async (input) => {
+      record('sendReply', [input], undefined)
+      const t = sendTokens.get(input.token)
+      sendTokens.delete(input.token)
+      const text = input.text.trim()
+      if (!t || t.expiresAt <= Date.now() || t.jid !== input.jid || t.text !== text) return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
+      const code = sendRefusal(input.jid, text)
+      if (code) return { ok: false, code, message: SEND_REFUSAL_TEXT[code] }
+      const rid = input.replyId ?? (await api.saveReply({ jid: input.jid, originalSuggestion: input.originalSuggestion ?? null, finalText: text, analysisLastMsgId: input.analysisLastMsgId, chosenIndex: input.chosenIndex }))
+      const list = sends.get(input.jid) ?? []
+      const same = list.find((x) => x.replyId === rid && x.text === text)
+      if (same && ['queued', 'typing', 'sending', 'sent'].includes(same.status)) return { ok: true, send: { ...same } }
+      const now = Date.now()
+      const eta = opts.sendEtaMs ?? 42_000
+      const sv: SendView = same ?? { id: ++sendSeq, jid: input.jid, replyId: rid, text, status: 'queued', queuedAt: now, etaAt: now + eta, waitingFor: null, sentAt: null, error: null }
+      Object.assign(sv, { status: 'queued', queuedAt: now, etaAt: now + eta, sentAt: null, error: null })
+      if (!same) sends.set(input.jid, [sv, ...list])
+      if (opts.sendAutoAdvance !== false) {
+        setTimeout(() => {
+          if (sv.status !== 'queued') return
+          patchSend(sv.id, { status: 'typing', etaAt: null })
+          setTimeout(() => sv.status === 'typing' && patchSend(sv.id, { status: 'sent', sentAt: Date.now() }), 3_000)
+        }, eta)
+      }
+      notifySends(input.jid)
+      return { ok: true, send: { ...sv } }
+    },
+    cancelSend: async (id) => {
+      record('cancelSend', [id], undefined)
+      const sv = findSend(id)
+      if (!sv || sv.status !== 'queued') return false
+      patchSend(id, { status: 'canceled', etaAt: null })
+      return true
+    },
+    listSends: async (jid) => (sends.get(jid) ?? []).map((x) => ({ ...x })),
+    checkSend: async (id) => {
+      record('checkSend', [id], undefined)
+      const sv = findSend(id)
+      return sv ? { ...sv } : null
     },
 
     renameContact: async (jid, name) => {
@@ -627,8 +744,22 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     },
     setExportOutcome(o) {
       exportOutcome = o
+    },
+    setSend(id, patch) {
+      patchSend(id, patch)
+    },
+    lastSend() {
+      const all = [...sends.values()].flat().sort((a, b) => b.id - a.id)
+      return all[0] ? { ...all[0] } : null
     }
   }
+}
+
+/** `5547999998888@s.whatsapp.net` → `+55 47 99999-8888` (como no app) */
+function formatDemoPhone(jid: string): string {
+  const digits = jid.split('@')[0].replace(/\D/g, '')
+  const m = /^55(\d{2})(\d{4,5})(\d{4})$/.exec(digits)
+  return m ? `+55 ${m[1]} ${m[2]}-${m[3]}` : `+${digits}`
 }
 
 declare global {

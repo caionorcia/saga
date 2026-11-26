@@ -68,6 +68,11 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     regenerate: (jid) => service.regenerate(String(jid)),
     saveReply: (input) => service.saveReply(input),
     copyToClipboard: async (text) => clipboard.writeText(String(text)),
+    prepareSend: (input) => service.prepareSend({ jid: String(input.jid), text: String(input.text) }),
+    sendReply: (input) => service.sendReply(input),
+    cancelSend: (id) => service.cancelSend(Number(id)),
+    listSends: (jid) => service.listSends(String(jid)),
+    checkSend: (id) => service.checkSend(Number(id)),
     renameContact: (jid, name) => service.renameContact(String(jid), String(name)),
     setNotes: (jid, text) => service.setNotes(String(jid), String(text)),
     pauseAll: () => service.pauseAll(),
@@ -214,10 +219,13 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
   ]
   const onMsg = (jid: string) => send(EVENTS.messages, jid)
   service.on('messages', onMsg)
+  const onSends = (jid: string) => send(EVENTS.sends, jid)
+  service.on('sends', onSends)
 
   return () => {
     for (const m of INVOKE_METHODS) ipcMain.removeHandler(invokeChannel(m))
     for (const off of offs) off()
     service.off('messages', onMsg)
+    service.off('sends', onSends)
   }
 }

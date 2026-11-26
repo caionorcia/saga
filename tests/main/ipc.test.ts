@@ -196,3 +196,31 @@ describe('IPC da cópia de segurança', () => {
     expect(saved).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('IPC do envio direto', () => {
+  it('recusa origem estranha e argumentos inválidos sem chamar o serviço; repassa o pedido confirmado', async () => {
+    const refused: string[] = []
+    const service = {
+      sendReply: vi.fn(async () => ({ ok: false, code: 'not_confirmed', message: 'x' })),
+      prepareSend: vi.fn(async () => ({ ok: false, code: 'disabled', message: 'x' })),
+      onState: vi.fn(() => () => {}),
+      onContactsChanged: vi.fn(() => () => {}),
+      on: vi.fn(),
+      off: vi.fn()
+    }
+    const off = registerIpc(service as never, { getWindow: () => null, isTrustedSender: (u) => u === APP, onRefused: (m) => refused.push(m) })
+    try {
+      const input = { token: '0f8e4f9a-3c1b-4d2e-9a7b-1c2d3e4f5a6b', jid: '5547999998888@s.whatsapp.net', text: 'Oi!' }
+      await expect(call('sendReply', 'https://evil.example/', input)).rejects.toThrow(/origem não confiável/)
+      await expect(call('sendReply', APP, { ...input, token: 'x' })).rejects.toThrow(/argumentos inválidos/)
+      expect(service.sendReply).not.toHaveBeenCalled()
+      expect(refused).toEqual(['sendReply'])
+      await call('sendReply', APP, input)
+      expect(service.sendReply).toHaveBeenCalledWith(input)
+      await call('prepareSend', APP, { jid: input.jid, text: 'Oi!' })
+      expect(service.prepareSend).toHaveBeenCalledWith({ jid: input.jid, text: 'Oi!' })
+    } finally {
+      off()
+    }
+  })
+})

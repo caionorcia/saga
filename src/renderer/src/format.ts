@@ -250,3 +250,35 @@ export function alertChipLabel(kind: AlertKind, waitingSince: number | null, now
   const d = Math.max(2, Math.floor((now - waitingSince) / 86_400_000))
   return `Esperando ${d} dias`
 }
+
+/** Segundos para "envia em 42 s" / "envia em 1 min 05 s". */
+function etaText(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000))
+  if (s < 60) return `${s} s`
+  return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`
+}
+
+/** O que o cartão mostra sobre o envio (v0.4.0). */
+export function sendStatusText(s: import('../../shared/send').SendView, now = Date.now()): string {
+  switch (s.status) {
+    case 'queued':
+      if (s.waitingFor === 'paused') return 'Na fila — pausado (clique em Retomar no topo)'
+      if (s.waitingFor === 'connection') return 'Na fila — esperando o WhatsApp conectar'
+      if (s.etaAt === null || s.etaAt - now <= 0) return 'Na fila — envia já'
+      return `Na fila — envia em ${etaText(s.etaAt - now)}`
+    case 'typing':
+      return 'Digitando…'
+    case 'sending':
+      return 'Enviando…'
+    case 'sent':
+      return s.sentAt ? `Enviada ✓ às ${formatTime(s.sentAt)}` : 'Enviada ✓'
+    case 'failed':
+      return 'Não enviada — tentar de novo'
+    case 'unknown':
+      return 'Não sei se foi enviada — conferir'
+    case 'expired':
+      return 'Não enviada — aguardando confirmação'
+    case 'canceled':
+      return 'Envio cancelado'
+  }
+}

@@ -128,7 +128,18 @@ describe('App: sugestões num grupo', () => {
     render(<App />)
     await waitFor(() => expect(names()).toContain('Mentoria Turma 3 — Negócios'))
     fireEvent.click(row('Mentoria Turma 3 — Negócios'))
-    expect(await screen.findByText(/cole no grupo do WhatsApp/)).toBeTruthy()
+    // v0.4.0: com o envio direto ligado (padrão), o texto fala do Enviar com confirmação
+    expect(await screen.findByText(/Mensagens para você postar no grupo\. Edite como quiser e clique em Enviar \(você confirma cada envio\)/)).toBeTruthy()
     expect(await screen.findByText(/pró-labore entra separado/)).toBeTruthy()
+  })
+
+  it('envio direto desligado: a coluna da direita fala só de copiar e colar no grupo', async () => {
+    const ctl = install()
+    await ctl.api.saveSettings({ directSend: false })
+    render(<App />)
+    await waitFor(() => expect(names()).toContain('Mentoria Turma 3 — Negócios'))
+    fireEvent.click(row('Mentoria Turma 3 — Negócios'))
+    expect(await screen.findByText(/cole no grupo do WhatsApp/)).toBeTruthy()
+    expect(screen.queryByText(/clique em Enviar/)).toBeNull()
   })
 })

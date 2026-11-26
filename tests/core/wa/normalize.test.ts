@@ -22,7 +22,8 @@ describe('normalize', () => {
       kind: 'text',
       text: 'Oi, tudo bem?',
       mediaKeyJson: null,
-      durationSec: null
+      durationSec: null,
+      waKeyJson: JSON.stringify({ remoteJid: JID, id: 'TXT1' })
     })
   })
 
@@ -56,6 +57,7 @@ describe('normalize', () => {
       text: 'mensagem no grupo',
       mediaKeyJson: null,
       durationSec: null,
+      waKeyJson: JSON.stringify({ remoteJid: '120363025555555555@g.us', id: 'GRP1', participant: JID }),
       isGroup: true,
       senderJid: JID,
       senderName: 'Ana',
@@ -73,6 +75,16 @@ describe('normalize', () => {
   it('grupo: mensagem minha não tem remetente nem nome; fromMe igual', () => {
     const n = normalize({ ...make({ conversation: 'eu' }, { remoteJid: '1203@g.us', fromMe: true, participant: '5547900000000@s.whatsapp.net' }), pushName: 'Mentor' } as WAMessage)!
     expect(n).toMatchObject({ jid: '1203@g.us', fromMe: true, isGroup: true, senderJid: null, senderName: null })
+    // a chave original só é guardada nas mensagens do contato (citar e marcar como lida)
+    expect(n.waKeyJson).toBeUndefined()
+  })
+
+  it('mensagem do contato guarda a chave original (@lid como veio, com o participante no grupo), sem conteúdo', () => {
+    const n = normalize(make({ conversation: 'oi' }, { remoteJid: '999:2@lid', remoteJidAlt: '5511988887777@s.whatsapp.net', id: 'L1' } as any))!
+    expect(n.jid).toBe('5511988887777@s.whatsapp.net')
+    expect(JSON.parse(n.waKeyJson!)).toEqual({ remoteJid: '999:2@lid', id: 'L1' })
+    const g = normalize(make({ conversation: 'x' }, { remoteJid: '1203@g.us', participant: '888:1@lid', id: 'G1' }))!
+    expect(JSON.parse(g.waKeyJson!)).toEqual({ remoteJid: '1203@g.us', id: 'G1', participant: '888:1@lid' })
   })
 
   it('grupo: menção ao mentor (telefone ou @lid) ou citação de mensagem dele → mentionsMe', () => {
