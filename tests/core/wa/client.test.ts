@@ -362,6 +362,24 @@ describe('WhatsAppClient', () => {
           expect(repo.listJobs('done').some((j) => j.type === 'fetch_profile')).toBe(true)
         })
 
+        it('guarda os participantes (telefone e @lid, sem dispositivo) e registra só as contagens', async () => {
+          const LID = '99887766554433@lid'
+          last().groupFetchAllParticipating.mockResolvedValue({
+            [GRP]: {
+              id: GRP,
+              subject: 'Mentoria Turma 3',
+              participants: [{ id: LID, phoneNumber: '5511944443333:7@s.whatsapp.net' }, { id: '5531933332222@s.whatsapp.net' }]
+            } as never,
+            [GRP2]: { id: GRP2, subject: 'Mastermind', participants: [{ id: '55555@lid' }] } as never
+          })
+          last().signalRepository.lidMapping.getPNForLID.mockImplementation(async (l: string) => (l === '55555@lid' ? '5562911110000@s.whatsapp.net' : null))
+          await emit('connection.update', { connection: 'open' })
+          await queue.tick()
+          expect(repo.groupMembers(GRP)).toEqual([LID, '5511944443333@s.whatsapp.net', '5531933332222@s.whatsapp.net'].sort())
+          expect(repo.groupMembers(GRP2)).toEqual(['55555@lid', '5562911110000@s.whatsapp.net'])
+          expect(diagLines.filter(([k]) => k === 'wa_groups')).toEqual([['wa_groups', 'nomes de grupos: 2 grupos, 3 participantes']])
+        })
+
         it('no máximo uma vez a cada 24 h (horário gravado), mesmo reconectando ou reiniciando', async () => {
           await emit('connection.update', { connection: 'open' })
           await queue.tick()
@@ -393,7 +411,7 @@ describe('WhatsAppClient', () => {
           expect(s.groupFetchAllParticipating).not.toHaveBeenCalled()
           const j = groupJobs()[0]
           expect(j.attempts).toBe(0)
-          expect(repo.getSetting('wa.groupsFetchedAt')).toBeNull()
+          expect(repo.getSetting('wa.groupMembersFetchedAt')).toBeNull()
         })
       })
     })
@@ -606,7 +624,7 @@ describe('WhatsAppClient', () => {
   describe('download_audio', () => {
     beforeEach(async () => {
       // nomes dos grupos buscados há pouco: a fila aqui só tem o áudio
-      repo.setSetting('wa.groupsFetchedAt', String(NOW))
+      repo.setSetting('wa.groupMembersFetchedAt', String(NOW))
       await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'AUD1', audio: 37, ts: NOW - 1000 })] })
       await emit('connection.update', { connection: 'open' })
     })
@@ -710,7 +728,7 @@ describe('WhatsAppClient', () => {
 
   describe('fetch_profile', () => {
     it('payload de contato (antigo): não faz chamada de rede: registra e conclui', async () => {
-      repo.setSetting('wa.groupsFetchedAt', String(NOW))
+      repo.setSetting('wa.groupMembersFetchedAt', String(NOW))
       await emit('connection.update', { connection: 'open' })
       repo.upsertContact({ jid: JID })
       queue.enqueue('fetch_profile', `profile:${JID}`, { jid: JID })

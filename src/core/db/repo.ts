@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { systemClock, type Clock } from '../clock'
 import type { NormalizedMessage } from '../types'
 import { ALERT_KINDS, AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../shared/triage'
-import type { ReasonCode, ReplyDecision, ReplyDecisionSource, ReplyReasonCode, ReplyVerdict, Verdict } from '../../shared/feedback'
+import type { GroupAnswer, ReasonCode, ReplyDecision, ReplyDecisionSource, ReplyReasonCode, ReplyVerdict, Verdict } from '../../shared/feedback'
 
 /** Qualidade da fonte do nome guardado em `push_name` (maior vence; empate: o mais novo). */
 export const NAME_RANK = { push: 1, profile: 2, addressBook: 3 } as const
@@ -76,7 +76,11 @@ export interface ContactRow {
    * dispensa resposta (agradecimento, "ok", emoji, conversa de grupo que não é com o mentor…)
    */
   needsReply: boolean
-  /** a decisão sobre a última mensagem do contato (null = ninguém decidiu, ou o mentor falou por último) */
+  /**
+   * a decisão sobre a última mensagem do contato (null = ninguém decidiu, ou o mentor falou por último). `by: 'group'`
+   * (com `group`): conversa individual em que, depois de `waitingSince`, o mentor escreveu num grupo de que o contato
+   * participa; vale até o mentor dizer "Precisa sim".
+   */
   replyDecision: ReplyDecision | null
 }
 
@@ -271,14 +275,38 @@ function toReplyFeedback(r: Row): ReplyFeedbackRow {
   }
 }
 
-/** Decisão vigente: a do mentor vence a do Saga; sem nenhuma, null. */
-function decisionOf(r: Row): ReplyDecision | null {
+/** Texto do motivo quando o mentor respondeu no grupo do contato. */
+export const groupAnswerReason = (g: GroupAnswer) => `Respondido no grupo ${g.name}`
+
+/**
+ * Decisão vigente: a do mentor vence; depois a regra do grupo (o mentor escreveu num grupo do contato depois da
+ * mensagem dele); depois a do Saga (regra de agradecimento ou IA). Sem nenhuma, null.
+ */
+function decisionOf(r: Row, group: GroupAnswer | null): ReplyDecision | null {
   const user = bit(r.rc_user_needs)
   if (user !== null) return { needed: user, by: 'user', reason: null }
+  if (group) return { needed: false, by: 'group', reason: groupAnswerReason(group), group }
   const app = bit(r.rc_app_needs)
   if (app === null) return null
   return { needed: app, by: (r.rc_app_source ?? 'ai') as ReplyDecisionSource, reason: r.rc_app_reason ?? null }
 }
+
+/** SQL: a primeira mensagem do contato depois da última do mentor na conversa `cjid` (só quando ele falou por último). */
+const WAITING_SINCE_SQL = (cjid: string) => `(
+  SELECT MIN(w.ts) FROM messages w
+   WHERE w.jid = ${cjid} AND w.from_me = 0
+     AND w.ts > COALESCE((SELECT MAX(me.ts) FROM messages me WHERE me.jid = ${cjid} AND me.from_me = 1), -1))`
+
+/**
+ * SQL: a mensagem mais recente do mentor, depois de `since`, num grupo de que o contato `cjid` participa (pelos
+ * participantes do grupo ou porque já mandou mensagem lá), como "<ts> <jid do grupo>"; NULL se não houver.
+ */
+const GROUP_ANSWER_SQL = (cjid: string, since: string) => `(
+  SELECT gm.ts || ' ' || gm.jid FROM messages gm
+   WHERE gm.from_me = 1 AND gm.ts > ${since} AND gm.jid LIKE '%@g.us'
+     AND gm.jid IN (SELECT g.group_jid FROM group_members g WHERE g.member_jid = ${cjid}
+                    UNION SELECT s.jid FROM messages s WHERE s.sender_jid = ${cjid})
+   ORDER BY gm.ts DESC LIMIT 1)`
 
 function toApproved(r: Row): ApprovedRow {
   return {
@@ -389,27 +417,29 @@ export class Repo {
     const kind = opts.kind ?? 'all'
     const rows = this.db
       .prepare(
-        `SELECT c.jid, c.push_name, c.custom_name, c.hidden, c.notes, c.is_group,
-                l.ts AS last_ts, l.from_me AS last_from_me,
-                CASE WHEN l.from_me = 0 THEN (
-                  SELECT MIN(w.ts) FROM messages w
-                   WHERE w.jid = c.jid AND w.from_me = 0
-                     AND w.ts > COALESCE((SELECT MAX(me.ts) FROM messages me WHERE me.jid = c.jid AND me.from_me = 1), -1)
-                ) END AS waiting_since,
-                (SELECT group_concat(a.kind) FROM alerts a WHERE a.jid = c.jid AND a.dismissed_at IS NULL) AS alert_kinds,
+        `WITH base AS (
+           SELECT c.jid, c.push_name, c.custom_name, c.hidden, c.notes, c.is_group,
+                  l.id AS last_id, l.ts AS last_ts, l.from_me AS last_from_me,
+                  CASE WHEN l.from_me = 0 THEN ${WAITING_SINCE_SQL('c.jid')} END AS waiting_since
+             FROM contacts c
+             LEFT JOIN messages l ON l.id = (
+               SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
+            WHERE (?1 = 1 OR c.hidden = 0)
+              AND (?2 = 'all' OR (?2 = 'group') = (c.is_group = 1)))
+         SELECT b.*,
+                (SELECT group_concat(a.kind) FROM alerts a WHERE a.jid = b.jid AND a.dismissed_at IS NULL) AS alert_kinds,
                 rc.user_needs AS rc_user_needs, rc.app_needs AS rc_app_needs, rc.app_source AS rc_app_source,
-                rc.app_reason AS rc_app_reason
-           FROM contacts c
-           LEFT JOIN messages l ON l.id = (
-             SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
-           LEFT JOIN reply_checks rc ON rc.jid = c.jid AND rc.msg_id = l.id AND l.from_me = 0
-          WHERE (?1 = 1 OR c.hidden = 0)
-            AND (?2 = 'all' OR (?2 = 'group') = (c.is_group = 1))
-          ORDER BY l.ts IS NULL, l.ts DESC, c.jid`
+                rc.app_reason AS rc_app_reason,
+                CASE WHEN b.is_group = 0 AND b.waiting_since IS NOT NULL
+                     THEN ${GROUP_ANSWER_SQL('b.jid', 'b.waiting_since')} END AS group_answer
+           FROM base b
+           LEFT JOIN reply_checks rc ON rc.jid = b.jid AND rc.msg_id = b.last_id AND b.last_from_me = 0
+          ORDER BY b.last_ts IS NULL, b.last_ts DESC, b.jid`
       )
       .all(opts.includeHidden ? 1 : 0, kind) as Row[]
     return rows.map((r) => {
-      const replyDecision = r.last_from_me === 0 ? decisionOf(r) : null
+      const answeredInGroup = this.parseGroupAnswer(r.group_answer)
+      const replyDecision = r.last_from_me === 0 ? decisionOf(r, answeredInGroup) : null
       return {
         jid: r.jid,
         pushName: r.push_name,
@@ -428,20 +458,91 @@ export class Repo {
     })
   }
 
+  /** "<ts> <jid>" do SQL → o grupo, com o nome exibido. */
+  private parseGroupAnswer(packed: unknown): GroupAnswer | null {
+    if (typeof packed !== 'string') return null
+    const sp = packed.indexOf(' ')
+    const ts = Number(packed.slice(0, sp))
+    const jid = packed.slice(sp + 1)
+    if (sp <= 0 || !Number.isFinite(ts) || !jid) return null
+    const g = this.db.prepare('SELECT custom_name, push_name FROM contacts WHERE jid = ?').get(jid) as Row | undefined
+    return { jid, ts, name: g?.custom_name ?? g?.push_name ?? UNNAMED_GROUP }
+  }
+
+  /**
+   * Conversa individual esperando resposta: o mentor escreveu, depois da primeira mensagem do contato sem resposta,
+   * num grupo de que o contato participa? (o mais recente; null se não, ou se a conversa não espera resposta)
+   */
+  groupAnswer(jid: string): GroupAnswer | null {
+    const r = this.db
+      .prepare(
+        `WITH base AS (
+           SELECT c.jid, c.is_group, l.from_me AS last_from_me, ${WAITING_SINCE_SQL('c.jid')} AS waiting_since
+             FROM contacts c
+             JOIN messages l ON l.id = (SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
+            WHERE c.jid = ?1)
+         SELECT CASE WHEN b.is_group = 0 AND b.last_from_me = 0 AND b.waiting_since IS NOT NULL
+                     THEN ${GROUP_ANSWER_SQL('b.jid', 'b.waiting_since')} END AS group_answer
+           FROM base b`
+      )
+      .get(jid) as Row | undefined
+    return this.parseGroupAnswer(r?.group_answer)
+  }
+
   /** Conversas (fora as escondidas) em "Para responder" e conversas com algum alerta ativo. */
   triageCounts(): { awaiting: number; withAlerts: number } {
     const r = this.db
       .prepare(
-        `SELECT
-           (SELECT COUNT(*) FROM contacts c
-              JOIN messages l ON l.id = (SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
-              LEFT JOIN reply_checks rc ON rc.jid = c.jid AND rc.msg_id = l.id
-             WHERE c.hidden = 0 AND l.from_me = 0 AND COALESCE(rc.user_needs, rc.app_needs, 1) = 1) AS awaiting,
+        `WITH base AS (
+           SELECT c.jid, c.is_group, l.id AS last_id, ${WAITING_SINCE_SQL('c.jid')} AS waiting_since
+             FROM contacts c
+             JOIN messages l ON l.id = (SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
+            WHERE c.hidden = 0 AND l.from_me = 0)
+         SELECT
+           (SELECT COUNT(*) FROM base b
+              LEFT JOIN reply_checks rc ON rc.jid = b.jid AND rc.msg_id = b.last_id
+             WHERE COALESCE(
+                     rc.user_needs,
+                     CASE WHEN b.is_group = 0 AND ${GROUP_ANSWER_SQL('b.jid', 'b.waiting_since')} IS NOT NULL THEN 0 END,
+                     rc.app_needs,
+                     1) = 1) AS awaiting,
            (SELECT COUNT(DISTINCT a.jid) FROM alerts a JOIN contacts c ON c.jid = a.jid
              WHERE a.dismissed_at IS NULL AND c.hidden = 0) AS with_alerts`
       )
       .get() as Row
     return { awaiting: r.awaiting, withAlerts: r.with_alerts }
+  }
+
+  // --- participantes de grupos ---
+
+  /**
+   * Troca os participantes conhecidos de um grupo (da consulta `groupFetchAllParticipating`). Cada participante pode
+   * vir em mais de uma forma (telefone e @lid): todas entram. `true` se algo mudou.
+   */
+  setGroupMembers(groupJid: string, memberJids: Iterable<string>): boolean {
+    const next = new Set([...memberJids].filter((j) => j && j !== groupJid))
+    const cur = new Set(
+      (this.db.prepare('SELECT member_jid FROM group_members WHERE group_jid = ?').all(groupJid) as Row[]).map((r) => r.member_jid as string)
+    )
+    if (cur.size === next.size && [...next].every((j) => cur.has(j))) return false
+    this.db.exec('BEGIN')
+    try {
+      this.db.prepare('DELETE FROM group_members WHERE group_jid = ?').run(groupJid)
+      const ins = this.db.prepare('INSERT OR IGNORE INTO group_members(group_jid, member_jid) VALUES (?, ?)')
+      for (const j of next) ins.run(groupJid, j)
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+    return true
+  }
+
+  /** Participantes conhecidos de um grupo (pela consulta), em ordem. */
+  groupMembers(groupJid: string): string[] {
+    return (this.db.prepare('SELECT member_jid FROM group_members WHERE group_jid = ? ORDER BY member_jid').all(groupJid) as Row[]).map(
+      (r) => r.member_jid as string
+    )
   }
 
   // --- alertas ---

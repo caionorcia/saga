@@ -22,7 +22,7 @@ import type { RateLimiter } from '../queue/limiter'
 import { DeferJobError, type JobQueue } from '../queue/queue'
 import type { NormalizedMessage } from '../types'
 import { useAtomicAuthState, type AtomicAuthState } from './authState'
-import { isGroupJid, normalize, stripDevice, toPhoneJid } from './normalize'
+import { isGroupJid, normalize, participantJids, stripDevice, toPhoneJid, type ParticipantLike } from './normalize'
 import { ReconnectPolicy, classifyDisconnect } from './reconnect'
 import { WaVersionResolver, formatWaVersion, type WaVersionFetcher } from './version'
 
@@ -45,8 +45,8 @@ export interface WaSocket {
   ev: { on(event: string, listener: (arg: any) => void): unknown }
   end(error: Error | undefined): unknown
   signalRepository?: { lidMapping?: { getPNForLID(lid: string): Promise<string | null> } }
-  /** só leitura (uma consulta IQ): os grupos de que o mentor participa, com o assunto. Sempre pela fila. */
-  groupFetchAllParticipating?(): Promise<Record<string, { id?: string; subject?: string | null }>>
+  /** só leitura (uma consulta IQ): os grupos de que o mentor participa, com o assunto e os participantes. Sempre pela fila. */
+  groupFetchAllParticipating?(): Promise<Record<string, { id?: string; subject?: string | null; participants?: ParticipantLike[] | null }>>
 }
 
 export type SocketFactory = (config: UserFacingSocketConfig) => WaSocket
@@ -99,8 +99,11 @@ const BROWSER_LADDER: Array<[string, string, string]> = [
   Browsers.windows('Desktop')
 ]
 const BROWSER_SETTING = 'wa.browserIdx'
-/** quando os nomes dos grupos foram buscados pela última vez (epoch ms do PC) */
-const GROUPS_FETCHED_SETTING = 'wa.groupsFetchedAt'
+/**
+ * quando os nomes e os participantes dos grupos foram buscados pela última vez (epoch ms do PC). Chave nova na v0.2.3
+ * (antes só os nomes, em `wa.groupsFetchedAt`): quem atualiza busca os participantes logo na primeira conexão.
+ */
+const GROUPS_FETCHED_SETTING = 'wa.groupMembersFetchedAt'
 /** no máximo uma busca dos nomes dos grupos por dia */
 const GROUPS_FETCH_EVERY_MS = DAY
 /** chave fixa do job (um só pendente por vez; volta para a fila depois de concluído) */
@@ -936,10 +939,38 @@ export class WhatsAppClient extends EventEmitter {
     }
     const all = await sock.groupFetchAllParticipating()
     // mesmo se o socket caiu enquanto buscava, a resposta (só leitura) vale
-    const groups = Object.entries(all ?? {}).map(([id, g]) => ({ id: g?.id ?? id, subject: g?.subject ?? null }))
-    // só a contagem: nunca os nomes dos grupos
-    this.diag('wa_groups', `nomes de grupos: ${groups.length} grupos`)
+    const entries = Object.entries(all ?? {})
+    const groups = entries.map(([id, g]) => ({ id: g?.id ?? id, subject: g?.subject ?? null }))
+    const members = await this.applyGroupMembers(entries.map(([id, g]) => ({ id: g?.id ?? id, participants: g?.participants })))
+    // só as contagens: nunca os nomes dos grupos nem os participantes
+    this.diag('wa_groups', `nomes de grupos: ${groups.length} grupos${members.count ? `, ${members.count} participantes` : ''}`)
     this.deps.repo.setSetting(GROUPS_FETCHED_SETTING, String(this.deps.clock.now()))
-    if (this.applyGroupNames(groups)) this.emit('contacts')
+    if (this.applyGroupNames(groups) || members.changed) this.emit('contacts')
+  }
+
+  /**
+   * Guarda quem participa de cada grupo (todas as formas do JID: telefone e @lid), para "Respondido no grupo": o mentor
+   * respondeu ao mentorado no grupo dele. Aprende o par @lid → telefone quando o participante traz os dois.
+   */
+  private async applyGroupMembers(groups: Array<{ id: string; participants?: ParticipantLike[] | null }>): Promise<{ count: number; changed: boolean }> {
+    let count = 0
+    let changed = false
+    for (const g of groups) {
+      if (!isGroupJid(g.id) || !Array.isArray(g.participants)) continue
+      const jids = new Set<string>()
+      for (const p of g.participants) {
+        const forms = participantJids(p, (lid) => this.lidToPn.get(lid) ?? null)
+        const pn = forms.find((j) => !j.endsWith('@lid'))
+        for (const f of forms) {
+          jids.add(f)
+          if (!f.endsWith('@lid')) continue
+          if (pn && !this.lidToPn.has(f)) this.lidToPn.set(f, pn)
+          jids.add(await this.resolveJid(f))
+        }
+      }
+      count += g.participants.length
+      if (this.deps.repo.setGroupMembers(g.id, jids)) changed = true
+    }
+    return { count, changed }
   }
 }

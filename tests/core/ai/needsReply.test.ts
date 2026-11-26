@@ -124,12 +124,12 @@ describe('setNeedsReply / confirmNoReply / 👍 no "esperando"', () => {
   it('"Não precisa responder": tira da lista, resolve o "esperando" e grava o exemplo com o trecho e o motivo', () => {
     repo.upsertAlert({ jid: A, kind: 'esperando', detail: 'Sem resposta há mais de 2 dias.', msgId: 'a1' })
     const alertId = repo.listAlerts(A)[0].id
-    expect(setNeedsReply(repo, A, false, { code: 'outro_meio', text: ' Liguei  pra ela ' })).toBe(true)
+    expect(setNeedsReply(repo, A, false, { code: 'ligacao', text: ' Liguei  pra ela ' })).toBe(true)
     expect(contact()).toMatchObject({ needsReply: false, replyDecision: { needed: false, by: 'user', reason: null } })
     expect(repo.listAlerts(A)).toEqual([])
     const [f] = repo.listReplyFeedback()
     expect(f).toMatchObject({
-      jid: A, msgId: 'a1', alertId, verdict: 'reply_not_needed', appNeeds: null, reasonCode: 'outro_meio', reasonText: 'Liguei pra ela',
+      jid: A, msgId: 'a1', alertId, verdict: 'reply_not_needed', appNeeds: null, reasonCode: 'ligacao', reasonText: 'Liguei pra ela',
       contextText: 'Mentorado: Mentor, segue o relatório.'
     })
     // e o 👍 do "esperando" que já foi avaliado aparece como 👎
@@ -204,7 +204,7 @@ describe('aprendizado, qualidade e CSV', () => {
     expect(text).toContain('Exemplo: mensagens "Mentorado: Obrigada pelo material!" → o mentor NÃO precisava responder: era só agradecimento / ok / emoji.')
     expect(text).toContain('"Mentorado: Segue o comprovante" → o mentor PRECISAVA responder.')
     add({ id: 'a2', minutesAgo: 1, text: 'Pode ver o arquivo?' })
-    setNeedsReply(repo, A, false, { code: 'outro_meio' })
+    setNeedsReply(repo, A, false, { code: 'respondi_grupo' })
     expect(selectReplyExamples(repo, A)).toHaveLength(2)
     expect(renderReplyExamples([])).toBe('')
   })

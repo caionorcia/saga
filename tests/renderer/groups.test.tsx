@@ -37,7 +37,7 @@ describe('ContactList: filtro Todos | Individuais | Grupos', () => {
     expect(screen.getByRole('radio', { name: /Todos/ }).getAttribute('aria-checked')).toBe('true')
 
     fireEvent.click(screen.getByRole('radio', { name: /Grupos/ }))
-    await waitFor(() => expect(names()).toEqual(['Mentoria Turma 3 — Negócios', 'Mastermind Vendas 2026']))
+    await waitFor(() => expect(names()).toEqual(['Mentoria Turma 3 — Negócios', 'Mentoria Beatriz Alves', 'Mastermind Vendas 2026']))
     expect(localStorage.getItem(KIND_KEY)).toBe('group')
 
     fireEvent.click(screen.getByRole('radio', { name: /Individuais/ }))
@@ -47,7 +47,7 @@ describe('ContactList: filtro Todos | Individuais | Grupos', () => {
     unmount()
     localStorage.setItem(KIND_KEY, 'group')
     render(<ContactList selected={null} onSelect={() => {}} />)
-    await waitFor(() => expect(names()).toEqual(['Mentoria Turma 3 — Negócios', 'Mastermind Vendas 2026']))
+    await waitFor(() => expect(names()).toEqual(['Mentoria Turma 3 — Negócios', 'Mentoria Beatriz Alves', 'Mastermind Vendas 2026']))
     expect(screen.getByRole('radio', { name: /Grupos/ }).getAttribute('aria-checked')).toBe('true')
   })
 
@@ -62,7 +62,7 @@ describe('ContactList: filtro Todos | Individuais | Grupos', () => {
     render(<ContactList selected={null} onSelect={() => {}} />)
     await waitFor(() => expect(names()).toContain('Ana Paula Souza'))
     fireEvent.click(screen.getByRole('radio', { name: /Grupos/ }))
-    await waitFor(() => expect(names()).toEqual(['Mentoria Turma 3 — Negócios', 'Mastermind Vendas 2026']))
+    await waitFor(() => expect(names()).toEqual(['Mentoria Turma 3 — Negócios', 'Mentoria Beatriz Alves', 'Mastermind Vendas 2026']))
     spy.mockRestore()
     set.mockRestore()
   })
@@ -76,7 +76,7 @@ describe('ContactList: filtro Todos | Individuais | Grupos', () => {
     expect(g.textContent).toContain('Grupo')
     expect(row('Ana Paula Souza').querySelector('.avatar-group')).toBeNull()
     fireEvent.change(screen.getByPlaceholderText(/Buscar/), { target: { value: 'mentoria' } })
-    await waitFor(() => expect(names()).toEqual(['Mentoria Turma 3 — Negócios']))
+    await waitFor(() => expect(names()).toEqual(['Mentoria Turma 3 — Negócios', 'Mentoria Beatriz Alves']))
     fireEvent.change(screen.getByPlaceholderText(/Buscar/), { target: { value: 'paula' } })
     await waitFor(() => expect(names()).toEqual(['Ana Paula Souza']))
   })

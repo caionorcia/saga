@@ -74,12 +74,13 @@ export const REPLY_VERDICTS = ['reply_not_needed', 'reply_needed', 'reply_ok'] a
 export type ReplyVerdict = (typeof REPLY_VERDICTS)[number]
 
 /** Motivos rápidos de "Não precisa responder", na ordem do diálogo. */
-export const REPLY_REASON_CODES = ['agradecimento', 'outro_meio', 'grupo_nao_comigo', 'encerrada', 'outro'] as const
+export const REPLY_REASON_CODES = ['agradecimento', 'respondi_grupo', 'ligacao', 'grupo_nao_comigo', 'encerrada', 'outro'] as const
 export type ReplyReasonCode = (typeof REPLY_REASON_CODES)[number]
 
 export const REPLY_REASON_LABELS: Record<ReplyReasonCode, string> = {
   agradecimento: 'Era só agradecimento / ok / emoji',
-  outro_meio: 'Já respondi por outro meio (ligação, pessoalmente…)',
+  respondi_grupo: 'Respondi no grupo dele',
+  ligacao: 'Respondi por ligação/pessoalmente',
   grupo_nao_comigo: 'Mensagem de grupo que não é comigo',
   encerrada: 'Conversa encerrada',
   outro: 'Outro'
@@ -97,8 +98,20 @@ export interface ReplyReason {
   text?: string
 }
 
-/** Quem decidiu se a conversa precisa de resposta: a regra (agradecimento/emoji), a IA ou o mentor. */
-export type ReplyDecisionSource = 'rule' | 'ai' | 'user'
+/**
+ * Quem decidiu se a conversa precisa de resposta: a regra (agradecimento/emoji), a IA, o mentor, ou a regra do grupo
+ * (`group`: depois da mensagem do contato, o mentor escreveu num grupo de que o contato participa).
+ */
+export type ReplyDecisionSource = 'rule' | 'ai' | 'user' | 'group'
+
+/** "Respondido no grupo": em que grupo e quando o mentor escreveu lá (a mensagem mais recente dele depois da espera). */
+export interface GroupAnswer {
+  /** o grupo (`@g.us`) */
+  jid: string
+  name: string
+  /** epoch ms (horário do WhatsApp) da mensagem do mentor no grupo */
+  ts: number
+}
 
 /** A decisão atual para a última mensagem do contato (some quando chega outra mensagem dele). */
 export interface ReplyDecision {
@@ -106,6 +119,8 @@ export interface ReplyDecision {
   by: ReplyDecisionSource
   /** por quê, em pt-BR (até 100 caracteres); null quando o mentor decidiu */
   reason: string | null
+  /** com `by === 'group'`: o grupo onde o mentor respondeu */
+  group?: GroupAnswer
 }
 
 /** "Para responder" nos últimos 30 dias. */

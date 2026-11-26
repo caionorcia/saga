@@ -117,7 +117,7 @@ describe('ContactList: "Para responder" e "Com alerta"', () => {
     install()
     localStorage.setItem('saga.contactKind', 'group')
     const { rerender } = render(<ContactList selected={null} onSelect={() => {}} />)
-    await waitFor(() => expect(names()).toEqual(['Mentoria Turma 3 — Negócios', 'Mastermind Vendas 2026']))
+    await waitFor(() => expect(names()).toEqual(['Mentoria Turma 3 — Negócios', 'Mentoria Beatriz Alves', 'Mastermind Vendas 2026']))
     rerender(<ContactList selected={null} onSelect={() => {}} request={{ view: 'awaiting', seq: 1 }} />)
     await waitFor(() => expect(names()[0]).toBe('Rafael Mendes'))
     expect(screen.getByRole('radio', { name: /Todos/ }).getAttribute('aria-checked')).toBe('true')

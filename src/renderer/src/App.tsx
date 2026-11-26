@@ -155,6 +155,7 @@ function Main({
           contact={contact}
           analysis={analysis}
           alerts={alerts.filter((a) => a.jid === contact.jid)}
+          onOpenChat={onSelect}
           onDismissAlert={(kind) => {
             setAlerts((l) => l.filter((a) => a.kind !== kind))
             void window.saga.dismissAlert(contact.jid, kind).catch(() => {})

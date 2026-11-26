@@ -240,6 +240,10 @@ describe('alertas', () => {
     ok('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'agradecimento' })
     ok('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'outro', text: 'liguei' })
     ok('setNeedsReply', '1203@g.us', false, { code: 'grupo_nao_comigo' })
+    ok('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'respondi_grupo' })
+    ok('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'ligacao' })
+    // o motivo antigo (v0.2.2) virou "respondi_grupo" + "ligacao"
+    bad('setNeedsReply', 'j@s.whatsapp.net', false, { code: 'outro_meio' })
     bad('setNeedsReply', 'j@s.whatsapp.net', false)
     bad('setNeedsReply', 'j@s.whatsapp.net', true, { code: 'outro' })
     bad('setNeedsReply', 'j@s.whatsapp.net', 'false', { code: 'outro' })

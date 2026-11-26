@@ -196,3 +196,28 @@ export function normalize(msg: WAMessage, opts: NormalizeOptions = {}): Normaliz
     ...group
   }
 }
+
+/** O que o cliente lê de um participante de grupo do Baileys (`GroupParticipant`): só as formas do JID. */
+export interface ParticipantLike {
+  id?: string | null
+  phoneNumber?: string | null
+  lid?: string | null
+}
+
+/**
+ * Todas as formas conhecidas de um participante (sem dispositivo): o telefone (`@s.whatsapp.net`) e o @lid, para casar
+ * com a conversa individual seja qual for o JID dela. `pnForLid`: o telefone de um @lid já conhecido (mapeamento local).
+ */
+export function participantJids(p: ParticipantLike | null | undefined, pnForLid: (lid: string) => string | null = () => null): string[] {
+  if (!p) return []
+  const raw = [p.id, p.phoneNumber, p.lid]
+    .filter((j): j is string => typeof j === 'string' && (j.endsWith(`@${PN_SERVER}`) || j.endsWith('@lid')))
+    .map(stripDevice)
+  const out = new Set(raw)
+  for (const j of raw) {
+    if (!j.endsWith('@lid')) continue
+    const pn = toPhoneJid(pnForLid(j))
+    if (pn) out.add(pn)
+  }
+  return [...out]
+}

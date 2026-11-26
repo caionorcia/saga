@@ -304,11 +304,16 @@ export function ContactList({ selected, onSelect, request }: Props) {
               {(inAwaiting(c) || noReply(c) || c.alerts.length > 0) && (
                 <span className="contact-badges">
                   {inAwaiting(c) && <WaitBadge since={c.waitingSince!} now={now} />}
-                  {noReply(c) && (
-                    <span className="reply-chip" title={c.replyDecision?.reason ?? 'Você marcou que não precisa responder'}>
-                      Não precisa responder
-                    </span>
-                  )}
+                  {noReply(c) &&
+                    (c.replyDecision?.by === 'group' && c.replyDecision.group ? (
+                      <span className="reply-chip reply-chip-group" title={c.replyDecision.reason ?? undefined}>
+                        respondido em {c.replyDecision.group.name}
+                      </span>
+                    ) : (
+                      <span className="reply-chip" title={c.replyDecision?.reason ?? 'Você marcou que não precisa responder'}>
+                        Não precisa responder
+                      </span>
+                    ))}
                   <AlertChips kinds={c.alerts} waitingSince={c.waitingSince} now={now} />
                 </span>
               )}

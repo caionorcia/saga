@@ -3,7 +3,7 @@
  * Usado pelos testes e pela pré-visualização no navegador (`npm run preview:ui`); nunca no app real.
  */
 import { loadDemo, loadDemoFeedback, loadDemoReplyFeedback, type DemoContact, type DemoFeedback, type DemoReplyFeedback } from '../../../core/demo'
-import type { ReplyDecision } from '../../../shared/feedback'
+import type { GroupAnswer, ReplyDecision } from '../../../shared/feedback'
 import { AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../../shared/triage'
 import type {
   Alert,
@@ -96,11 +96,29 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     })
   )
   const lastOf = (c: DemoContact) => c.messages[c.messages.length - 1]
-  /** a decisão vigente (null = ninguém decidiu, ou o mentor falou por último) */
+  /** "Respondido no grupo": depois da espera, o mentor escreveu num grupo de que o contato participa (o mais recente) */
+  const groupAnswerOf = (c: DemoContact): GroupAnswer | null => {
+    const since = c.isGroup ? null : waitingSince(c)
+    if (since === null) return null
+    let best: GroupAnswer | null = null
+    for (const g of demo) {
+      if (!g.isGroup || !(g.members.includes(c.jid) || g.messages.some((m) => m.senderJid === c.jid))) continue
+      for (const m of g.messages) {
+        if (m.fromMe && m.ts > since && (!best || m.ts > best.ts)) best = { jid: g.jid, name: displayName(g), ts: m.ts }
+      }
+    }
+    return best
+  }
+  /** a decisão vigente (null = ninguém decidiu, ou o mentor falou por último): mentor > grupo > Saga */
   const decisionOf = (c: DemoContact): ReplyDecision | null => {
     const last = lastOf(c)
+    if (!last || last.fromMe) return null
     const r = replies.get(c.jid)
-    return last && !last.fromMe && r && r.msgId === last.id ? r.decision : null
+    const cur = r && r.msgId === last.id ? r.decision : null
+    if (cur?.by === 'user') return cur
+    const g = groupAnswerOf(c)
+    if (g) return { needed: false, by: 'group', reason: `Respondido no grupo ${g.name}`, group: g }
+    return cur
   }
   const needsReplyOf = (c: DemoContact): boolean => !!lastOf(c) && !lastOf(c).fromMe && (decisionOf(c)?.needed ?? true)
   const saveReplyFeedback = (jid: string, f: Omit<DemoReplyFeedback, 'jid' | 'createdAt'> & { alertId?: number }) => {

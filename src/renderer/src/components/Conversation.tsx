@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Alert, AlertKind, Analysis, Contact, MessageView, ReplyDecision, ReplyReason } from '../../../shared/api'
-import { alertChipLabel, formatDayHeading, formatDuration, formatTime, initials, sameDay } from '../format'
+import { alertChipLabel, formatDay, formatDayHeading, formatDuration, formatTime, initials, sameDay } from '../format'
 import { AlertIcon } from './Alerts'
 import { MissedAlertDialog, NoReplyDialog, NoReplyIcon, RateDownDialog, THANKS, Toast } from './AlertFeedback'
 import { GroupIcon } from './GroupIcon'
@@ -12,11 +12,13 @@ interface Props {
   alerts?: Alert[]
   /** "Resolver" */
   onDismissAlert?: (kind: AlertKind) => void
+  /** abrir outra conversa (ex.: o grupo onde o mentor respondeu) */
+  onOpenChat?: (jid: string) => void
 }
 
 const HIGHLIGHT_MS = 2_500
 
-export function Conversation({ contact, analysis, alerts = [], onDismissAlert }: Props) {
+export function Conversation({ contact, analysis, alerts = [], onDismissAlert, onOpenChat }: Props) {
   const [messages, setMessages] = useState<MessageView[] | null>(null)
   const [highlight, setHighlight] = useState<string | null>(null)
   /** avaliações feitas agora (antes de a lista de alertas voltar do processo principal) */
@@ -175,7 +177,7 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert }:
       </header>
 
       {contact.awaitingReply && decision?.needed === false && (
-        <ReplyNote decision={decision} onRestore={restoreReply} onConfirm={confirmNoReply} />
+        <ReplyNote decision={decision} onRestore={restoreReply} onConfirm={confirmNoReply} onOpenChat={onOpenChat} />
       )}
 
       {shownAlerts.length > 0 && (
@@ -373,14 +375,41 @@ function AlertBar({
   )
 }
 
-/** Aviso discreto quando a conversa saiu de "Para responder": por quê, 👍 (o Saga acertou) e "Precisa sim". */
-function ReplyNote({ decision, onRestore, onConfirm }: { decision: ReplyDecision; onRestore: () => void; onConfirm: () => void }) {
+/**
+ * Aviso discreto quando a conversa saiu de "Para responder": por quê, 👍 (o Saga acertou) e "Precisa sim".
+ * Respondido no grupo do contato: o nome do grupo (abre a conversa do grupo) e a hora.
+ */
+function ReplyNote({
+  decision,
+  onRestore,
+  onConfirm,
+  onOpenChat
+}: {
+  decision: ReplyDecision
+  onRestore: () => void
+  onConfirm: () => void
+  onOpenChat?: (jid: string) => void
+}) {
   const bySaga = decision.by !== 'user'
+  const g = decision.by === 'group' ? decision.group : undefined
   return (
     <section className="reply-note" aria-label="Para responder">
       <NoReplyIcon />
       <p>
-        {bySaga ? (
+        {g ? (
+          <>
+            Respondido no grupo{' '}
+            {onOpenChat ? (
+              <button type="button" className="link-btn reply-group-link" title="Abrir a conversa do grupo" onClick={() => onOpenChat(g.jid)}>
+                {g.name}
+              </button>
+            ) : (
+              <strong>{g.name}</strong>
+            )}{' '}
+            às {formatTime(g.ts)}
+            {sameDay(g.ts, Date.now()) ? '' : ` (${formatDay(g.ts)})`}.
+          </>
+        ) : bySaga ? (
           <>
             O Saga acha que esta conversa não precisa de resposta{decision.reason ? ': ' : '.'}
             {decision.reason && <span className="reply-reason">{decision.reason}</span>}

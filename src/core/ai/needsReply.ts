@@ -6,7 +6,7 @@
  * - O mentor corrige ("Não precisa responder" / "Precisa sim") e confirma (👍); cada avaliação vira exemplo para a IA.
  * A decisão vale só para a última mensagem do contato: uma mensagem nova dele recomeça tudo.
  */
-import type { MessageRow, Repo, ReplyFeedbackRow } from '../db/repo'
+import { groupAnswerReason, type MessageRow, type Repo, type ReplyFeedbackRow } from '../db/repo'
 import {
   REASON_TEXT_MAX,
   REPLY_REASON_LABELS,
@@ -120,15 +120,36 @@ const clean = (s: string | null | undefined): string | null => {
   return t ? t.slice(0, REASON_TEXT_MAX) : null
 }
 
-/** A última mensagem do contato e o que o Saga tinha decidido sobre ela. */
-function current(repo: Repo, jid: string) {
+/** O que o Saga achava da última mensagem do contato (vai para a avaliação). */
+interface AppView {
+  appNeeds: boolean | null
+  appReason: string | null
+  /** 'rule' | 'ai' | 'group' */
+  appSource: string | null
+  model: string | null
+}
+
+/**
+ * A última mensagem do contato e o que o Saga tinha decidido sobre ela. A regra do grupo (o mentor escreveu num grupo
+ * do contato depois da mensagem dele) vence a regra de agradecimento e a IA, como na lista.
+ */
+function current(repo: Repo, jid: string): { last: MessageRow; app: AppView } {
   const last = repo.lastMessage(jid)
   if (!last || last.fromMe) throw new ReplyFeedbackError('a conversa não está esperando resposta')
+  const group = repo.groupAnswer(jid)
+  if (group) {
+    return { last, app: { appNeeds: false, appReason: groupAnswerReason(group), appSource: 'group', model: null } }
+  }
   const cur = repo.getReplyCheck(jid)
   const same = cur && cur.msgId === last.id ? cur : null
   return {
     last,
-    app: { appNeeds: same?.appNeeds ?? null, appReason: same?.appReason ?? null, appSource: same?.appSource ?? null, model: same?.model ?? null }
+    app: {
+      appNeeds: same?.appNeeds ?? null,
+      appReason: same?.appReason ?? null,
+      appSource: same?.appSource ?? null,
+      model: same?.model ?? null
+    }
   }
 }
 
@@ -175,8 +196,11 @@ export function confirmNoReply(repo: Repo, jid: string): boolean {
 
 // --- aprendizado ---
 
-/** Serve de exemplo? "Já respondi por outro meio" não diz nada sobre as mensagens. */
-const teaches = (f: ReplyFeedbackRow): boolean => f.contextText.trim() !== '' && f.reasonCode !== 'outro_meio'
+/** Motivos que não dizem nada sobre as mensagens (o mentor respondeu em outro lugar): não viram exemplo para a IA. */
+const ANSWERED_ELSEWHERE = new Set(['respondi_grupo', 'ligacao'])
+
+/** Serve de exemplo? "Respondi no grupo dele" e "Respondi por ligação/pessoalmente" não dizem nada sobre as mensagens. */
+const teaches = (f: ReplyFeedbackRow): boolean => f.contextText.trim() !== '' && !ANSWERED_ELSEWHERE.has(f.reasonCode ?? '')
 
 /** Até 4 avaliações recentes para o prompt do classify: primeiro as da mesma conversa. */
 export function selectReplyExamples(repo: Repo, jid: string, max = REPLY_EXAMPLES_MAX): ReplyFeedbackRow[] {
@@ -227,6 +251,7 @@ export function replyQuality(repo: Repo, now: number): ReplyQuality {
 /** Detalhe da linha no CSV: o que o Saga achava. */
 export function replyCsvDetail(f: ReplyFeedbackRow): string {
   if (f.appNeeds === null) return 'Saga: deixou em "Para responder"'
+  if (f.appSource === 'group') return `Saga (grupo): não precisa responder${f.appReason ? ` — ${f.appReason}` : ''}`
   const by = f.appSource === 'rule' ? 'regra' : 'IA'
   return f.appNeeds ? `Saga (${by}): precisa responder` : `Saga (${by}): não precisa responder${f.appReason ? ` — ${f.appReason}` : ''}`
 }

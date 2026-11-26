@@ -3,7 +3,7 @@ import type { NormalizedMessage } from './types'
 import type { AlertKind, TranscriptStatus } from './db/repo'
 import type { ReasonCode, ReplyDecision, ReplyReasonCode, ReplyVerdict, Verdict } from '../shared/feedback'
 
-/** Dados de demonstração (6 pessoas e 2 grupos, alguns com alertas) usados pelo modo `SAGA_FAKE_WA=1`, pela pré-visualização e pelos testes. */
+/** Dados de demonstração (7 pessoas e 3 grupos, alguns com alertas) usados pelo modo `SAGA_FAKE_WA=1`, pela pré-visualização e pelos testes. */
 export interface DemoMessage extends NormalizedMessage {
   hasAudio: boolean
   transcript: string | null
@@ -22,6 +22,8 @@ export interface DemoContact {
   alerts: Array<{ kind: AlertKind; detail: string; msgId: string | null }>
   /** "Para responder": a decisão sobre a última mensagem do contato, ou null */
   reply: ReplyDecision | null
+  /** grupo: participantes conhecidos (como viriam de `groupFetchAllParticipating`) */
+  members: string[]
 }
 
 interface RawMessage {
@@ -49,6 +51,7 @@ interface RawContact {
   analysis?: { provider: string; summary: string; suggestions: string[] }
   alerts?: Array<{ kind: string; detail: string; messageId?: string }>
   reply?: { needed: boolean; by: string; reason?: string }
+  members?: string[]
 }
 
 export function loadDemo(now: number): DemoContact[] {
@@ -58,6 +61,7 @@ export function loadDemo(now: number): DemoContact[] {
     pushName: c.pushName,
     customName: c.customName ?? null,
     notes: c.notes ?? null,
+    members: c.members ?? [],
     analysis: c.analysis
       ? { provider: c.analysis.provider === 'claude' ? 'claude' : 'groq', summary: c.analysis.summary, suggestions: c.analysis.suggestions }
       : null,

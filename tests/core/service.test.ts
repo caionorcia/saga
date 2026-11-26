@@ -792,7 +792,7 @@ describe('SagaService', () => {
       expect((await service.listContacts(false))[0].alerts).toEqual(['esperando'])
       const changed = vi.fn()
       service.onContactsChanged(changed)
-      await service.setNeedsReply(JID, false, { code: 'outro_meio', text: 'liguei pra Ana' })
+      await service.setNeedsReply(JID, false, { code: 'ligacao', text: 'liguei pra Ana' })
       await vi.waitFor(() => expect(changed).toHaveBeenCalled())
       let [c] = await service.listContacts(false)
       expect(c).toMatchObject({ needsReply: false, alerts: [] })
@@ -805,7 +805,7 @@ describe('SagaService', () => {
       expect((await service.alertQuality()).reply).toEqual({ removed: 0, restored: 0, confirmed: 1, correctRate: 1 })
       expect(service.alertFeedbackCsv({ anonymize: true }).rows).toBe(1)
       expect(lines.filter((l) => l.startsWith('reply_feedback'))).toEqual([
-        'reply_feedback verdict=reply_not_needed reason=outro_meio',
+        'reply_feedback verdict=reply_not_needed reason=ligacao',
         'reply_feedback verdict=reply_needed'
       ])
       expect(lines.join('\n')).not.toMatch(/relatório|liguei|Ana|5547999998888/)

@@ -53,7 +53,8 @@ describe('ContactList: "Não precisa responder" em "Para responder"', () => {
     const dlg = screen.getByRole('dialog', { name: 'Por que esta conversa não precisa de resposta?' })
     expect(within(dlg).getAllByRole('radio').map((r) => r.closest('label')!.textContent)).toEqual([
       'Era só agradecimento / ok / emoji',
-      'Já respondi por outro meio (ligação, pessoalmente…)',
+      'Respondi no grupo dele',
+      'Respondi por ligação/pessoalmente',
       'Mensagem de grupo que não é comigo',
       'Conversa encerrada',
       'Outro'
@@ -136,5 +137,39 @@ describe('Conversation: "Para responder"', () => {
     await rerender()
     expect(screen.getByRole('region', { name: 'Para responder' }).textContent).toMatch(/Você marcou/)
     expect((await ctl.api.alertQuality()).reply.confirmed).toBe(4)
+  })
+})
+
+describe('"Respondido no grupo"', () => {
+  const BEA = '5531900001111@s.whatsapp.net'
+  const BEA_GROUP = '120363027777777777@g.us'
+
+  it('lista: fora de "Para responder"; em "Todos" mostra "respondido em <grupo>"', async () => {
+    install()
+    render(<ContactList selected={null} onSelect={() => {}} />)
+    await waitFor(() => expect(names()).toContain('Beatriz Alves'))
+    const row = rowOf('Beatriz Alves')
+    expect(within(row).getByText('Sem pendência')).toBeTruthy()
+    expect(within(row).getByText('respondido em Mentoria Beatriz Alves').getAttribute('title')).toBe('Respondido no grupo Mentoria Beatriz Alves')
+    fireEvent.click(screen.getByRole('button', { name: /Para responder/ }))
+    await waitFor(() => expect(names()).not.toContain('Beatriz Alves'))
+  })
+
+  it('conversa: "Respondido no grupo <nome> às HH:MM", o nome abre o grupo e "Precisa sim" devolve à lista', async () => {
+    const ctl = install()
+    const contact = (await ctl.api.listContacts(true)).find((c) => c.jid === BEA)!
+    expect(contact.replyDecision).toMatchObject({ needed: false, by: 'group', group: { jid: BEA_GROUP, name: 'Mentoria Beatriz Alves' } })
+    const opened: string[] = []
+    render(<Conversation contact={contact} analysis={null} alerts={[]} onOpenChat={(j) => opened.push(j)} />)
+    const note = screen.getByRole('region', { name: 'Para responder' })
+    const hhmm = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(contact.replyDecision!.group!.ts)
+    expect(note.textContent).toContain(`Respondido no grupo Mentoria Beatriz Alves às ${hhmm}`)
+    fireEvent.click(within(note).getByRole('button', { name: 'Mentoria Beatriz Alves' }))
+    expect(opened).toEqual([BEA_GROUP])
+    const before = (await ctl.api.getState()).triage.awaiting
+    fireEvent.click(within(note).getByRole('button', { name: 'Precisa sim' }))
+    expect(ctl.calls.find((c) => c.method === 'setNeedsReply')!.args).toEqual([BEA, true, undefined])
+    await waitFor(async () => expect((await ctl.api.getState()).triage.awaiting).toBe(before + 1))
+    expect((await ctl.api.listContacts(true)).find((c) => c.jid === BEA)!.replyDecision).toEqual({ needed: true, by: 'user', reason: null })
   })
 })
