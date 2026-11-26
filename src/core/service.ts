@@ -52,11 +52,25 @@ import { formatPhone } from './db/repo'
 import { SendConflictError, sendJobKey, type SendRow } from './db/sendRepo'
 import { SendGate, type SendBinding } from './send/gate'
 import { CopilotoSync } from './copiloto/sync'
-import type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult } from '../shared/copiloto'
+import {
+  FOLLOWUP_LIMITS,
+  FOLLOWUP_REASON,
+  FOLLOWUP_TEXT,
+  type CopilotoCodeResult,
+  type CopilotoPatch,
+  type CopilotoSaveResult,
+  type CopilotoStatus,
+  type CopilotoTestResult,
+  type FollowupOpenResult,
+  type FollowupView
+} from '../shared/copiloto'
+import { followupView, type FollowupRow } from './db/followupRepo'
+import { shortReason } from './copiloto/followups'
 import { chatHash, hasRecentContactMessage, pickQuote, sendAddress, textHash } from './send/logic'
 import { verifyUnknownSend } from './send/verify'
 import {
   NOT_CONFIRMED_TEXT,
+  SEND_ACTIVE,
   SEND_LIMITS,
   SEND_REFUSAL_TEXT,
   type PrepareSendInput,
@@ -251,6 +265,8 @@ export class SagaService extends EventEmitter {
   private pendingJids = new Set<string>()
   private pendingContacts = false
   private pendingState = false
+  /** v0.7.0: os follow-ups do Copiloto mudaram */
+  private pendingFollowups = false
   private update: UpdateState = { status: 'none' }
   private updateCheck: UpdateCheck = {
     enabled: false,
@@ -316,7 +332,8 @@ export class SagaService extends EventEmitter {
       clock,
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
       pnForLid: (lid) => this.wa?.pnForLid?.(lid) ?? null,
-      diag: (k, d) => this.diag(k, d)
+      diag: (k, d) => this.diag(k, d),
+      onFollowups: () => this.markFollowups()
     })
 
     const lim = (name: LimiterName) => new RateLimiter(LIMITS[name], clock, rng, { repo, key: `limiter:${name}` })
@@ -661,6 +678,17 @@ export class SagaService extends EventEmitter {
     this.scheduleEmit()
   }
 
+  private markFollowups(): void {
+    this.pendingFollowups = true
+    this.scheduleEmit()
+  }
+
+  /** v0.7.0: os follow-ups do Copiloto mudaram (chegou, saiu, foi recusado ou cancelado) */
+  onFollowupsChanged(cb: () => void): Unsubscribe {
+    this.on('followups', cb)
+    return () => this.off('followups', cb)
+  }
+
   private markSends(jid: string): void {
     this.pendingSendJids.add(jid)
     this.scheduleEmit()
@@ -690,6 +718,16 @@ export class SagaService extends EventEmitter {
       const sendJids = [...this.pendingSendJids]
       const contacts = this.pendingContacts
       const state = this.pendingState
+      // um envio mudou ou chegou mensagem (o eco): o follow-up que ele leva pode ter saído
+      if (sendJids.length > 0 || jids.length > 0) {
+        try {
+          this.copiloto.reconcileFollowups()
+        } catch {
+          // banco fechado
+        }
+      }
+      const followups = this.pendingFollowups
+      this.pendingFollowups = false
       this.pendingJids.clear()
       this.pendingSendJids.clear()
       this.pendingContacts = false
@@ -698,6 +736,7 @@ export class SagaService extends EventEmitter {
         if (contacts) this.emit('contacts')
         for (const j of jids) this.emit('messages', j)
         for (const j of sendJids) this.emit('sends', j)
+        if (followups) this.emit('followups')
         if (state) this.emit('state', this.state())
       } catch (e) {
         this.repo.logEvent('emit_error', e instanceof Error ? e.message : String(e))
@@ -1239,15 +1278,90 @@ export class SagaService extends EventEmitter {
       this.diag('send_refused', `chat=${chatHash(jid)} rascunho inválido`)
       return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
     }
+    // v0.7.0: o rascunho de um follow-up do Copiloto tem o id dele; o mesmo follow-up nunca sai duas vezes
+    const followup = this.repo.followups.get(input.draftId)
+    if (followup) {
+      const refused = this.followupSendRefusal(followup, jid, text)
+      if (refused) return refused
+    }
     const gate = this.consumeConfirmation(input.token, jid, text, 'avulsa')
-    if (!gate.ok) return gate
+    if (!gate.ok) {
+      // a regra dos 30 dias barrou: o follow-up volta ao Copiloto como "não dá para enviar"
+      if (followup && gate.code === 'no_recent_contact') this.copiloto.finishFollowup(followup.id, 'failed', FOLLOWUP_REASON.outside30)
+      return gate
+    }
     const idemKey = `avulsa:${jid}:${input.draftId}:${textHash(text)}`
     const prev = this.repo.sends.byIdemKey(idemKey)
     if (prev && this.wa.isSendInFlight?.(prev.id)) {
       this.diag('send_refused', `send #${prev.id} chat=${chatHash(jid)} in_flight`)
       return { ok: false, code: 'in_flight', message: SEND_REFUSAL_TEXT.in_flight }
     }
-    return this.enqueueConfirmed({ idemKey, kind: 'avulsa', replyId: null, jid, text, bind: gate.bind, outside: gate.outside })
+    const r = this.enqueueConfirmed({ idemKey, kind: 'avulsa', replyId: null, jid, text, bind: gate.bind, outside: gate.outside })
+    if (r.ok && followup) {
+      // a ligação fica gravada (o id do rascunho também está na chave do envio): reiniciar no meio ainda relata certo
+      if (this.repo.followups.transition(followup.id, ['waiting', 'sending'], 'sending', { sendId: r.send.id, sendError: null })) this.markFollowups()
+      this.sendDiag('send_followup', this.repo.sends.get(r.send.id)!, 'follow-up do Copiloto')
+    }
+    return r
+  }
+
+  /**
+   * v0.7.0: o follow-up pode sair agora? Só o que espera o mentor (ou um cujo envio anterior não saiu), na conversa dele,
+   * com até 4000 caracteres, e sem nenhum envio dele na fila, saindo, desconhecido ou já enviado.
+   */
+  private followupSendRefusal(f: FollowupRow, jid: string, text: string): { ok: false; code: SendRefusal | 'not_confirmed'; message: string } | null {
+    this.copiloto.reconcileFollowups()
+    const cur = this.repo.followups.get(f.id) ?? f
+    if (cur.jid !== jid) {
+      this.diag('send_refused', `chat=${chatHash(jid)} follow-up de outra conversa`)
+      return { ok: false, code: 'unknown_chat', message: SEND_REFUSAL_TEXT.unknown_chat }
+    }
+    if (cur.status !== 'waiting') {
+      this.diag('send_refused', `chat=${chatHash(jid)} follow-up ${cur.status}`)
+      return cur.status === 'sending'
+        ? { ok: false, code: 'in_flight', message: SEND_REFUSAL_TEXT.in_flight }
+        : { ok: false, code: 'followup_done', message: SEND_REFUSAL_TEXT.followup_done }
+    }
+    if ([...text].length > FOLLOWUP_LIMITS.textChars) return { ok: false, code: 'too_long', message: SEND_REFUSAL_TEXT.too_long }
+    for (const id of this.repo.followups.sendIdsOf(cur.id, jid)) {
+      const s = this.repo.sends.get(id)!
+      if (s.status === 'sent' || s.status === 'unknown' || SEND_ACTIVE.has(s.status)) {
+        this.diag('send_refused', `send #${s.id} chat=${chatHash(jid)} follow-up já tem envio`)
+        return { ok: false, code: 'in_flight', message: SEND_REFUSAL_TEXT.in_flight }
+      }
+    }
+    return null
+  }
+
+  // --- follow-up do Copiloto (v0.7.0) ---
+
+  /** Os follow-ups que a interface mostra (esperando, saindo, e por algumas horas os enviados e os sem envio). */
+  async listFollowups(): Promise<FollowupView[]> {
+    this.copiloto.reconcileFollowups()
+    return this.repo.followups.listVisible(FOLLOWUP_LIMITS.recentMs).map(followupView)
+  }
+
+  /**
+   * "Abrir para enviar": confere se ainda dá (a regra dos 30 dias barra: volta ao Copiloto como `fora_30_dias`) e
+   * devolve o follow-up para a caixa da mensagem avulsa. Não envia nada: o envio é a confirmação de sempre.
+   */
+  async followupOpen(id: string): Promise<FollowupOpenResult> {
+    this.copiloto.reconcileFollowups()
+    const f = this.repo.followups.get(id)
+    if (!f || !f.jid) return { ok: false, code: 'not_found', message: FOLLOWUP_TEXT.notFound }
+    if (f.status !== 'waiting') return { ok: false, code: 'done', message: FOLLOWUP_TEXT.done }
+    if (!this.settings.sendOptions().enabled) return { ok: false, code: 'disabled', message: SEND_REFUSAL_TEXT.disabled }
+    if (!hasRecentContactMessage(this.repo.listMessages(f.jid, 300), this.clock.now())) {
+      this.copiloto.finishFollowup(f.id, 'failed', FOLLOWUP_REASON.outside30)
+      return { ok: false, code: 'fora_30_dias', message: FOLLOWUP_TEXT.outside30 }
+    }
+    return { ok: true, followup: followupView(f as FollowupRow & { jid: string }) }
+  }
+
+  /** "Recusar": vai ao Copiloto como recusado, com o motivo digitado (até 200 caracteres) ou `recusado_pelo_mentor`. */
+  async followupDecline(id: string, reason: string | null): Promise<boolean> {
+    this.copiloto.reconcileFollowups()
+    return this.copiloto.finishFollowup(id, 'declined', shortReason(reason) ?? FOLLOWUP_REASON.declined)
   }
 
   /**

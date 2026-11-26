@@ -63,3 +63,74 @@ export type CopilotoCodeResult = { ok: true; code: string } | { ok: false; messa
 
 /** "Testar conexão": quantos telefones de mentorados o Copiloto mandou e quantas conversas daqui são deles. */
 export type CopilotoTestResult = { ok: true; phones: number; chats: number } | { ok: false; message: string }
+
+// --- v0.7.0: follow-up do Copiloto (contrato v1.1) ---
+
+/**
+ * Estado local de um follow-up escrito pela equipe no Copiloto:
+ * - `waiting`: o aviso está na conversa, esperando o mentor ("Abrir para enviar" ou "Recusar");
+ * - `sending`: o mentor confirmou o envio (mensagem avulsa na fila, enviando, ou de estado desconhecido);
+ * - `sent`: saiu (o eco confirmou) · `declined`: o mentor recusou · `failed`: não dá para enviar (fora dos 30 dias,
+ *   conversa não encontrada) · `cancelled`: a equipe cancelou no Copiloto antes do envio.
+ */
+export type FollowupStatus = 'waiting' | 'sending' | 'sent' | 'declined' | 'failed' | 'cancelled'
+
+export const FOLLOWUP_LIMITS = {
+  /** o servidor manda no máximo 50 por vez */
+  pendingMax: 50,
+  textChars: 4000,
+  authorChars: 80,
+  /** o motivo da recusa (digitado pelo mentor) vai com no máximo 200 caracteres */
+  reasonChars: 200,
+  /** atualizações por pedido (`followup_update`) */
+  updatesMax: 100,
+  /** a busca de follow-ups novos: a cada 5 min enquanto a integração está ligada */
+  pollEveryMs: 5 * 60_000,
+  /** o aviso de enviado/recusado/sem envio continua visível na conversa por este tempo */
+  recentMs: 12 * 60 * 60_000
+} as const
+
+/** Motivos curtos do contrato (`reason` do `followup_update`). */
+export const FOLLOWUP_REASON = {
+  declined: 'recusado_pelo_mentor',
+  outside30: 'fora_30_dias',
+  notFound: 'conversa_nao_encontrada'
+} as const
+
+/** Um follow-up, como a interface vê (o alvo do Copiloto não sai do processo principal). */
+export interface FollowupView {
+  id: string
+  /** a conversa local deste follow-up */
+  jid: string
+  text: string
+  author: string | null
+  /** epoch ms: quando a equipe escreveu */
+  createdAt: number
+  status: FollowupStatus
+  /** a mensagem avulsa que leva este follow-up (o mesmo id do rascunho) */
+  sendId: number | null
+  /** o texto que saiu (o mentor pode ter editado) */
+  finalText: string | null
+  sentAt: number | null
+  /** motivo curto da recusa ou do "não dá para enviar" (o que vai ao Copiloto) */
+  reason: string | null
+  /** o último envio deste follow-up não saiu (falhou, expirou, cancelado): o motivo; o aviso volta a esperar */
+  sendError: string | null
+}
+
+export const FOLLOWUP_TEXT = {
+  outside30: 'O SagaZap só envia para quem mandou mensagem nos últimos 30 dias. Esta mensagem do Copiloto foi devolvida à equipe.',
+  done: 'Esta mensagem do Copiloto já foi enviada, recusada ou cancelada.',
+  notFound: 'Mensagem do Copiloto não encontrada.'
+} as const
+
+export type FollowupOpenResult = { ok: true; followup: FollowupView } | { ok: false; code: 'fora_30_dias' | 'done' | 'not_found' | 'disabled'; message: string }
+
+/** Texto do motivo para o mentor (os códigos do contrato viram frases). */
+export function followupReasonText(reason: string | null): string | null {
+  if (!reason) return null
+  if (reason === FOLLOWUP_REASON.outside30) return 'fora dos 30 dias (o mentorado não escreveu no último mês)'
+  if (reason === FOLLOWUP_REASON.notFound) return 'conversa não encontrada neste computador'
+  if (reason === FOLLOWUP_REASON.declined) return 'recusada por você'
+  return reason
+}

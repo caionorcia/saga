@@ -106,7 +106,7 @@ export interface SendPreview {
 /** O que a confirmação mostra quando está fora do horário e ainda sem "Forçar envio" (sem token: nada pode sair). */
 export type SendDraft = Omit<SendPreview, 'token' | 'expiresAt' | 'forced' | 'outsideHours'>
 
-export type SendRefusal = 'outside_hours' | 'disabled' | 'empty' | 'too_long' | 'no_recent_contact' | 'unknown_chat' | 'offline' | 'in_flight'
+export type SendRefusal = 'outside_hours' | 'disabled' | 'empty' | 'too_long' | 'no_recent_contact' | 'unknown_chat' | 'offline' | 'in_flight' | 'followup_done'
 
 export const SEND_REFUSAL_TEXT: Record<SendRefusal, string> = {
   disabled: 'O envio direto está desligado nas Configurações.',
@@ -116,7 +116,8 @@ export const SEND_REFUSAL_TEXT: Record<SendRefusal, string> = {
   unknown_chat: 'Conversa não encontrada.',
   offline: 'O WhatsApp não está conectado. Envie quando ele voltar (a faixa de cima mostra "Conectado").',
   in_flight: 'O envio anterior desta mensagem ainda está em andamento. Espere um pouco e clique em Conferir.',
-  outside_hours: 'Fora do horário de envio. Marque "Forçar envio" para enviar agora mesmo assim.'
+  outside_hours: 'Fora do horário de envio. Marque "Forçar envio" para enviar agora mesmo assim.',
+  followup_done: 'Esta mensagem do Copiloto já foi enviada, recusada ou cancelada.'
 }
 
 /** Motivo gravado quando a conexão cai (ou é refeita) com o envio ainda na fila ou no "digitando…". */

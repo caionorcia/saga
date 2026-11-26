@@ -18,6 +18,8 @@ const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) 
   const body = JSON.parse(raw)
   calls.push({ url: String(url), auth: String((init?.headers as Record<string, string>).Authorization), body, raw })
   if (body.action === 'roster') return new Response(JSON.stringify({ version: 1, phones: roster }), { status: 200 })
+  // v0.7.0: a busca de follow-ups (nenhum aqui; os testes deles ficam em followups.test.ts)
+  if (body.action === 'followups_pending') return new Response(JSON.stringify({ version: 1, followups: [] }), { status: 200 })
   const r = replies.shift() ?? { status: 200 }
   if (r === 'network') throw new TypeError('fetch failed')
   const out = r.status === 200 && r.body === undefined ? { results: body.events.map((e: { id: string }) => ({ id: e.id, status: 'stored' })) } : (r.body ?? {})
