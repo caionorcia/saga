@@ -71,6 +71,25 @@ describe('selectExamples', () => {
   })
 })
 
+describe('selectExamples: sugestões não escolhidas', () => {
+  it('guarda as não escolhidas e inclui no máximo 2 exemplos com "rejected" (mesmo contato ou parecidos)', () => {
+    for (let i = 0; i < 4; i++) {
+      clock.advance(1000)
+      saveApproved(repo, { jid: A, contextText: `ctx ${i}`, originalSuggestion: null, finalText: `resp ${i}`, provider: 'groq', rejected: [`nao ${i}`] })
+    }
+    expect(repo.listApproved({ jid: A, limit: 1 })[0].rejected).toEqual(['nao 3'])
+    const ex = selectExamples(repo, A, 'zzzz')
+    expect(ex.filter((e) => e.rejected).map((e) => e.rejected)).toEqual(['nao 3', 'nao 2'])
+  })
+
+  it('sem não escolhidas, ou igual à resposta final, não inclui a linha', () => {
+    save(A, 'ctx', 'Resposta igual')
+    clock.advance(1000)
+    saveApproved(repo, { jid: A, contextText: 'ctx2', originalSuggestion: null, finalText: 'Resposta igual!', provider: 'groq', rejected: ['resposta igual'] })
+    expect(selectExamples(repo, A, 'x').every((e) => e.rejected === undefined)).toBe(true)
+  })
+})
+
 describe('sent_history com áudio', () => {
   it('só usa transcrição quando status done', () => {
     repo.insertMessage({ id: 'a1', jid: A, fromMe: false, ts: T0 - 9000, kind: 'audio', text: null, mediaKeyJson: null, durationSec: 5 })

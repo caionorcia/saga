@@ -820,13 +820,21 @@ export class SagaService extends EventEmitter {
     const stored = this.repo.getAnalysis(input.jid)
     const { contextText } = analysisContext(this.repo, input.jid, input.analysisLastMsgId ?? stored?.lastMsgId)
     const provider = stored?.provider ?? this.settings.get().provider
+    // escolha: as outras sugestões dessa análise viram "não escolhidas" (só se a análise guardada é a mesma)
+    const chosen =
+      input.chosenIndex !== undefined && stored && stored.lastMsgId === (input.analysisLastMsgId ?? stored.lastMsgId) && input.chosenIndex < stored.suggestions.length
+        ? input.chosenIndex
+        : undefined
+    const rejected = chosen === undefined ? [] : stored!.suggestions.filter((_, i) => i !== chosen)
     const id = saveApproved(this.repo, {
       jid: input.jid,
       contextText,
       originalSuggestion: input.originalSuggestion,
       finalText,
-      provider
+      provider,
+      rejected
     })
+    if (chosen !== undefined) this.repo.setChosen(input.jid, stored!.lastMsgId, chosen, id)
     try {
       reconcileSaved(this.repo, { id, jid: input.jid, finalText }, this.clock.now())
     } catch (e) {

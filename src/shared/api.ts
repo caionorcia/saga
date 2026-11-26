@@ -139,6 +139,8 @@ export interface SaveReplyInput {
   finalText: string
   /** `lastMsgId` da análise que gerou a sugestão: o contexto salvo é o daquela análise */
   analysisLastMsgId?: string | null
+  /** posição (0, 1, …) da sugestão escolhida na análise atual; o serviço guarda a escolha e as não escolhidas */
+  chosenIndex?: number
 }
 
 export interface RecentEvent {

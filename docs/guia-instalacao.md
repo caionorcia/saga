@@ -70,7 +70,7 @@ O Saga traz os últimos 30 dias de conversas e baixa os áudios aos poucos, de p
 
 - **Esquerda:** as conversas, pessoas e grupos. O selo "há 3 h" indica que alguém está aguardando a sua resposta e há quanto tempo (num grupo: a última mensagem não é sua). No topo, escolha **Todos**, **Individuais** ou **Grupos**; o Saga lembra a escolha. A busca procura pessoas e grupos.
 - **Meio:** a conversa, com os áudios já transcritos e o resumo "O que a pessoa quer". Nos grupos, cada mensagem mostra o nome de quem mandou, as que mencionam você aparecem marcadas, e o resumo se chama "O que pedem a você": perguntas e pedidos para você, não um resumo do grupo inteiro.
-- **Direita:** sugestões de resposta (num grupo, mensagens para você postar no grupo). Edite como quiser, clique em **Copiar** e cole no WhatsApp. **Salvar** guarda a sua versão final para o Saga aprender o seu jeito. **Gerar novas** pede outras sugestões.
+- **Direita:** sugestões de resposta (num grupo, mensagens para você postar no grupo). Edite como quiser, clique em **Copiar** e cole no WhatsApp. **Copiar** e **Salvar** escolhem a resposta: as outras sugestões somem e ela fica marcada como "✓ Resposta escolhida" (**Mostrar as outras sugestões** traz elas de volta). Escolher guarda a sua versão final, e também o que você deixou de lado, para o Saga aprender o seu jeito. **Gerar novas** pede outras sugestões.
 
 ### Fila do dia e alertas (versão 0.2.0)
 

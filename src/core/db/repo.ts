@@ -153,6 +153,10 @@ export interface AnalysisRow {
   pendingAudios: number
   /** trechos de conhecimento da base usados no pedido ("Baseado em"); vazio sem base */
   sources?: KbSource[]
+  /** índice da sugestão que o mentor escolheu (Copiar ou Salvar); null = ainda não escolheu */
+  chosenIndex?: number | null
+  /** id em `approved_replies` da última resposta salva dessa escolha */
+  chosenReplyId?: number | null
 }
 
 export interface ApprovedRow {
@@ -164,6 +168,8 @@ export interface ApprovedRow {
   sentText: string | null
   provider: string | null
   createdAt: number
+  /** as outras sugestões que o mentor NÃO escolheu naquela análise */
+  rejected: string[]
 }
 
 export interface EventRow {
@@ -341,7 +347,18 @@ function toApproved(r: Row): ApprovedRow {
     finalText: r.final_text,
     sentText: r.sent_text,
     provider: r.provider,
-    createdAt: r.created_at
+    createdAt: r.created_at,
+    rejected: parseStrings(r.rejected_json)
+  }
+}
+
+function parseStrings(json: string | null | undefined): string[] {
+  if (!json) return []
+  try {
+    const v = JSON.parse(json) as unknown
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
   }
 }
 
@@ -964,8 +981,17 @@ export class Repo {
       createdAt: r.created_at,
       transcriptFp: r.transcript_fp ?? '',
       pendingAudios: r.pending_audios ?? 0,
-      sources: parseSources(r.sources_json)
+      sources: parseSources(r.sources_json),
+      chosenIndex: r.chosen_index ?? null,
+      chosenReplyId: r.chosen_reply_id ?? null
     }
+  }
+
+  /** Guarda qual sugestão o mentor escolheu (e a resposta salva dela) na análise atual do contato. */
+  setChosen(jid: string, lastMsgId: string, index: number, replyId: number): void {
+    this.db
+      .prepare('UPDATE analyses SET chosen_index = ?, chosen_reply_id = ? WHERE jid = ? AND last_msg_id = ?')
+      .run(index, replyId, jid, lastMsgId)
   }
 
   // --- respostas aprovadas (memória) ---
@@ -976,13 +1002,14 @@ export class Repo {
     originalSuggestion: string | null
     finalText: string
     provider: string | null
+    rejected?: string[]
   }): number {
     const res = this.db
       .prepare(
-        `INSERT INTO approved_replies(jid, context_text, original_suggestion, final_text, provider, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO approved_replies(jid, context_text, original_suggestion, final_text, provider, created_at, rejected_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(a.jid, a.contextText, a.originalSuggestion, a.finalText, a.provider, this.clock.now())
+      .run(a.jid, a.contextText, a.originalSuggestion, a.finalText, a.provider, this.clock.now(), a.rejected?.length ? JSON.stringify(a.rejected) : null)
     return Number(res.lastInsertRowid)
   }
 

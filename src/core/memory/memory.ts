@@ -5,7 +5,12 @@ export interface Example {
   context: string
   reply: string
   source: 'same_contact' | 'similar' | 'recent' | 'sent_history'
+  /** uma sugestão que o mentor NÃO escolheu nessa ocasião (só em alguns exemplos; sinal de preferência) */
+  rejected?: string
 }
+
+/** No máximo tantos exemplos levam a linha "Não escolhida", para o prompt continuar curto. */
+export const REJECTED_MAX_EXAMPLES = 2
 
 const SIX_HOURS = 6 * 3_600_000
 /** Tolerância entre o relógio local (created_at) e o horário do WhatsApp. */
@@ -55,7 +60,10 @@ export function selectExamples(repo: Repo, jid: string, contextText: string): Ex
     usedIds.push(a.id)
     if (usedReplies.has(key)) return false
     usedReplies.add(key)
-    out.push({ context: a.contextText, reply, source })
+    const ex: Example = { context: a.contextText, reply, source }
+    const rejected = a.rejected.find((r) => r.trim() && norm(r) !== key)
+    if (rejected && (source === 'same_contact' || source === 'similar') && out.filter((e) => e.rejected).length < REJECTED_MAX_EXAMPLES) ex.rejected = rejected
+    out.push(ex)
     return true
   }
   const fill = (rows: (excl: number[]) => ApprovedRow[], max: number, source: Example['source']) => {
@@ -99,7 +107,7 @@ function findPrevContactText(msgs: MessageRow[], idx: number): string | null {
 
 export function saveApproved(
   repo: Repo,
-  a: { jid: string; contextText: string; originalSuggestion: string | null; finalText: string; provider: string | null }
+  a: { jid: string; contextText: string; originalSuggestion: string | null; finalText: string; provider: string | null; rejected?: string[] }
 ): number {
   return repo.insertApproved(a)
 }

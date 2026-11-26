@@ -81,6 +81,7 @@ function knowledgeUser(k: KbContext | null | undefined): string {
 
 const MAX_EXAMPLE_CONTEXT = 500
 const MAX_EXAMPLE_REPLY = 800
+const MAX_EXAMPLE_REJECTED = 200
 
 function clip(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max).trimEnd()}…` : s
@@ -111,7 +112,13 @@ export function buildPrompt(p: PromptInput): { system: string; user: string } {
   if (p.examples.length) {
     parts.push(
       'Exemplos de como o mentor costuma responder (imite este estilo):\n\n' +
-        p.examples.map((e) => `Mensagem do mentorado: ${clip(e.context, MAX_EXAMPLE_CONTEXT)}\nResposta do mentor: ${clip(e.reply, MAX_EXAMPLE_REPLY)}`).join('\n\n')
+        p.examples
+          .map(
+            (e) =>
+              `Mensagem do mentorado: ${clip(e.context, MAX_EXAMPLE_CONTEXT)}\nResposta do mentor: ${clip(e.reply, MAX_EXAMPLE_REPLY)}` +
+              (e.rejected ? `\nNão escolhida: ${clip(e.rejected, MAX_EXAMPLE_REJECTED)}` : '')
+          )
+          .join('\n\n')
     )
   }
   const kbUser = knowledgeUser(p.knowledge)

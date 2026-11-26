@@ -159,6 +159,8 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   const calls: FakeControl['calls'] = []
   let replyId = 0
   let generation = 0
+  /** escolha por contato (Copiar/Salvar), guardada com a análise atual; some quando se gera de novo */
+  const chosen = new Map<string, { index: number; replyId: number }>()
   const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
   const snapshot = (): AppState => {
@@ -225,6 +227,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     const pendingAudios = c.messages.filter((m) => m.kind === 'audio' && m.transcriptStatus === null).length
     let a = analyses.get(jid)
     if (!a || fresh) {
+      if (fresh) chosen.delete(jid)
       generation++
       const base = a?.suggestions ?? ['Oi! Vi a sua mensagem e já te respondo com calma.', 'Obrigado por avisar. Vamos conversar sobre isso na nossa próxima sessão?']
       a = {
@@ -241,7 +244,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     const sources = kb.sourcesFor(asked)
     return {
       ok: true,
-      analysis: { jid, lastMsgId, provider: a.provider, summary: a.summary, suggestions: a.suggestions, createdAt: generation, transcriptFp: '', pendingAudios, sources }
+      analysis: { jid, lastMsgId, provider: a.provider, summary: a.summary, suggestions: a.suggestions, createdAt: generation, transcriptFp: '', pendingAudios, sources, chosenIndex: chosen.get(jid)?.index ?? null, chosenReplyId: chosen.get(jid)?.replyId ?? null }
     }
   }
 
@@ -389,7 +392,11 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     getAnalysis: (jid) => analysisFor(jid, false),
     regenerate: (jid) => analysisFor(jid, true),
 
-    saveReply: async (input) => record('saveReply', [input], ++replyId),
+    saveReply: async (input) => {
+      const id = ++replyId
+      if (input.chosenIndex !== undefined) chosen.set(input.jid, { index: input.chosenIndex, replyId: id })
+      return record('saveReply', [input], id)
+    },
     copyToClipboard: async (text) => {
       record('copyToClipboard', [text], undefined)
       try {

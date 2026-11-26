@@ -258,6 +258,15 @@ button.alert-main:hover .alert-detail { text-decoration: underline; }
 .sug-list { margin-top: 12px; display: flex; flex-direction: column; gap: 14px; }
 .sug-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px 12px; background: var(--panel-2); }
 .sug-label { margin: 0 0 4px; color: var(--accent-text); }
+.sug-card { max-height: 600px; overflow: hidden; transition: opacity 0.2s ease, max-height 0.25s ease, margin 0.25s ease, padding 0.25s ease, border-width 0.25s ease; }
+.sug-card:focus { outline: none; }
+.sug-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sug-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.sug-chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.sug-badge { color: var(--accent-text); background: var(--accent-soft); border-radius: 999px; padding: 1px 10px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.sug-out { opacity: 0; max-height: 0; margin-top: -14px; padding-top: 0; padding-bottom: 0; border-width: 0; visibility: hidden; transition: opacity 0.2s ease, max-height 0.25s ease, margin 0.25s ease, padding 0.25s ease, border-width 0.25s ease, visibility 0s linear 0.25s; }
+.sug-more { align-self: flex-start; }
+@media (prefers-reduced-motion: reduce) { .sug-card, .sug-out { transition: none; } }
 .sug-actions { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
 .sug-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding-top: 4px; }
 .sug-state { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; color: var(--muted); }

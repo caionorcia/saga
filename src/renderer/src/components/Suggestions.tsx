@@ -66,6 +66,10 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
   const [view, setView] = useState<View>({ kind: 'loading' })
   const [busy, setBusy] = useState(false)
   const [newMessage, setNewMessage] = useState(false)
+  /** índice da sugestão escolhida (Copiar ou Salvar) e se as outras foram trazidas de volta */
+  const [chosen, setChosen] = useState<number | null>(null)
+  const [showOthers, setShowOthers] = useState(false)
+  const [announce, setAnnounce] = useState('')
   const ownDrafts = useRef<DraftStore>(new Map())
   const drafts = draftsProp ?? ownDrafts.current
   const draftsRef = useRef(drafts)
@@ -88,6 +92,9 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
         normalInFlight.current = true
         setView({ kind: 'loading' })
         setNewMessage(false)
+        setChosen(null)
+        setShowOthers(false)
+        setAnnounce('')
         current.current = null
         onAnalysisRef.current?.(null)
       }
@@ -106,6 +113,8 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
             }
             clearDrafts(draftsRef.current, jid)
             current.current = r.analysis
+            setChosen(r.analysis.chosenIndex ?? null)
+            setShowOthers(false)
             setView({ kind: 'ready', analysis: r.analysis })
             onAnalysisRef.current?.(r.analysis)
           } else if (!silent || viewRef.current.kind === 'loading') {
@@ -202,8 +211,17 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
   }
 
   const { analysis } = view
+  const collapsed = chosen !== null && !showOthers
+  const choose = (i: number) => {
+    setChosen(i)
+    setShowOthers(false)
+    setAnnounce('Resposta escolhida')
+  }
   return (
     <div className="sug-list">
+      <div className="sr-only" role="status" aria-live="polite">
+        {announce}
+      </div>
       {newMessage && (
         <div className="sug-notice" role="status">
           Chegou mensagem nova — suas edições foram mantidas.{' '}
@@ -222,8 +240,17 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
           analysisLastMsgId={analysis.lastMsgId}
           drafts={drafts}
           sources={analysis.sources}
+          chosen={chosen === i}
+          out={collapsed && chosen !== i}
+          persistedChoice={analysis.chosenIndex === i}
+          onChoose={() => choose(i)}
         />
       ))}
+      {collapsed && (
+        <button type="button" className="link-btn sug-more" onClick={() => setShowOthers(true)}>
+          Mostrar as outras sugestões
+        </button>
+      )}
       <div className="sug-footer">
         <button
           type="button"
@@ -245,7 +272,11 @@ function SuggestionCard({
   original,
   analysisLastMsgId,
   drafts,
-  sources
+  sources,
+  chosen,
+  out,
+  persistedChoice,
+  onChoose
 }: {
   jid: string
   index: number
@@ -255,46 +286,86 @@ function SuggestionCard({
   drafts: DraftStore
   /** trechos de conhecimento da base usados na geração ("Baseado em") */
   sources?: KbSource[]
+  /** este é o cartão escolhido */
+  chosen: boolean
+  /** outro cartão foi escolhido: este some (fica montado para não perder a edição) */
+  out: boolean
+  /** a escolha veio do banco (conversa reaberta): a resposta já foi salva antes */
+  persistedChoice: boolean
+  onChoose: () => void
 }) {
   const key = draftKey(jid, index)
   const [text, setText] = useState(() => {
     const d = drafts.get(key)
     return d && d.original === original ? d.text : original
   })
-  const [saved, setSaved] = useState(false)
+  const [saved, setSaved] = useState(persistedChoice)
+  /** último texto gravado na memória: copiar só salva de novo se o texto mudou */
+  const lastSaved = useRef<string | null>(persistedChoice ? text : null)
+  const cardRef = useRef<HTMLDivElement>(null)
   const [copied, setCopied] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(copyTimer.current), [])
 
-  const save = async () => {
-    setFailed(null)
+  // ao escolher, o foco fica neste cartão (os outros somem)
+  useEffect(() => {
+    const el = cardRef.current
+    if (chosen && el && !el.contains(document.activeElement)) el.focus()
+  }, [chosen])
+
+  /** grava na memória (com as não escolhidas, que o serviço tira da análise); devolve se deu certo */
+  const persist = async (): Promise<boolean> => {
+    if (lastSaved.current === text) return true
     try {
-      await window.saga.saveReply({ jid, originalSuggestion: original, finalText: text, analysisLastMsgId })
+      await window.saga.saveReply({ jid, originalSuggestion: original, finalText: text, analysisLastMsgId, chosenIndex: index })
+      lastSaved.current = text
       setSaved(true)
+      return true
     } catch {
       setFailed('Não foi possível salvar. Tente de novo.')
+      return false
     }
   }
 
+  const save = async () => {
+    setFailed(null)
+    if (await persist()) onChoose()
+  }
+
+  // copiar também ensina o sistema: salva a versão copiada (se ainda não está salva) e escolhe este cartão
   const copy = async () => {
     setFailed(null)
     try {
       await window.saga.copyToClipboard(text)
-      setCopied(true)
-      clearTimeout(copyTimer.current)
-      copyTimer.current = setTimeout(() => setCopied(false), COPIED_MS)
     } catch {
       setFailed('Não foi possível copiar. Tente de novo.')
+      return
     }
+    setCopied(true)
+    clearTimeout(copyTimer.current)
+    copyTimer.current = setTimeout(() => setCopied(false), COPIED_MS)
+    await persist()
+    onChoose()
   }
 
   const id = `sug-${index}`
   return (
-    <div className="sug-card">
-      <label htmlFor={id} className="sug-label">
-        Sugestão {index + 1}
-      </label>
+    <div
+      ref={cardRef}
+      className={`sug-card${chosen ? ' sug-chosen' : ''}${out ? ' sug-out' : ''}`}
+      role="group"
+      aria-label={`Sugestão ${index + 1}`}
+      aria-hidden={out || undefined}
+      tabIndex={-1}
+      {...(out ? { inert: '' } : {})}
+    >
+      <div className="sug-head">
+        <label htmlFor={id} className="sug-label">
+          Sugestão {index + 1}
+        </label>
+        {chosen && <span className="sug-badge">✓ Resposta escolhida</span>}
+      </div>
       <textarea
         id={id}
         value={text}

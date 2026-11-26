@@ -144,7 +144,8 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
     nonEmpty(i.jid) &&
     nonEmpty(i.finalText) &&
     (i.originalSuggestion === null || i.originalSuggestion === undefined || isStr(i.originalSuggestion)) &&
-    (i.analysisLastMsgId === null || i.analysisLastMsgId === undefined || isStr(i.analysisLastMsgId)),
+    (i.analysisLastMsgId === null || i.analysisLastMsgId === undefined || isStr(i.analysisLastMsgId)) &&
+    (i.chosenIndex === undefined || (typeof i.chosenIndex === 'number' && Number.isInteger(i.chosenIndex) && i.chosenIndex >= 0 && i.chosenIndex < 20)),
   copyToClipboard: ([t]) => isStr(t),
   renameContact: ([j, n]) => nonEmpty(j) && isStr(n),
   setNotes: ([j, t]) => nonEmpty(j) && isStr(t),

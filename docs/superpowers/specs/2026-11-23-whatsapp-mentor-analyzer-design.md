@@ -38,6 +38,13 @@ cada vez menos correção.
   - **Direita:** 2–3 sugestões de resposta; cada uma pode ser editada num
     campo de texto; botões **Salvar** (grava na memória) e **Copiar**
     (copia para a área de transferência). Botão para gerar novas sugestões.
+    **Copiar** também salva (se o texto ainda não foi salvo). Copiar ou Salvar
+    *escolhe* a sugestão: as outras somem com um fade, o cartão fica marcado
+    "✓ Resposta escolhida" e "Mostrar as outras sugestões" as traz de volta. A
+    escolha fica na análise (`chosen_index`, `chosen_reply_id`) e some quando
+    uma análise nova é gerada. As sugestões não escolhidas vão em
+    `approved_replies.rejected_json`; até 2 exemplos do prompt (mesmo contato ou
+    parecidos) ganham a linha "Não escolhida: …" (200 caracteres).
 - Memória de aprendizado: respostas salvas viram exemplos nas próximas
   gerações (ver "Memória").
 

@@ -539,6 +539,26 @@ describe('SagaService', () => {
       expect(a.sentText).toBeNull()
     })
 
+    it('escolher uma sugestão guarda a escolha na análise e as outras em rejected_json; análise nova limpa a escolha', async () => {
+      settings.save({ groqKey: GROQ_KEY })
+      repo.upsertContact({ jid: JID })
+      repo.insertMessage({ id: 'q1', jid: JID, fromMe: false, ts: NOW - 60_000, kind: 'text', text: 'Quanto custa?', mediaKeyJson: null, durationSec: null })
+      const r = await service.getAnalysis(JID)
+      if (!r.ok) throw new Error('sem análise')
+      const sugs = r.analysis.suggestions
+      expect(r.analysis.chosenIndex).toBeNull()
+      const id = await service.saveReply({ jid: JID, originalSuggestion: sugs[0], finalText: 'versão final', analysisLastMsgId: r.analysis.lastMsgId, chosenIndex: 0 })
+      const [a] = repo.listApproved({ jid: JID, limit: 1 })
+      expect(a.rejected).toEqual(sugs.slice(1))
+      const stored = repo.getAnalysis(JID)!
+      expect([stored.chosenIndex, stored.chosenReplyId]).toEqual([0, id])
+      // sem chosenIndex (resposta escrita do zero): nada de rejected
+      await service.saveReply({ jid: JID, originalSuggestion: null, finalText: 'outra totalmente diferente' })
+      expect(repo.listApproved({ jid: JID, limit: 1 })[0].rejected).toEqual([])
+      const again = await service.regenerate(JID)
+      expect(again.ok && again.analysis.chosenIndex).toBeNull()
+    })
+
     it('OpenAI: custo da transcrição entra no gasto de hoje; acima do teto pausa a transcrição com o motivo', async () => {
       settings.save({ groqKey: GROQ_KEY, openaiKey: 'sk-SEGREDO', transcriber: 'openai', dailyCapUsd: 0.001 })
       audio('t1', { file: true })

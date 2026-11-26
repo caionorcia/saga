@@ -14,7 +14,9 @@ const analysis: Analysis = {
   suggestions: ['Claro, podemos adiar para quinta.', 'Pode ser sexta, às 10h?'],
   createdAt: 1,
   transcriptFp: '',
-  pendingAudios: 0
+  pendingAudios: 0,
+  chosenIndex: null,
+  chosenReplyId: null
 }
 
 let saga: Record<string, ReturnType<typeof vi.fn>>
@@ -48,7 +50,8 @@ describe('Suggestions', () => {
         jid: JID,
         originalSuggestion: 'Claro, podemos adiar para quinta.',
         finalText: 'Claro! Quinta às 15h serve?',
-        analysisLastMsgId: 'M1'
+        analysisLastMsgId: 'M1',
+        chosenIndex: 0
       })
     )
     expect(await screen.findByRole('button', { name: 'Salvo ✓' })).toBeTruthy()
@@ -68,7 +71,72 @@ describe('Suggestions', () => {
       vi.advanceTimersByTime(2100)
     })
     expect(screen.queryByRole('button', { name: 'Copiado ✓' })).toBeNull()
-    expect(screen.getAllByRole('button', { name: 'Copiar' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Copiar' })).toHaveLength(1)
+  })
+
+  it('Copiar também salva (com o texto editado e o índice escolhido), uma vez só se nada mudou', async () => {
+    render(<Suggestions jid={JID} />)
+    const box = (await screen.findAllByRole('textbox'))[1]
+    fireEvent.change(box, { target: { value: 'Sexta às 11h?' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copiar' })[1])
+    await waitFor(() =>
+      expect(saga.saveReply).toHaveBeenCalledWith({
+        jid: JID,
+        originalSuggestion: 'Pode ser sexta, às 10h?',
+        finalText: 'Sexta às 11h?',
+        analysisLastMsgId: 'M1',
+        chosenIndex: 1
+      })
+    )
+    expect(await screen.findByRole('button', { name: 'Salvo ✓' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Copiado|Copiar/ }))
+    await waitFor(() => expect(saga.copyToClipboard).toHaveBeenCalledTimes(2))
+    expect(saga.saveReply).toHaveBeenCalledTimes(1)
+    // mudou o texto: copiar de novo salva de novo
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Sexta às 12h?' } })
+    fireEvent.click(screen.getByRole('button', { name: /Copiado|Copiar/ }))
+    await waitFor(() => expect(saga.saveReply).toHaveBeenCalledTimes(2))
+  })
+
+  it('ao escolher, as outras somem, o cartão fica marcado, o foco fica nele e é anunciado', async () => {
+    render(<Suggestions jid={JID} />)
+    await screen.findAllByRole('textbox')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Salvar' })[0])
+    await screen.findByRole('button', { name: 'Salvo ✓' })
+    expect(screen.getAllByRole('textbox')).toHaveLength(1)
+    expect(screen.getByText('✓ Resposta escolhida')).toBeTruthy()
+    expect(screen.getAllByRole('status').some((e) => e.textContent === 'Resposta escolhida')).toBe(true)
+    const card = screen.getByRole('group', { name: /Sugestão 1/ })
+    expect(card.contains(document.activeElement)).toBe(true)
+    expect(saga.saveReply).toHaveBeenCalledWith(expect.objectContaining({ chosenIndex: 0 }))
+  })
+
+  it('"Mostrar as outras sugestões" traz de volta os cartões sem desfazer o salvo', async () => {
+    render(<Suggestions jid={JID} />)
+    await screen.findAllByRole('textbox')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Salvar' })[0])
+    fireEvent.click(await screen.findByRole('button', { name: 'Mostrar as outras sugestões' }))
+    expect(screen.getAllByRole('textbox')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Salvo ✓' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Mostrar as outras sugestões' })).toBeNull()
+  })
+
+  it('"Gerar novas" volta a mostrar todas, sem escolha', async () => {
+    render(<Suggestions jid={JID} />)
+    await screen.findAllByRole('textbox')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copiar' })[0])
+    await screen.findByRole('button', { name: 'Mostrar as outras sugestões' })
+    fireEvent.click(screen.getByRole('button', { name: 'Gerar novas' }))
+    await waitFor(() => expect(screen.getAllByRole('textbox')).toHaveLength(2))
+    expect(screen.queryByText('✓ Resposta escolhida')).toBeNull()
+  })
+
+  it('reabrir a conversa com escolha guardada mostra só o cartão escolhido', async () => {
+    install(async () => ({ ok: true, analysis: { ...analysis, chosenIndex: 1, chosenReplyId: 7 } }))
+    render(<Suggestions jid={JID} />)
+    await screen.findByText('✓ Resposta escolhida')
+    expect(screen.getAllByRole('textbox')).toHaveLength(1)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Pode ser sexta, às 10h?')
   })
 
   it('com getAnalysis rejeitando mostra "Tentar de novo" e tenta outra vez ao clicar', async () => {

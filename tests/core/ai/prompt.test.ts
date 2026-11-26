@@ -70,6 +70,21 @@ describe('buildPrompt truncamento', () => {
   })
 })
 
+describe('buildPrompt "Não escolhida"', () => {
+  it('mostra a sugestão não escolhida (cortada em 200) logo após a resposta do mentor', () => {
+    const p = buildPrompt({
+      contactName: 'x', notes: null, newMessages: [m('n', false)], priorMessages: [],
+      examples: [
+        { context: 'c1', reply: 'resposta boa', source: 'same_contact', rejected: 'z'.repeat(500) },
+        { context: 'c2', reply: 'outra', source: 'similar' }
+      ]
+    })
+    expect(p.user).toContain('Resposta do mentor: resposta boa\nNão escolhida: ' + 'z'.repeat(200) + '…')
+    expect(p.user).not.toContain('z'.repeat(201))
+    expect(p.user.match(/Não escolhida:/g)).toHaveLength(1)
+  })
+})
+
 describe('parseSuggestions', () => {
   it('aceita JSON em bloco ```json', () => {
     const r = parseSuggestions('```json\n{"resumo":"Quer ajuda","sugestoes":["a","b"]}\n```')
