@@ -41,8 +41,11 @@ export function onlyOwnNewMessages(messages: MessageView[], lastMsgId: string): 
 
 const isVisible = () => typeof document === 'undefined' || document.visibilityState === 'visible'
 
-/** Rascunhos editados pelo mentor, por `jid:índice`; vivem acima do componente para sobreviver a trocas de tela. */
-export type DraftStore = Map<string, { original: string; text: string }>
+/**
+ * Rascunhos editados pelo mentor, por `jid:índice`; vivem acima do componente para sobreviver a trocas de tela. A
+ * mensagem avulsa (v0.6.0) fica em `avulsa|jid`, com o id do rascunho, se a caixa está aberta e o envio dela.
+ */
+export type DraftStore = Map<string, { original: string; text: string; draftId?: string; open?: boolean; sendId?: number | null }>
 
 const draftKey = (jid: string, i: number) => `${jid}:${i}`
 
@@ -234,20 +237,29 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
     )
   }
 
+  /** v0.6.0: "Enviar mensagem avulsa" (só com o envio direto ligado): sempre ao alcance na conversa escolhida */
+  const avulsa = directSend ? (
+    <AvulsaComposer key={jid} jid={jid} drafts={drafts} sends={sends} onQueued={(send) => setSends((cur) => [send, ...cur.filter((x) => x.id !== send.id)])} />
+  ) : null
+
   if (view.kind === 'not_needed') {
     return (
-      <div className="sug-state sug-not-needed" role="status">
-        <p>Esta conversa não precisa de resposta agora.</p>
-        <p className="muted small">O SagaZap só escreve sugestões quando você pede, para não gastar à toa.</p>
-        <button type="button" className="btn btn-primary" disabled={busy} onClick={loadAnyway}>
-          Gerar sugestões mesmo assim
-        </button>
-      </div>
+      <>
+        <div className="sug-state sug-not-needed" role="status">
+          <p>Esta conversa não precisa de resposta agora.</p>
+          <p className="muted small">O SagaZap só escreve sugestões quando você pede, para não gastar à toa.</p>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={loadAnyway}>
+            Gerar sugestões mesmo assim
+          </button>
+        </div>
+        {avulsa}
+      </>
     )
   }
 
   if (view.kind === 'error') {
     return (
+      <>
       <div className="sug-state sug-error" role="alert">
         <p>{errorText(view.code, view.message)}</p>
         {(view.code === 'missing_key' || view.code === 'invalid_key' || view.code === 'model_unavailable') && onOpenSettings && (
@@ -261,6 +273,8 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
           </button>
         )}
       </div>
+      {avulsa}
+      </>
     )
   }
 
@@ -321,6 +335,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
         </button>
         <span className="muted">Gerado por: {providerLabel(analysis.provider)}</span>
       </div>
+      {avulsa}
     </div>
   )
 }
@@ -500,6 +515,124 @@ function SuggestionCard({
           onQueued={queued}
         />
       )}
+    </div>
+  )
+}
+
+/** Id do rascunho da mensagem avulsa (a chave de idempotência do envio leva ele). */
+function newDraftId(): string {
+  try {
+    const id = globalThis.crypto?.randomUUID?.()
+    if (id) return id
+  } catch {
+    // sem `crypto`: cai no sorteio abaixo
+  }
+  return `d-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+}
+
+const avulsaKey = (jid: string) => `avulsa|${jid}`
+const ACTIVE: ReadonlySet<SendView['status']> = new Set(['queued', 'typing', 'sending'])
+
+/**
+ * v0.6.0 "Enviar mensagem avulsa": uma mensagem escrita pelo mentor, sem ser resposta a uma sugestão. A caixa edita
+ * como o cartão de sugestão (o texto sobrevive a trocas de tela) e o "Enviar" abre a MESMA confirmação e a mesma fila
+ * das respostas (token de uso único, ritmo, tetos, horário com "Forçar envio", "digitando…"). Sem citação, sem memória.
+ * O id do rascunho nasce quando a caixa abre: o mesmo rascunho com o mesmo texto nunca envia duas vezes.
+ */
+function AvulsaComposer({ jid, drafts, sends, onQueued }: { jid: string; drafts: DraftStore; sends: SendView[]; onQueued: (send: SendView) => void }) {
+  const key = avulsaKey(jid)
+  const stored = drafts.get(key)
+  const [open, setOpen] = useState(stored?.open === true)
+  const [text, setText] = useState(stored?.text ?? '')
+  const [draftId, setDraftId] = useState(() => stored?.draftId ?? newDraftId())
+  const [sendId, setSendId] = useState<number | null>(stored?.sendId ?? null)
+  const [sending, setSending] = useState(false)
+  const areaRef = useRef<HTMLTextAreaElement>(null)
+
+  const keep = (patch: Partial<{ open: boolean; text: string; draftId: string; sendId: number | null }>) => {
+    const cur = { original: '', text, draftId, open, sendId, ...drafts.get(key) }
+    drafts.set(key, { ...cur, ...patch })
+  }
+
+  const send = sendId !== null ? (sends.find((x) => x.id === sendId) ?? null) : null
+  const busy = !!send && ACTIVE.has(send.status)
+
+  const start = () => {
+    setOpen(true)
+    keep({ open: true, text, draftId, sendId })
+    setTimeout(() => areaRef.current?.focus(), 0)
+  }
+  /** fecha e esquece o rascunho (um envio que já está na fila segue; o estado dele fica na lista de envios) */
+  const discard = () => {
+    const id = newDraftId()
+    setOpen(false)
+    setText('')
+    setDraftId(id)
+    setSendId(null)
+    drafts.delete(key)
+  }
+  /** depois de enviada: caixa vazia para outra mensagem (rascunho novo) */
+  const another = () => {
+    const id = newDraftId()
+    setText('')
+    setDraftId(id)
+    setSendId(null)
+    drafts.set(key, { original: '', text: '', draftId: id, open: true, sendId: null })
+    setTimeout(() => areaRef.current?.focus(), 0)
+  }
+  const queued = (finalText: string, sv: SendView) => {
+    setSending(false)
+    setText(finalText)
+    setSendId(sv.id)
+    keep({ text: finalText, sendId: sv.id, open: true })
+    onQueued(sv)
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="btn sug-avulsa-btn" onClick={start}>
+        Enviar mensagem avulsa
+      </button>
+    )
+  }
+  return (
+    <div className="sug-card sug-avulsa" role="group" aria-label="Mensagem avulsa">
+      <div className="sug-head">
+        <label htmlFor={`avulsa-${draftId}`} className="sug-label">
+          Mensagem avulsa
+        </label>
+      </div>
+      <textarea
+        id={`avulsa-${draftId}`}
+        ref={areaRef}
+        value={text}
+        rows={4}
+        placeholder="Escreva a mensagem…"
+        // o texto na fila é o que vai sair: não muda enquanto o envio não termina
+        readOnly={busy}
+        onChange={(e) => {
+          setText(e.target.value)
+          keep({ text: e.target.value })
+        }}
+      />
+      <div className="sug-actions">
+        {send?.status === 'sent' ? (
+          <button type="button" className="btn" onClick={another}>
+            Nova mensagem avulsa
+          </button>
+        ) : (
+          <button type="button" className="btn" onClick={discard} disabled={busy}>
+            Descartar
+          </button>
+        )}
+        {!busy && send?.status !== 'sent' && (
+          <button type="button" className="btn btn-primary" onClick={() => setSending(true)} disabled={!text.trim()}>
+            Enviar
+          </button>
+        )}
+      </div>
+      {send && <SendStatus send={send} onResend={() => setSending(true)} />}
+      {sending && <SendDialog jid={jid} text={text} avulsa={{ draftId }} onClose={() => setSending(false)} onQueued={queued} />}
     </div>
   )
 }

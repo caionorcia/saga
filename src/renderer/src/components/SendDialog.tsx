@@ -20,7 +20,12 @@ interface DialogProps {
   jid: string
   text: string
   /** o que vai junto no `sendReply` (escolha da sugestão, resposta já salva) */
-  extras: Omit<SendReplyInput, 'token' | 'jid' | 'text'>
+  extras?: Omit<SendReplyInput, 'token' | 'jid' | 'text'>
+  /**
+   * v0.6.0: mensagem avulsa (fora das sugestões): confirmação própria (`kind: 'avulsa'`), sem citação, vai pelo
+   * `sendAvulsa` com o id do rascunho (o mesmo rascunho com o mesmo texto não envia duas vezes)
+   */
+  avulsa?: { draftId: string }
   onClose: () => void
   /** foi para a fila: o texto final e o envio */
   onQueued: (text: string, send: SendView) => void
@@ -30,7 +35,8 @@ interface DialogProps {
  * Confirmação de cada envio: para quem vai (nome e número, ou o grupo), nos grupos a mensagem citada, o texto final
  * (editável) e "Enviar" / "Cancelar". Ctrl+Enter envia, Esc cancela. Nada sai sem este clique.
  */
-export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: DialogProps) {
+export function SendDialog({ jid, text: initial, extras, avulsa, onClose, onQueued }: DialogProps) {
+  const kind = avulsa ? 'avulsa' : 'reply'
   const [preview, setPreview] = useState<SendPreview | null>(null)
   /** fora do horário e sem "Forçar envio": o que iria sair (sem confirmação válida) */
   const [draft, setDraft] = useState<SendDraft | null>(null)
@@ -68,7 +74,7 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
   useEffect(() => {
     let alive = true
     window.saga
-      .prepareSend({ jid, text: initial, forced })
+      .prepareSend({ jid, text: initial, forced, kind })
       .then((r) => alive && apply(r))
       .catch(() => alive && (setRefused(true), setError(GENERIC)))
     return () => {
@@ -88,7 +94,7 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
     setError(null)
     setBusy(true)
     try {
-      apply(await window.saga.prepareSend({ jid, text, forced: on }))
+      apply(await window.saga.prepareSend({ jid, text, forced: on, kind }))
     } catch {
       setError(GENERIC)
     } finally {
@@ -105,10 +111,12 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
       let p: SendPreview | null = preview
       // o texto mudou no diálogo: a confirmação vale para o texto novo
       if (text.trim() !== p.text) {
-        p = apply(await window.saga.prepareSend({ jid, text, forced }))
+        p = apply(await window.saga.prepareSend({ jid, text, forced, kind }))
         if (!p) return
       }
-      const r = await window.saga.sendReply({ ...extras, token: p.token, jid, text: p.text })
+      const r = avulsa
+        ? await window.saga.sendAvulsa({ token: p.token, jid, text: p.text, draftId: avulsa.draftId })
+        : await window.saga.sendReply({ ...extras, token: p.token, jid, text: p.text })
       if (r.ok) {
         onQueued(p.text, r.send)
         return
@@ -116,7 +124,7 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
       setError(r.code === 'outside_hours' ? null : r.message)
       // confirmação vencida (ou o horário acabou): prepara outra para o próximo clique
       if (r.code === 'not_confirmed' || r.code === 'outside_hours') {
-        const again = await window.saga.prepareSend({ jid, text, forced })
+        const again = await window.saga.prepareSend({ jid, text, forced, kind })
         if (again.ok || again.code === 'outside_hours') apply(again)
       }
     } catch {
@@ -150,7 +158,7 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
           void confirm()
         }}
       >
-        <h2 id="send-title">Enviar resposta</h2>
+        <h2 id="send-title">{avulsa ? 'Enviar mensagem avulsa' : 'Enviar resposta'}</h2>
         {!shown && !refused && (
           <p className="muted" role="status">
             <span className="spinner" aria-hidden="true" />
@@ -164,7 +172,8 @@ export function SendDialog({ jid, text: initial, extras, onClose, onQueued }: Di
             {r.phone && <span className="muted"> · {r.phone}</span>}
           </p>
         )}
-        {shown?.quote && (
+        {avulsa && shown && <p className="muted small send-avulsa-note">Mensagem avulsa: não responde a nenhuma mensagem e não entra no aprendizado das sugestões.</p>}
+        {!avulsa && shown?.quote && (
           <blockquote className="send-quote" aria-label="Mensagem citada">
             <span className="send-quote-who">Respondendo a {shown.quote.senderName}</span>
             <span className="send-quote-text">{shown.quote.text}</span>

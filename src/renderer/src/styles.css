@@ -579,3 +579,11 @@ select { font: inherit; color: inherit; width: 100%; border: 1px solid var(--bor
 .backup-section > .ok-text, .backup-section > .field-error { min-height: 20px; margin-top: 8px; }
 .backup-auto-pw .inline-field > .btn, .backup-auto-pw .inline-field > .link-btn { flex: none; white-space: nowrap; }
 .backup-auto-pw .inline-field > input { flex: 1; min-width: 0; }
+
+/* v0.6.0: "Enviar mensagem avulsa" (discreto, abaixo das sugestões ou do "Gerar sugestões mesmo assim") */
+.sug-avulsa-btn { align-self: flex-start; margin-top: 12px; color: var(--muted); }
+.sug-list .sug-avulsa-btn { margin-top: 0; }
+.sug-avulsa { margin-top: 12px; }
+.sug-list .sug-avulsa { margin-top: 0; }
+.sug-avulsa textarea { width: 100%; }
+.send-avulsa-note { margin: 0; }

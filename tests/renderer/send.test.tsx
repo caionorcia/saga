@@ -50,7 +50,7 @@ describe('Enviar (envio direto)', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     // o texto mudou: nova confirmação para o texto novo, e o envio usa esse token
     const prepares = calls(ctl, 'prepareSend')
-    expect(prepares.at(-1)!.args[0]).toEqual({ jid: ANA, text: 'Texto final editado no diálogo', forced: false })
+    expect(prepares.at(-1)!.args[0]).toEqual({ jid: ANA, text: 'Texto final editado no diálogo', forced: false, kind: 'reply' })
     const [send] = calls(ctl, 'sendReply')
     expect(send.args[0]).toMatchObject({ jid: ANA, text: 'Texto final editado no diálogo', chosenIndex: 0, analysisLastMsgId: expect.any(String) })
     // escolheu a sugestão (salva na memória, como Copiar/Salvar)
