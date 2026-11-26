@@ -6,9 +6,10 @@ import { AlertChips, WaitBadge } from './Alerts'
 import { NoReplyDialog, NoReplyIcon, THANKS, Toast } from './AlertFeedback'
 import { GroupIcon } from './GroupIcon'
 import { SearchBox, SearchResults } from './GlobalSearch'
+import { useFollowups } from './Followups'
 
 /** Recorte da lista: todas, só as que esperam resposta ("Para responder") ou só as com alerta. */
-export type ContactView = 'all' | 'awaiting' | 'alerts'
+export type ContactView = 'all' | 'awaiting' | 'alerts' | 'copiloto'
 
 interface Props {
   selected: string | null
@@ -54,7 +55,7 @@ const VIEW_KEY = 'saga.contactView'
 function readView(): ContactView {
   try {
     const v = localStorage.getItem(VIEW_KEY)
-    return v === 'awaiting' || v === 'alerts' ? v : 'all'
+    return v === 'awaiting' || v === 'alerts' || v === 'copiloto' ? v : 'all'
   } catch {
     return 'all'
   }
@@ -129,11 +130,19 @@ const EMPTY: Record<ContactKind, string> = {
 
 const VIEW_EMPTY: Record<Exclude<ContactView, 'all'>, string> = {
   awaiting: 'Ninguém está esperando resposta agora.',
-  alerts: 'Nenhum alerta agora. Os alertas aparecem aqui quando alguém precisar de atenção.'
+  alerts: 'Nenhum alerta agora. Os alertas aparecem aqui quando alguém precisar de atenção.',
+  copiloto: 'Nenhuma mensagem do Copiloto esperando você.'
 }
 
 export function ContactList({ selected, onSelect, request, onOpenHit }: Props) {
   const [contacts, setContacts] = useState<Contact[] | null>(null)
+  /** v0.7.0: mensagens do Copiloto esperando o mentor, por conversa */
+  const followups = useFollowups()
+  const waitingFu = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const f of followups ?? []) if (f.status === 'waiting') m.set(f.jid, (m.get(f.jid) ?? 0) + 1)
+    return m
+  }, [followups])
   const [kind, setKindState] = useState<ContactKind>(readKind)
   const [view, setViewState] = useState<ContactView>(readView)
   const [focus, setFocusState] = useState<boolean>(readFocus)
@@ -219,15 +228,17 @@ export function ContactList({ selected, onSelect, request, onOpenHit }: Props) {
     const list = (contacts ?? []).filter((c) => !c.hidden)
     return {
       awaiting: list.filter((c) => inAwaiting(c) && !removed.has(c.jid)).length,
-      alerts: list.filter((c) => c.alerts.length > 0).length
+      alerts: list.filter((c) => c.alerts.length > 0).length,
+      copiloto: [...waitingFu.values()].reduce((a, b) => a + b, 0)
     }
-  }, [contacts, removed])
+  }, [contacts, removed, waitingFu])
 
   const visible = useMemo(() => {
     const q = norm(query.trim())
     const found = (contacts ?? []).filter((c) => !q || norm(c.displayName).includes(q) || c.jid.includes(q))
+    if (view === 'copiloto') return found.filter((c) => waitingFu.has(c.jid))
     return applyView(found, view).filter((c) => view !== 'awaiting' || !removed.has(c.jid))
-  }, [contacts, query, view, removed])
+  }, [contacts, query, view, removed, waitingFu])
 
   const saveNoReply = (c: Contact, reason: Parameters<typeof window.saga.setNeedsReply>[2]) => {
     setNoReplyFor(null)
@@ -310,6 +321,19 @@ export function ContactList({ selected, onSelect, request, onOpenHit }: Props) {
             Com alerta <span className="view-count">{counts.alerts}</span>
           </button>
         </div>
+        {(counts.copiloto > 0 || view === 'copiloto') && (
+          <div className="view-filter" role="group" aria-label="Mensagens do Copiloto">
+            <button
+              type="button"
+              aria-pressed={view === 'copiloto'}
+              className={view === 'copiloto' ? 'is-active' : undefined}
+              title="Só as conversas com mensagem do Copiloto esperando você"
+              onClick={() => setView(view === 'copiloto' ? 'all' : 'copiloto')}
+            >
+              <span aria-hidden="true">📨</span> Do Copiloto <span className="view-count">{counts.copiloto}</span>
+            </button>
+          </div>
+        )}
         <div className="kind-filter" role="radiogroup" aria-label="Mostrar conversas">
           {KINDS.map((k) => (
             <button
@@ -393,8 +417,15 @@ export function ContactList({ selected, onSelect, request, onOpenHit }: Props) {
                   <span className="await-dot" role="img" aria-label="Aguardando resposta" />
                 )}
               </span>
-              {(inAwaiting(c) || noReply(c) || c.alerts.length > 0) && (
+              {(inAwaiting(c) || noReply(c) || c.alerts.length > 0 || waitingFu.has(c.jid)) && (
                 <span className="contact-badges">
+                  {waitingFu.has(c.jid) && (
+                    <span className="fu-chip" title="Mensagem do Copiloto esperando você">
+                      <span aria-hidden="true">📨</span>
+                      <span className="sr-only">Mensagem do Copiloto: </span>
+                      {waitingFu.get(c.jid)! > 1 ? ` ${waitingFu.get(c.jid)}` : ''}
+                    </span>
+                  )}
                   {inAwaiting(c) && <WaitBadge since={c.waitingSince!} now={now} />}
                   {noReply(c) &&
                     (c.replyDecision?.by === 'group' && c.replyDecision.group ? (

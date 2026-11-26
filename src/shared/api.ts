@@ -20,7 +20,7 @@ import type {
 } from './backup'
 import type { PrepareSendInput, PrepareSendResult, SendAvulsaInput, SendKind, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView } from './send'
 import type { SendHoursInfo, SendSchedule } from './sendHours'
-import type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult } from './copiloto'
+import type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult, FollowupOpenResult, FollowupStatus, FollowupView } from './copiloto'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind, ThemePref }
@@ -30,7 +30,7 @@ export type { SearchFilters, SearchResult, SearchSummaryResult }
 export type { AutoBackupPatch, BackupExportOptions, BackupExportResult, BackupOpenResult, BackupRestoreMode, BackupRestoreResult, BackupStatus }
 export type { PrepareSendInput, PrepareSendResult, SendAvulsaInput, SendKind, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView }
 export type { SendHoursInfo, SendSchedule }
-export type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult }
+export type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult, FollowupOpenResult, FollowupStatus, FollowupView }
 export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
@@ -192,6 +192,8 @@ export interface SagaApi {
   onMessages(jid: string, cb: () => void): Unsubscribe
   /** um envio dessa conversa mudou de estado: chamar `listSends(jid)` de novo */
   onSends(jid: string, cb: () => void): Unsubscribe
+  /** v0.7.0: os follow-ups do Copiloto mudaram: chamar `listFollowups` de novo */
+  onFollowupsChanged(cb: () => void): Unsubscribe
 
   /**
    * `kind`: todas (padrão), só individuais ou só grupos. `includeHidden`: desde a v0.3.0 a interface não esconde mais
@@ -332,6 +334,17 @@ export interface SagaApi {
   copilotoGenerateCode(): Promise<CopilotoCodeResult>
   /** "Testar conexão": busca a lista de mentorados e diz quantos telefones e conversas daqui casaram */
   copilotoTest(): Promise<CopilotoTestResult>
+
+  // --- follow-up do Copiloto (v0.7.0): a equipe escreve, o mentor confirma cada envio ---
+  /** os follow-ups esperando o mentor ou saindo (e, por algumas horas, os enviados e os que não dão para enviar) */
+  listFollowups(): Promise<FollowupView[]>
+  /**
+   * "Abrir para enviar": confere se ainda dá (fora dos 30 dias volta ao Copiloto) e devolve o texto para a caixa da
+   * mensagem avulsa. Não envia nada: o envio é a confirmação de sempre, com o id do follow-up como id do rascunho
+   */
+  followupOpen(id: string): Promise<FollowupOpenResult>
+  /** "Recusar": motivo opcional (até 200 caracteres); sem motivo vai `recusado_pelo_mentor` */
+  followupDecline(id: string, reason: string | null): Promise<boolean>
 }
 
 /** Métodos chamados por `ipcRenderer.invoke('saga:<nome>')`. */
@@ -393,7 +406,10 @@ export const INVOKE_METHODS = [
   'copilotoStatus',
   'copilotoSave',
   'copilotoGenerateCode',
-  'copilotoTest'
+  'copilotoTest',
+  'listFollowups',
+  'followupOpen',
+  'followupDecline'
 ] as const satisfies ReadonlyArray<keyof SagaApi>
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]
@@ -420,5 +436,7 @@ export const EVENTS = {
   /** argumento: jid */
   messages: 'saga:event:messages',
   /** argumento: jid (um envio dessa conversa mudou) */
-  sends: 'saga:event:sends'
+  sends: 'saga:event:sends',
+  /** v0.7.0: os follow-ups do Copiloto mudaram */
+  followups: 'saga:event:followups'
 } as const

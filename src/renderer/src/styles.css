@@ -589,3 +589,16 @@ select { font: inherit; color: inherit; width: 100%; border: 1px solid var(--bor
 .sug-list .sug-avulsa { margin-top: 0; }
 .sug-avulsa textarea { width: 100%; }
 .send-avulsa-note { margin: 0; }
+
+/* v0.7.0: follow-up do Copiloto */
+.fu-chip { font-size: 13px; line-height: 1; padding: 2px 6px; border-radius: 99px; white-space: nowrap; background: var(--accent-soft); color: var(--accent-text); font-weight: 700; }
+.fu-section { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.fu-card { border-color: var(--accent); border-left-width: 4px; }
+.fu-byline { margin: 0 0 6px; }
+.fu-text { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.fu-result { margin: 4px 0 0; }
+.fu-ok { color: var(--accent-text); }
+.fu-bad { color: var(--bad-text); }
+.fu-note { margin: 0 0 6px; }
+.fu-open .sug-avulsa { margin-top: 0; }
+.fu-composer textarea { width: 100%; }

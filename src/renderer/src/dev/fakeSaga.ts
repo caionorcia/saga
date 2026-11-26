@@ -23,7 +23,7 @@ import type {
   SettingsView
 } from '../../../shared/api'
 import { NOT_CONFIRMED_TEXT, SEND_LIMITS, SEND_REFUSAL_TEXT } from '../../../shared/send'
-import { COPILOTO_TEXT, isCopilotoUrl, type CopilotoStatus } from '../../../shared/copiloto'
+import { COPILOTO_TEXT, FOLLOWUP_LIMITS, FOLLOWUP_REASON, FOLLOWUP_TEXT, isCopilotoUrl, type CopilotoStatus, type FollowupView } from '../../../shared/copiloto'
 
 export const DEFAULT_STATE: AppState = {
   conn: 'open',
@@ -85,6 +85,8 @@ export interface FakeOptions {
    * quarta às 11:00, dentro dele), para a pré-visualização e os testes não dependerem da hora real
    */
   outsideHours?: boolean
+  /** v0.7.0: dois follow-ups do Copiloto de exemplo (uma conversa individual e um grupo); padrão: nenhum */
+  followups?: boolean
 }
 
 const EXTRA_SUGGESTION = 'Combinado! Qualquer coisa me avisa por aqui.'
@@ -221,6 +223,50 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     if (!sv) return
     Object.assign(sv, patch)
     notifySends(sv.jid)
+    // v0.7.0: o follow-up que este envio leva acompanha o estado dele
+    const f = followups.find((x) => x.status === 'sending' && x.sendId === id)
+    if (f) {
+      if (sv.status === 'sent') Object.assign(f, { status: 'sent', finalText: sv.text, sentAt: sv.sentAt ?? Date.now(), sendError: null })
+      else if (sv.status === 'failed' || sv.status === 'expired' || sv.status === 'canceled') Object.assign(f, { status: 'waiting', sendId: null, sendError: sv.error ?? 'não chegou a enviar' })
+      else return
+      notifyFollowups()
+    }
+  }
+  /** v0.7.0: follow-ups do Copiloto de exemplo (textos e autores fictícios) */
+  const followups: FollowupView[] = opts.followups
+    ? [
+        {
+          id: '7d1e2c3b-4a5f-4e6d-8c7b-9a0b1c2d3e4f',
+          jid: '5547999998888@s.whatsapp.net',
+          text: 'Oi! Passando para saber como foi a primeira semana com o novo cardápio. Conseguiu testar a precificação que combinamos?',
+          author: 'Equipe Saga · Marina',
+          createdAt: now - 2 * 60 * 60_000,
+          status: 'waiting',
+          sendId: null,
+          finalText: null,
+          sentAt: null,
+          reason: null,
+          sendError: null
+        },
+        {
+          id: '8e2f3d4c-5b6a-4f7e-9d8c-0b1c2d3e4f5a',
+          jid: '120363025555555555@g.us',
+          text: 'Pessoal, lembrete: amanhã às 19h tem a revisão das metas do mês. Tragam os números da semana!',
+          author: 'Equipe Saga · Rafael',
+          createdAt: now - 26 * 60 * 60_000,
+          status: 'waiting',
+          sendId: null,
+          finalText: null,
+          sentAt: null,
+          reason: null,
+          sendError: null
+        }
+      ]
+    : []
+  const followupListeners = new Set<() => void>()
+  const notifyFollowups = () => {
+    followupListeners.forEach((l) => l())
+    contactListeners.forEach((l) => l())
   }
   /** grupo: a mensagem citada (a mais recente que menciona o mentor depois da última dele; senão a mais recente) */
   const quoteOf = (c: DemoContact) => {
@@ -438,6 +484,10 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       return () => void contactListeners.delete(cb)
     },
     onMessages: () => () => {},
+    onFollowupsChanged: (cb) => {
+      followupListeners.add(cb)
+      return () => void followupListeners.delete(cb)
+    },
     onSends: (jid, cb) => {
       const l = { jid, cb }
       sendListeners.add(l)
@@ -648,11 +698,21 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       if (code) return { ok: false, code, message: SEND_REFUSAL_TEXT[code] }
       const outside = outsideHoursNow()
       if (outside && !t.forced) return { ok: false, code: 'outside_hours', message: outsideHoursText(outside) }
+      // v0.7.0: o rascunho de um follow-up tem o id dele; o mesmo follow-up nunca sai duas vezes
+      const fu = followups.find((x) => x.id === input.draftId)
+      if (fu && (fu.jid !== input.jid || fu.status !== 'waiting')) {
+        return fu.status === 'sending' ? { ok: false, code: 'in_flight', message: SEND_REFUSAL_TEXT.in_flight } : { ok: false, code: 'followup_done', message: SEND_REFUSAL_TEXT.followup_done }
+      }
+      if (fu && [...text].length > FOLLOWUP_LIMITS.textChars) return { ok: false, code: 'too_long', message: SEND_REFUSAL_TEXT.too_long }
       // nada na memória: a avulsa não passa pelo saveReply; o mesmo rascunho com o mesmo texto é o mesmo envio
       const key = `${input.draftId}:${text}`
       const same = (sends.get(input.jid) ?? []).find((x) => x.kind === 'avulsa' && avulsaKeys.get(x.id) === key)
       const r = queueFakeSend(input.jid, text, same, { kind: 'avulsa', replyId: null })
       if (r.ok) avulsaKeys.set(r.send.id, key)
+      if (r.ok && fu) {
+        Object.assign(fu, { status: 'sending', sendId: r.send.id, sendError: null })
+        notifyFollowups()
+      }
       return r
     },
     cancelSend: async (id) => {
@@ -816,6 +876,28 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       copiloto.authFailed = false
       return { ok: true, code: 'demo-codigo-de-exemplo-nao-e-real-0000000000' }
     },
+    listFollowups: async () => followups.filter((f) => f.status !== 'declined' && f.status !== 'cancelled').map((f) => ({ ...f })),
+    followupOpen: async (id) => {
+      record('followupOpen', [id], undefined)
+      const f = followups.find((x) => x.id === id)
+      if (!f) return { ok: false, code: 'not_found', message: FOLLOWUP_TEXT.notFound }
+      if (f.status !== 'waiting') return { ok: false, code: 'done', message: FOLLOWUP_TEXT.done }
+      if (!settings.directSend) return { ok: false, code: 'disabled', message: SEND_REFUSAL_TEXT.disabled }
+      if (sendRefusal(f.jid, f.text) === 'no_recent_contact') {
+        Object.assign(f, { status: 'failed', reason: FOLLOWUP_REASON.outside30 })
+        notifyFollowups()
+        return { ok: false, code: 'fora_30_dias', message: FOLLOWUP_TEXT.outside30 }
+      }
+      return { ok: true, followup: { ...f } }
+    },
+    followupDecline: async (id, reason) => {
+      record('followupDecline', [id, reason], undefined)
+      const f = followups.find((x) => x.id === id)
+      if (!f || f.status !== 'waiting') return false
+      Object.assign(f, { status: 'declined', reason: reason?.trim() ? reason.trim().slice(0, FOLLOWUP_LIMITS.reasonChars) : FOLLOWUP_REASON.declined })
+      notifyFollowups()
+      return true
+    },
     copilotoTest: async () => {
       record('copilotoTest', [], undefined)
       if (!copiloto.url || !copiloto.hasCode) return { ok: false, message: COPILOTO_TEXT.needsSetup }
@@ -893,7 +975,7 @@ export async function installFakeSaga(): Promise<void> {
   if (patch.conn === 'waiting_retry' && patch.retryAt === undefined) patch.retryAt = Date.now() + 2 * 60_000
   const t = params.get('theme')
   const theme = t === 'light' || t === 'dark' || t === 'system' ? t : undefined
-  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside' })
+  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside', followups: params.get('followups') !== '0' })
   window.saga = ctl.api
   window.__sagaFake = ctl
 }

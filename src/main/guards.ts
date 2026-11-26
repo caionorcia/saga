@@ -10,7 +10,7 @@ import { SEARCH_KINDS, SEARCH_LIMITS, SEARCH_PERIODS } from '../shared/search'
 import { BACKUP_PASSWORD_MAX, BACKUP_PASSWORD_MIN } from '../shared/backup'
 import { DRAFT_ID_RE, SEND_LIMITS } from '../shared/send'
 import { isValidSchedule } from '../shared/sendHours'
-import { COPILOTO_URL_MAX } from '../shared/copiloto'
+import { COPILOTO_URL_MAX, FOLLOWUP_LIMITS } from '../shared/copiloto'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -282,7 +282,11 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   copilotoStatus: (a) => a.length === 0,
   copilotoSave: (a) => a.length === 1 && isCopilotoPatch(a[0]),
   copilotoGenerateCode: (a) => a.length === 0,
-  copilotoTest: (a) => a.length === 0
+  copilotoTest: (a) => a.length === 0,
+  listFollowups: (a) => a.length === 0,
+  followupOpen: (a) => a.length === 1 && isStr(a[0]) && DRAFT_ID_RE.test(a[0]),
+  followupDecline: (a) =>
+    a.length === 2 && isStr(a[0]) && DRAFT_ID_RE.test(a[0]) && (a[1] === null || (isStr(a[1]) && a[1].length <= FOLLOWUP_LIMITS.reasonChars * 2))
 }
 
 /** Lança `InvalidIpcArgsError` se os argumentos vindos da interface não tiverem o formato esperado. */

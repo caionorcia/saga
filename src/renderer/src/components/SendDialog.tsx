@@ -25,7 +25,9 @@ interface DialogProps {
    * v0.6.0: mensagem avulsa (fora das sugestões): confirmação própria (`kind: 'avulsa'`), sem citação, vai pelo
    * `sendAvulsa` com o id do rascunho (o mesmo rascunho com o mesmo texto não envia duas vezes)
    */
-  avulsa?: { draftId: string }
+  avulsa?: { draftId: string; followup?: boolean }
+  /** v0.7.0: limite do texto (a mensagem do Copiloto vai com até 4000 caracteres) */
+  maxChars?: number
   onClose: () => void
   /** foi para a fila: o texto final e o envio */
   onQueued: (text: string, send: SendView) => void
@@ -35,7 +37,7 @@ interface DialogProps {
  * Confirmação de cada envio: para quem vai (nome e número, ou o grupo), nos grupos a mensagem citada, o texto final
  * (editável) e "Enviar" / "Cancelar". Ctrl+Enter envia, Esc cancela. Nada sai sem este clique.
  */
-export function SendDialog({ jid, text: initial, extras, avulsa, onClose, onQueued }: DialogProps) {
+export function SendDialog({ jid, text: initial, extras, avulsa, maxChars, onClose, onQueued }: DialogProps) {
   const kind = avulsa ? 'avulsa' : 'reply'
   const [preview, setPreview] = useState<SendPreview | null>(null)
   /** fora do horário e sem "Forçar envio": o que iria sair (sem confirmação válida) */
@@ -158,7 +160,7 @@ export function SendDialog({ jid, text: initial, extras, avulsa, onClose, onQueu
           void confirm()
         }}
       >
-        <h2 id="send-title">{avulsa ? 'Enviar mensagem avulsa' : 'Enviar resposta'}</h2>
+        <h2 id="send-title">{avulsa?.followup ? 'Enviar mensagem do Copiloto' : avulsa ? 'Enviar mensagem avulsa' : 'Enviar resposta'}</h2>
         {!shown && !refused && (
           <p className="muted" role="status">
             <span className="spinner" aria-hidden="true" />
@@ -182,7 +184,7 @@ export function SendDialog({ jid, text: initial, extras, avulsa, onClose, onQueu
         {shown && (
           <>
             <label htmlFor="send-text">Mensagem</label>
-            <textarea id="send-text" ref={textRef} rows={6} value={text} onChange={(e) => setText(e.target.value)} />
+            <textarea id="send-text" ref={textRef} rows={6} value={text} maxLength={maxChars} onChange={(e) => setText(e.target.value)} />
             <p className="muted small send-how">{sendHowText(o?.typing === true, o?.markRead === true)}</p>
           </>
         )}

@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AiErrorCode, Analysis, KbSource, MessageView, SendView } from '../../../shared/api'
 import { KbSources } from './KbSources'
 import { SendDialog, SendStatus } from './SendDialog'
+import { FollowupSection, followupByline } from './Followups'
+import type { FollowupView } from '../../../shared/copiloto'
+import { FOLLOWUP_LIMITS } from '../../../shared/copiloto'
 
 type View =
   | { kind: 'loading' }
@@ -234,23 +237,29 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
     }
   }, [jid, load, silentRefresh])
 
+  const onQueuedAvulsa = (send: SendView) => setSends((cur) => [send, ...cur.filter((x) => x.id !== send.id)])
+  /** v0.7.0: as mensagens do Copiloto desta conversa ficam no topo da coluna, em qualquer estado das sugestões */
+  const followups = <FollowupSection key={`fu-${jid}`} jid={jid} drafts={drafts} sends={sends} onQueued={onQueuedAvulsa} />
+
   if (view.kind === 'loading') {
     return (
-      <div className="sug-state" role="status" aria-live="polite">
-        <span className="spinner" aria-hidden="true" />
-        Gerando sugestões…
-      </div>
+      <>
+        {followups}
+        <div className="sug-state" role="status" aria-live="polite">
+          <span className="spinner" aria-hidden="true" />
+          Gerando sugestões…
+        </div>
+      </>
     )
   }
 
   /** v0.6.0: "Enviar mensagem avulsa" (só com o envio direto ligado): sempre ao alcance na conversa escolhida */
-  const avulsa = directSend ? (
-    <AvulsaComposer key={jid} jid={jid} drafts={drafts} sends={sends} onQueued={(send) => setSends((cur) => [send, ...cur.filter((x) => x.id !== send.id)])} />
-  ) : null
+  const avulsa = directSend ? <AvulsaComposer key={jid} jid={jid} drafts={drafts} sends={sends} onQueued={onQueuedAvulsa} /> : null
 
   if (view.kind === 'not_needed') {
     return (
       <>
+        {followups}
         <div className="sug-state sug-not-needed" role="status">
           <p>Esta conversa não precisa de resposta agora.</p>
           <p className="muted small">O SagaZap só escreve sugestões quando você pede, para não gastar à toa.</p>
@@ -266,6 +275,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
   if (view.kind === 'error') {
     return (
       <>
+      {followups}
       <div className="sug-state sug-error" role="alert">
         <p>{errorText(view.code, view.message)}</p>
         {(view.code === 'missing_key' || view.code === 'invalid_key' || view.code === 'model_unavailable') && onOpenSettings && (
@@ -293,6 +303,8 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
     setAnnounce('Resposta escolhida')
   }
   return (
+    <>
+    {followups}
     <div className="sug-list">
       <div className="sr-only" role="status" aria-live="polite">
         {announce}
@@ -343,6 +355,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
       </div>
       {avulsa}
     </div>
+    </>
   )
 }
 
@@ -537,6 +550,7 @@ function newDraftId(): string {
 }
 
 const avulsaKey = (jid: string) => `avulsa|${jid}`
+const followupKey = (id: string) => `followup|${id}`
 const ACTIVE: ReadonlySet<SendView['status']> = new Set(['queued', 'typing', 'sending'])
 
 /**
@@ -545,13 +559,34 @@ const ACTIVE: ReadonlySet<SendView['status']> = new Set(['queued', 'typing', 'se
  * das respostas (token de uso único, ritmo, tetos, horário com "Forçar envio", "digitando…"). Sem citação, sem memória.
  * O id do rascunho nasce quando a caixa abre: o mesmo rascunho com o mesmo texto nunca envia duas vezes.
  */
-function AvulsaComposer({ jid, drafts, sends, onQueued }: { jid: string; drafts: DraftStore; sends: SendView[]; onQueued: (send: SendView) => void }) {
-  const key = avulsaKey(jid)
+export function AvulsaComposer({
+  jid,
+  drafts,
+  sends,
+  onQueued,
+  followup,
+  onClose
+}: {
+  jid: string
+  drafts: DraftStore
+  sends: SendView[]
+  onQueued: (send: SendView) => void
+  /**
+   * v0.7.0: a mensagem do Copiloto aberta para enviar: a caixa já vem com o texto da equipe (editável, até 4000
+   * caracteres) e o id do rascunho é o id do follow-up (o mesmo follow-up nunca sai duas vezes). O resto é igual.
+   */
+  followup?: FollowupView
+  /** follow-up: "Fechar" volta ao aviso (o texto editado fica guardado) */
+  onClose?: () => void
+}) {
+  const key = followup ? followupKey(followup.id) : avulsaKey(jid)
   const stored = drafts.get(key)
-  const [open, setOpen] = useState(stored?.open === true)
-  const [text, setText] = useState(stored?.text ?? '')
-  const [draftId, setDraftId] = useState(() => stored?.draftId ?? newDraftId())
-  const [sendId, setSendId] = useState<number | null>(stored?.sendId ?? null)
+  const [open, setOpen] = useState(followup ? true : stored?.open === true)
+  const [text, setText] = useState(stored?.text ?? followup?.text ?? '')
+  const [draftId, setDraftId] = useState(() => followup?.id ?? stored?.draftId ?? newDraftId())
+  const [sendId, setSendId] = useState<number | null>(followup?.sendId ?? stored?.sendId ?? null)
+  const maxChars = followup ? FOLLOWUP_LIMITS.textChars : undefined
+  const label = followup ? 'Mensagem do Copiloto' : 'Mensagem avulsa'
   const [sending, setSending] = useState(false)
   const areaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -602,18 +637,24 @@ function AvulsaComposer({ jid, drafts, sends, onQueued }: { jid: string; drafts:
     )
   }
   return (
-    <div className="sug-card sug-avulsa" role="group" aria-label="Mensagem avulsa">
+    <div className={`sug-card sug-avulsa${followup ? ' fu-composer' : ''}`} role="group" aria-label={label}>
       <div className="sug-head">
         <label htmlFor={`avulsa-${draftId}`} className="sug-label">
-          Mensagem avulsa
+          {label}
         </label>
       </div>
+      {followup && (
+        <p className="muted small fu-note">
+          {followupByline(followup)}. Revise e edite à vontade: só sai depois da confirmação, com as travas de sempre.
+        </p>
+      )}
       <textarea
         id={`avulsa-${draftId}`}
         ref={areaRef}
         value={text}
         rows={4}
         placeholder="Escreva a mensagem…"
+        maxLength={maxChars}
         // o texto na fila é o que vai sair: não muda enquanto o envio não termina
         readOnly={busy}
         onChange={(e) => {
@@ -622,7 +663,13 @@ function AvulsaComposer({ jid, drafts, sends, onQueued }: { jid: string; drafts:
         }}
       />
       <div className="sug-actions">
-        {send?.status === 'sent' ? (
+        {followup ? (
+          send?.status !== 'sent' && (
+            <button type="button" className="btn" onClick={() => onClose?.()} disabled={busy}>
+              Fechar
+            </button>
+          )
+        ) : send?.status === 'sent' ? (
           <button type="button" className="btn" onClick={another}>
             Nova mensagem avulsa
           </button>
@@ -638,7 +685,7 @@ function AvulsaComposer({ jid, drafts, sends, onQueued }: { jid: string; drafts:
         )}
       </div>
       {send && <SendStatus send={send} onResend={() => setSending(true)} />}
-      {sending && <SendDialog jid={jid} text={text} avulsa={{ draftId }} onClose={() => setSending(false)} onQueued={queued} />}
+      {sending && <SendDialog jid={jid} text={text} avulsa={{ draftId, ...(followup ? { followup: true } : {}) }} maxChars={maxChars} onClose={() => setSending(false)} onQueued={queued} />}
     </div>
   )
 }

@@ -53,6 +53,23 @@ describe('validateIpcArgs', () => {
   const ok = (m: any, ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).not.toThrow()
   const bad = (m: any, ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).toThrow(InvalidIpcArgsError)
 
+  it('follow-ups do Copiloto (v0.7.0): id no formato do rascunho; motivo null ou texto curto', () => {
+    const id = '7d1e2c3b-4a5f-4e6d-8c7b-9a0b1c2d3e4f'
+    ok('listFollowups')
+    bad('listFollowups', id)
+    ok('followupOpen', id)
+    bad('followupOpen')
+    bad('followupOpen', 'x y')
+    bad('followupOpen', 42)
+    bad('followupOpen', id, 'extra')
+    ok('followupDecline', id, null)
+    ok('followupDecline', id, 'já falei com ela')
+    bad('followupDecline', id)
+    bad('followupDecline', id, 'a'.repeat(401))
+    bad('followupDecline', id, 3)
+    bad('followupDecline', '../x', null)
+  })
+
   it('recentEvents: inteiro entre 1 e 200', () => {
     ok('recentEvents', 20)
     bad('recentEvents', 0)

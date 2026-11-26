@@ -199,7 +199,10 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
         ...(patch.url !== undefined ? { url: String(patch.url) } : {})
       }),
     copilotoGenerateCode: () => service.copilotoGenerateCode(),
-    copilotoTest: () => service.copilotoTest()
+    copilotoTest: () => service.copilotoTest(),
+    listFollowups: () => service.listFollowups(),
+    followupOpen: (id) => service.followupOpen(String(id)),
+    followupDecline: (id, reason) => service.followupDecline(String(id), reason === null ? null : String(reason))
   }
 
   for (const m of INVOKE_METHODS) {
@@ -231,11 +234,14 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
   service.on('messages', onMsg)
   const onSends = (jid: string) => send(EVENTS.sends, jid)
   service.on('sends', onSends)
+  const onFollowups = () => send(EVENTS.followups)
+  service.on('followups', onFollowups)
 
   return () => {
     for (const m of INVOKE_METHODS) ipcMain.removeHandler(invokeChannel(m))
     for (const off of offs) off()
     service.off('messages', onMsg)
     service.off('sends', onSends)
+    service.off('followups', onFollowups)
   }
 }

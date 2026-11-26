@@ -30,6 +30,7 @@ const api: SagaApi = {
     subscribe<[string]>(EVENTS.messages, (j) => {
       if (j === jid) cb()
     }),
+  onFollowupsChanged: (cb) => subscribe(EVENTS.followups, () => cb()),
   onSends: (jid, cb) =>
     subscribe<[string]>(EVENTS.sends, (j) => {
       if (j === jid) cb()
