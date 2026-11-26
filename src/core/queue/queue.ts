@@ -91,6 +91,7 @@ const MIN_SLEEP_MS = 50
  */
 export class JobQueue {
   private handlers = new Map<JobType, Handler>()
+  private ready = new Map<JobType, () => boolean>()
   private paused = false
   private pausedTypes = new Set<JobType>()
   /** pausas por tempo (`pauseTypeFor`): o timer que retoma o tipo */
@@ -256,11 +257,31 @@ export class JobQueue {
 
   /** Tipos que o laço pode rodar agora: com handler e não pausados. */
   private activeTypes(): JobType[] {
-    return [...this.handlers.keys()].filter((t) => !this.pausedTypes.has(t) && this.limiters[t])
+    return [...this.handlers.keys()].filter((t) => !this.pausedTypes.has(t) && this.limiters[t] && this.isReady(t))
   }
 
-  register(type: JobType, handler: Handler): void {
+  /** `ready` do tipo (falso = espera sem gastar vaga do limitador nem tentativa); erro conta como pronto. */
+  private isReady(type: JobType): boolean {
+    try {
+      return this.ready.get(type)?.() ?? true
+    } catch {
+      return true
+    }
+  }
+
+  /**
+   * `opts.ready`: o tipo só roda quando ela diz que sim (ex.: um envio ainda em andamento segura o próximo). Quem a usa
+   * chama `poke()` quando ela muda.
+   */
+  register(type: JobType, handler: Handler, opts: { ready?: () => boolean } = {}): void {
     this.handlers.set(type, handler)
+    if (opts.ready) this.ready.set(type, opts.ready)
+    else this.ready.delete(type)
+  }
+
+  /** Acorda o laço (uma condição de `ready` mudou). */
+  poke(): void {
+    this.wake()
   }
 
   tick(): Promise<TickResult> {
@@ -347,7 +368,7 @@ export class JobQueue {
     for (const { type, nextRunAt: n } of this.repo.pendingNextRunByType()) {
       // sem handler ou pausado, o laço nunca rodaria: não acordar à toa
       const lim = this.limiters[type as JobType]
-      if (!lim || !this.handlers.has(type as JobType) || this.pausedTypes.has(type as JobType)) continue
+      if (!lim || !this.handlers.has(type as JobType) || this.pausedTypes.has(type as JobType) || !this.isReady(type as JobType)) continue
       const t = Math.max(n, lim.nextAllowedAt())
       if (nextRunAt === null || t < nextRunAt) nextRunAt = t
     }

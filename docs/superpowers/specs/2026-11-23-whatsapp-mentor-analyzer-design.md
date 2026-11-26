@@ -364,7 +364,10 @@ individuais não citar.
   envio como desconhecido (fica "enviando" até o pedido terminar, `send_slow` no registro); uma nova tentativa da mesma
   resposta é recusada enquanto o pedido anterior está em andamento; numa tentativa > 1, logo antes de enviar, se a
   mensagem de uma tentativa anterior já está na conversa, marca enviada sem enviar; o sinal de prazo do job é conferido
-  antes do "digitando…" e antes de enviar.
+  antes do "digitando…" e antes de enviar. Um pedido sem resposta por 10 min (conexão de pé) vira desconhecido, mas o
+  reenvio continua bloqueado até o pedido terminar ou a conexão mudar. Enquanto qualquer pedido de envio estiver no ar,
+  o próximo envio espera (o tipo fica "não pronto" na fila: sem vaga do limitador nem tentativa; se rodar mesmo assim,
+  adia 15 s), para nunca sobrepor dois envios e manter os 30–90 s.
 - **Conferência pelo id:** o app gera o id da mensagem (formato do WhatsApp Web) e passa em `sendMessage(..., {
   messageId })`; o estado desconhecido é resolvido achando uma mensagem do mentor com um desses ids (sem comparar relógio
   nem texto). O eco com esse id fica na conversa de onde a resposta saiu, mesmo vindo pelo @lid.

@@ -93,8 +93,10 @@ export interface WhatsAppClientDeps {
   sendOptions?: () => SendOptions
 }
 
-/** sem conexão aberta quando o envio chega na vez: espera 30 s (o envio expira se passar de 10 min na fila) */
-const SEND_DEFER_MS = 30_000
+/** outro envio ainda em andamento: este espera 15 s, sem gastar tentativa (o envio expira se passar de 10 min na fila) */
+const SEND_DEFER_MS = 15_000
+/** pedido de envio sem resposta por 10 min: fica desconhecido (mas o reenvio continua bloqueado até ele terminar) */
+const SEND_STALL_MS = 10 * 60_000
 
 const DAY = 86_400_000
 const HISTORY_WINDOW_MS = 30 * DAY
@@ -270,7 +272,8 @@ export class WhatsAppClient extends EventEmitter {
     this.baileysLogger = makeBaileysLogger(deps.diag)
     deps.queue.register('download_audio', (p, signal) => this.downloadAudio(p, signal))
     deps.queue.register('fetch_profile', (p) => this.fetchProfile(p))
-    deps.queue.register('send_message', (p, signal) => this.executeSend(p, signal))
+    // um envio ainda em andamento (mesmo depois do prazo do job) segura o próximo: nunca dois ao mesmo tempo
+    deps.queue.register('send_message', (p, signal) => this.executeSend(p, signal), { ready: () => this.inFlight.size === 0 })
     this.rng = deps.rng ?? Math.random
     // downloads, consultas e envios ao WhatsApp só com a conexão aberta
     deps.queue.pauseType('download_audio')
@@ -1060,6 +1063,11 @@ export class WhatsAppClient extends EventEmitter {
         // banco fechado: a recuperação ao abrir cuida disso
       }
     }
+    // a conexão mudou: o pedido daquele socket morreu com ele; o bloqueio de reenvio acaba aqui
+    if (this.inFlight.size) {
+      this.inFlight.clear()
+      this.deps.queue.poke()
+    }
   }
 
   /**
@@ -1100,6 +1108,8 @@ export class WhatsAppClient extends EventEmitter {
     const id = Number(payload?.sendId)
     const s = Number.isSafeInteger(id) ? repo.sends.get(id) : null
     if (!s || s.status !== 'queued' || s.attempt !== payload?.attempt) return
+    // outro envio ainda está no ar (mesmo depois do prazo do job): espera, sem gastar tentativa nem sobrepor
+    if (this.inFlight.size) throw new DeferJobError('outro envio ainda em andamento', SEND_DEFER_MS)
     const tag = `send #${s.id} chat=${chatHash(s.jid)}`
     const opts = this.sendOptions()
     const expire = (from: Array<'queued' | 'typing'>, why: string) => {
@@ -1162,6 +1172,19 @@ export class WhatsAppClient extends EventEmitter {
       const msgId = newMessageId()
       if (!repo.sends.transition(s.id, s.attempt, ['typing'], 'sending', { newMsgId: msgId })) return
       this.inFlight.set(s.id, s.attempt)
+      // sem resposta em 10 min (e a conexão de pé): desconhecido, mas o reenvio continua bloqueado até o pedido terminar
+      const stall = setTimeout(() => {
+        if (this.inFlight.get(s.id) !== s.attempt) return
+        try {
+          if (repo.sends.transition(s.id, s.attempt, ['sending'], 'unknown', { error: 'o WhatsApp não respondeu em 10 min' })) {
+            this.diag('send_unknown', `${tag} sem resposta em 10 min`)
+            this.emitSend(s.jid)
+          }
+        } catch {
+          // banco fechado
+        }
+      }, SEND_STALL_MS)
+      ;(stall as { unref?: () => void }).unref?.()
       let res: Awaited<ReturnType<NonNullable<WaSocket['sendMessage']>>>
       try {
         res = await sock.sendMessage(s.address, { text: s.text }, quote ? { quoted: quotedMessage(quote), messageId: msgId } : { messageId: msgId })
@@ -1174,7 +1197,11 @@ export class WhatsAppClient extends EventEmitter {
         }
         return
       } finally {
-        this.inFlight.delete(s.id)
+        clearTimeout(stall)
+        if (this.inFlight.get(s.id) === s.attempt) {
+          this.inFlight.delete(s.id)
+          this.deps.queue.poke()
+        }
       }
       presence = true
       if (repo.sends.transition(s.id, s.attempt, ['sending', 'unknown'], 'sent', { sentAt: clock.now(), waMsgId: res?.key?.id ?? msgId, error: null })) {

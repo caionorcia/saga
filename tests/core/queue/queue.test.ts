@@ -210,6 +210,23 @@ describe('JobQueue', () => {
       expect(calls).toBe(0)
     })
 
+    it('ready falso (envio anterior ainda no ar): não roda, não gasta vaga do limitador nem tentativa', async () => {
+      const lim = new RateLimiter(LIMITS.wa_send, clock, () => 0)
+      const sq = new JobQueue(repo, clock, { ...makeLimiters(clock), send_message: lim })
+      let busy = true
+      let calls = 0
+      sq.register('send_message', async () => void calls++, { ready: () => !busy })
+      sq.enqueue('send_message', 'send:9:1', { sendId: 9 })
+      expect(await sq.tick()).toBe('idle')
+      expect(sq.stats().nextRunAt).toBeNull()
+      expect(lim.nextAllowedAt()).toBe(clock.now())
+      busy = false
+      sq.poke()
+      expect(await sq.tick()).toBe('ran')
+      expect(calls).toBe(1)
+      expect(repo.jobCounts('send_message')).toMatchObject({ done: 1 })
+    })
+
     it('tipo pausado (WhatsApp fora do ar) ou "Pausar tudo": nada roda; envios esperam 30–90 s entre si', async () => {
       const sq = withSend()
       const ran: number[] = []

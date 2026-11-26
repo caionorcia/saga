@@ -337,11 +337,9 @@ describe('envio direto no serviço', () => {
       expect(repo.sends.get(r.send.id)!.status).toBe('sending')
       expect(diag.some(([k]) => k === 'send_slow')).toBe(true)
       expect(repo.jobCounts('send_message').failed).toBe(0)
-      // a conexão cai (fica desconhecido) e volta: "Enviar de novo" é recusado enquanto o pedido não terminar
-      await emit('connection.update', { connection: 'close', lastDisconnect: { error: Object.assign(new Error('x'), { output: { statusCode: 408 } }) } })
+      // 10 min sem resposta com a conexão de pé: desconhecido, e "Enviar de novo" recusado enquanto o pedido não terminar
+      await drain(10 * 60_000)
       expect(repo.sends.get(r.send.id)!.status).toBe('unknown')
-      await drain(15_000)
-      await emit('connection.update', { connection: 'open' })
       const p2 = await prepare(JID, text)
       expect(await service.sendReply({ token: p2.token, jid: JID, text, replyId: r.send.replyId })).toMatchObject({ ok: false, code: 'in_flight' })
       release({ key: { id: 'OK-LATE' } })

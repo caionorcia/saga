@@ -1427,7 +1427,7 @@ describe('WhatsAppClient', () => {
       expect(repo.sends.get(s.id)).toMatchObject({ status: 'sent', attempt: 2, waMsgId: first.msgIds[0] })
     })
 
-    it('a conexão cai no meio do envio: desconhecido na hora; "em andamento" até o pedido terminar; a fila nunca reenvia', async () => {
+    it('a conexão cai no meio do envio: desconhecido na hora; o bloqueio acaba com a conexão; a fila nunca reenvia', async () => {
       await open()
       let release: (v: unknown) => void = () => {}
       last().spies.sendMessage.mockImplementation(() => new Promise((r) => (release = r)))
@@ -1438,11 +1438,11 @@ describe('WhatsAppClient', () => {
       expect(client.isSendInFlight(s.id)).toBe(true)
       await close(408)
       expect(repo.sends.get(s.id)).toMatchObject({ status: 'unknown', error: 'a conexão caiu durante o envio' })
-      expect(client.isSendInFlight(s.id)).toBe(true)
+      // o pedido era do socket que caiu: o bloqueio de reenvio acaba com a conexão
+      expect(client.isSendInFlight(s.id)).toBe(false)
       // a resposta atrasada do WhatsApp confirma: vira enviada
       release({ key: { id: 'late' } })
       await t
-      expect(client.isSendInFlight(s.id)).toBe(false)
       expect(repo.sends.get(s.id)).toMatchObject({ status: 'sent', waMsgId: 'late' })
       clock.advance(3_600_000)
       await vi.advanceTimersByTimeAsync(60_000)
@@ -1477,6 +1477,49 @@ describe('WhatsAppClient', () => {
       expect(repo.sends.get(c.id)).toMatchObject({ status: 'expired', error: 'pausado' })
       queue.resume()
       for (const sk of sockets) expect(sk.spies.sendMessage).not.toHaveBeenCalled()
+    })
+
+    it('pedido sem resposta por 10 min (conexão de pé): desconhecido, mas segue bloqueando; o próximo envio espera sem gastar vaga', async () => {
+      await open()
+      let release: (v: unknown) => void = () => {}
+      last().spies.sendMessage.mockImplementationOnce(() => new Promise((r) => (release = r)))
+      const a = queueSend(JID, 'primeiro')
+      const t = queue.tick()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(repo.sends.get(a.id)!.status).toBe('sending')
+      // o job estoura o prazo (180 s), o pedido continua no ar
+      await vi.advanceTimersByTimeAsync(180_000)
+      await t
+      expect(client.isSendInFlight(a.id)).toBe(true)
+      // o próximo envio chega na vez: espera, sem vaga do limitador e sem tentativa
+      clock.advance(120_000)
+      const b = queueSend(JID2, 'segundo')
+      const before = limiters.send_message!.nextAllowedAt()
+      for (let i = 0; i < 3; i++) await queue.tick()
+      expect(limiters.send_message!.nextAllowedAt()).toBe(before)
+      expect(repo.jobCounts('send_message')).toMatchObject({ pending: 1, running: 0 })
+      expect(repo.sends.get(b.id)!.status).toBe('queued')
+      // se o handler rodar mesmo assim, ele adia (sem gastar tentativa)
+      await expect((client as any).executeSend({ sendId: b.id, attempt: 1, gen: client.connGen() })).rejects.toThrow(/outro envio ainda em andamento/)
+      // 10 min sem resposta: desconhecido, mas o bloqueio continua
+      clock.advance(10 * 60_000 + 1_000)
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      expect(repo.sends.get(a.id)).toMatchObject({ status: 'unknown', error: 'o WhatsApp não respondeu em 10 min' })
+      expect(client.isSendInFlight(a.id)).toBe(true)
+      expect(last().spies.sendMessage).toHaveBeenCalledTimes(1)
+      // o pedido termina: vira enviada e o próximo pode sair (o de 10 min atrás expirou na fila)
+      release({ key: { id: 'slow' } })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(repo.sends.get(a.id)).toMatchObject({ status: 'sent', waMsgId: 'slow' })
+      expect(client.isSendInFlight(a.id)).toBe(false)
+      const c = queueSend(JID2, 'terceiro')
+      for (let i = 0; i < 3 && repo.sends.get(c.id)!.status === 'queued'; i++) {
+        await runSend()
+        clock.advance(120_000)
+      }
+      expect(repo.sends.get(b.id)!.status).toBe('expired')
+      expect(repo.sends.get(c.id)!.status).toBe('sent')
+      expect(last().spies.sendMessage).toHaveBeenCalledTimes(2)
     })
 
     it('prazo do job esgotado (sinal abortado) antes de enviar: não envia', async () => {
