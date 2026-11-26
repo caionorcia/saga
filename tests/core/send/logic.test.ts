@@ -130,14 +130,14 @@ describe('envio: regras puras', () => {
       const gate = new SendGate(clock)
       const a = gate.issue(ANA, ' Oi! ')
       expect(a.expiresAt).toBe(NOW + 5 * 60_000)
-      expect(gate.consume(a.token, ANA, 'Oi!')).toEqual({ address: ANA, quotedId: null, forced: false })
+      expect(gate.consume(a.token, ANA, 'Oi!')).toEqual({ address: ANA, quotedId: null, forced: false, kind: 'reply' })
       expect(gate.consume(a.token, ANA, 'Oi!')).toBeNull()
       // o destino e a citação vistos na confirmação ficam presos ao token
       const bound = gate.issue(GRP, 'Oi!', { address: GRP, quotedId: 'G7', forced: false })
-      expect(gate.consume(bound.token, GRP, 'Oi!')).toEqual({ address: GRP, quotedId: 'G7', forced: false })
+      expect(gate.consume(bound.token, GRP, 'Oi!')).toEqual({ address: GRP, quotedId: 'G7', forced: false, kind: 'reply' })
       // v0.4.1: "Forçar envio" fica preso ao token
       const forced = gate.issue(GRP, 'Oi!', { address: GRP, quotedId: null, forced: true })
-      expect(gate.consume(forced.token, GRP, 'Oi!')).toEqual({ address: GRP, quotedId: null, forced: true })
+      expect(gate.consume(forced.token, GRP, 'Oi!')).toEqual({ address: GRP, quotedId: null, forced: true, kind: 'reply' })
 
       const b = gate.issue(ANA, 'Oi!')
       expect(gate.consume(b.token, ANA, 'Oi! editado')).toBeNull()

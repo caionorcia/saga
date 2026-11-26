@@ -8,7 +8,7 @@ import { AI_ALERT_KINDS } from '../shared/triage'
 import { KB_LIMITS, KB_ROLES } from '../shared/kb'
 import { SEARCH_KINDS, SEARCH_LIMITS, SEARCH_PERIODS } from '../shared/search'
 import { BACKUP_PASSWORD_MAX, BACKUP_PASSWORD_MIN } from '../shared/backup'
-import { SEND_LIMITS } from '../shared/send'
+import { DRAFT_ID_RE, SEND_LIMITS } from '../shared/send'
 import { isValidSchedule } from '../shared/sendHours'
 import { COPILOTO_URL_MAX } from '../shared/copiloto'
 
@@ -184,6 +184,14 @@ function isSendReply(i: unknown): boolean {
   )
 }
 
+const SEND_AVULSA_FIELDS = new Set(['token', 'jid', 'text', 'draftId'])
+
+/** v0.6.0 "Enviar mensagem avulsa": só o token, a conversa, o texto e o id do rascunho (nada de "forçar" nem citação). */
+function isSendAvulsa(i: unknown): boolean {
+  if (!isObj(i) || !Object.keys(i).every((k) => SEND_AVULSA_FIELDS.has(k))) return false
+  return isUuid(i.token) && nonEmpty(i.jid) && i.jid.length <= 200 && isSendText(i.text) && isStr(i.draftId) && DRAFT_ID_RE.test(i.draftId)
+}
+
 /** Copiloto: só `enabled` (sim/não) e/ou `url` (texto curto; o formato é conferido no serviço, com mensagem). */
 function isCopilotoPatch(p: unknown): boolean {
   if (!isObj(p) || Object.keys(p).length === 0 || !Object.keys(p).every((k) => k === 'enabled' || k === 'url')) return false
@@ -224,12 +232,14 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   prepareSend: (a) =>
     a.length === 1 &&
     isObj(a[0]) &&
-    Object.keys(a[0]).every((k) => k === 'jid' || k === 'text' || k === 'forced') &&
+    Object.keys(a[0]).every((k) => k === 'jid' || k === 'text' || k === 'forced' || k === 'kind') &&
     nonEmpty(a[0].jid) &&
     a[0].jid.length <= 200 &&
     isSendText(a[0].text) &&
-    (a[0].forced === undefined || isBool(a[0].forced)),
+    (a[0].forced === undefined || isBool(a[0].forced)) &&
+    (a[0].kind === undefined || a[0].kind === 'reply' || a[0].kind === 'avulsa'),
   sendReply: (a) => a.length === 1 && isSendReply(a[0]),
+  sendAvulsa: (a) => a.length === 1 && isSendAvulsa(a[0]),
   cancelSend: (a) => a.length === 1 && isId(a[0]),
   listSends: (a) => a.length === 1 && nonEmpty(a[0]) && a[0].length <= 200,
   checkSend: (a) => a.length === 1 && isId(a[0]),

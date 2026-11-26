@@ -11,6 +11,7 @@ export function verifyUnknownSend(repo: Repo, s: SendRow): boolean {
   const echo = findSentEcho(s.msgIds, (id) => repo.getMessage(id))
   if (!echo) return false
   if (!repo.sends.transition(s.id, s.attempt, ['unknown'], 'sent', { sentAt: echo.ts, waMsgId: echo.id, error: null })) return false
-  repo.setApprovedSentText(s.replyId, echo.text ?? s.text)
+  // a mensagem avulsa não tem resposta aprovada: nunca ensina a memória
+  if (s.replyId !== null) repo.setApprovedSentText(s.replyId, echo.text ?? s.text)
   return true
 }

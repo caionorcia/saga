@@ -1299,7 +1299,7 @@ describe('WhatsAppClient', () => {
       ])
       const after = repo.sends.get(s.id)!
       expect(after).toMatchObject({ status: 'sent', waMsgId: 'WA-OUT-1', error: null })
-      expect(repo.getApproved(after.replyId)!.sentText).toBe(text)
+      expect(repo.getApproved(after.replyId!)!.sentText).toBe(text)
       // registro: uma linha por etapa, com o envio e a impressão da conversa; nunca o texto nem o jid
       const lines = diagLines.filter(([k]) => k.startsWith('send_'))
       expect(lines.map(([k]) => k)).toEqual(['send_typing', 'send_sent'])
@@ -1342,6 +1342,23 @@ describe('WhatsAppClient', () => {
         { remoteJid: GRP, id: 'g1', fromMe: false, participant: '888:1@lid' },
         { remoteJid: GRP, id: 'g9', fromMe: false, participant: JID2 }
       ])
+    })
+
+    it('v0.6.0 mensagem avulsa no grupo: mesmo caminho ("digitando…", id gerado, lidas), nunca cita, nunca grava na memória', async () => {
+      await open()
+      spyLog(last())
+      // mesmo pedindo uma citação, a avulsa vai sem (o repositório nem guarda)
+      const { send } = repo.sends.enqueue({ idemKey: 'avulsa:g:d1:x', kind: 'avulsa', replyId: null, jid: GRP, text: 'Aviso geral.', address: GRP, quotedId: 'g0' })
+      expect(send).toMatchObject({ kind: 'avulsa', replyId: null, quotedId: null })
+      queue.enqueue('send_message', sendJobKey(send), { sendId: send.id, attempt: send.attempt, gen: client.connGen() }, 20)
+      await runSend()
+      expect(log[0]).toBe(`presence:composing:${GRP}`)
+      expect(last().spies.sendMessage.mock.calls[0]).toEqual([GRP, { text: 'Aviso geral.' }, { messageId: expect.stringMatching(/^3EB0/) }])
+      // marcar como lida vale igual às respostas (as do grupo depois da última mensagem do mentor)
+      expect(last().spies.readMessages).toHaveBeenCalledTimes(1)
+      expect(repo.sends.get(send.id)).toMatchObject({ status: 'sent', waMsgId: 'WA-OUT-1' })
+      expect(repo.listApproved({ limit: 100 })).toHaveLength(0)
+      expect(diagLines.some(([k, d]) => k === 'send_sent' && d.endsWith(' avulsa'))).toBe(true)
     })
 
     it('grupo: a mensagem citada sumiu → envia sem citar; opções desligadas: sem "digitando", sem marcar como lida', async () => {

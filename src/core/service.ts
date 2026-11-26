@@ -47,7 +47,7 @@ import { WhatsAppClient, type ConnState, type WhatsAppClientDeps } from './wa/cl
 import type { WaVersionFetcher } from './wa/version'
 import { formatPhone } from './db/repo'
 import { SendConflictError, sendJobKey, type SendRow } from './db/sendRepo'
-import { SendGate } from './send/gate'
+import { SendGate, type SendBinding } from './send/gate'
 import { CopilotoSync } from './copiloto/sync'
 import type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult } from '../shared/copiloto'
 import { chatHash, hasRecentContactMessage, pickQuote, sendAddress, textHash } from './send/logic'
@@ -58,10 +58,13 @@ import {
   SEND_REFUSAL_TEXT,
   type PrepareSendInput,
   type PrepareSendResult,
+  type SendAvulsaInput,
+  type SendKind,
   type SendRefusal,
   type SendReplyInput,
   type SendReplyResult,
-  type SendView
+  type SendView,
+  DRAFT_ID_RE
 } from '../shared/send'
 import { OUTSIDE_HOURS_REASON, isWithinSendHours, outsideHoursText, sendHoursInfo, type SendHoursInfo, type SendSchedule } from '../shared/sendHours'
 import type {
@@ -1107,26 +1110,29 @@ export class SagaService extends EventEmitter {
   }
 
   /** O destino e a citação que a confirmação mostra (e que ficam presos ao token). */
-  private sendBinding(jid: string, isGroup: boolean): { address: string; quote: MessageRow | null } {
+  private sendBinding(jid: string, isGroup: boolean, kind: SendKind): { address: string; quote: MessageRow | null } {
     const messages = this.repo.listMessages(jid, 300)
-    const q = isGroup && this.settings.sendOptions().quoteInGroups ? pickQuote(messages) : null
+    // a mensagem avulsa nunca cita (nem em grupo): não responde a nenhuma mensagem
+    const q = kind === 'reply' && isGroup && this.settings.sendOptions().quoteInGroups ? pickQuote(messages) : null
     // só cita com a chave original da mensagem (nunca uma reconstruída)
     return { address: sendAddress(messages, jid), quote: q?.waKeyJson ? q : null }
   }
 
   /**
    * O diálogo "Enviar" abriu: confere as regras e devolve o que mostrar (para quem, a citação no grupo) e uma
-   * confirmação de uso único para exatamente este jid + texto (vale 5 min). Não envia nada.
+   * confirmação de uso único para exatamente este jid + texto (vale 5 min). Não envia nada. `kind: 'avulsa'` (v0.6.0):
+   * a confirmação da mensagem avulsa (sem citação; só vale no `sendAvulsa`).
    */
   async prepareSend(input: PrepareSendInput): Promise<PrepareSendResult> {
     const jid = input.jid
     const text = input.text.trim()
     const forced = input.forced === true
+    const kind: SendKind = input.kind === 'avulsa' ? 'avulsa' : 'reply'
     const refusal = this.sendRefusal(jid, text)
     if (refusal) return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
     const contact = this.repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)!
     const options = this.settings.sendOptions()
-    const bind = this.sendBinding(jid, contact.isGroup)
+    const bind = this.sendBinding(jid, contact.isGroup, kind)
     let quote: { senderName: string; text: string } | null = null
     const q = bind.quote
     if (q) {
@@ -1134,14 +1140,14 @@ export class SagaService extends EventEmitter {
       quote = { senderName: q.senderLabel ?? 'Participante', text: body.length > 140 ? `${body.slice(0, 139)}…` : body }
     }
     const phone = contact.isGroup || jid.endsWith('@lid') ? null : formatPhone(jid)
-    const draft = { jid, text, recipient: { name: contact.displayName, phone, isGroup: contact.isGroup }, quote, options }
+    const draft = { jid, text, kind, recipient: { name: contact.displayName, phone, isGroup: contact.isGroup }, quote, options }
     // fora do horário de envio: sem "Forçar envio" não há token (nada pode sair); a confirmação mostra o aviso
     const outsideHours = this.outsideHours(options.schedule)
     if (outsideHours && !forced) {
       this.diag('send_outside_hours', `chat=${chatHash(jid)} confirmação aberta fora do horário`)
       return { ok: false, code: 'outside_hours', message: outsideHoursText(outsideHours), nextAllowedAt: outsideHours.nextAllowedAt, hours: outsideHours, draft }
     }
-    const { token, expiresAt } = this.sendGate.issue(jid, text, { address: bind.address, quotedId: q?.id ?? null, forced })
+    const { token, expiresAt } = this.sendGate.issue(jid, text, { address: bind.address, quotedId: q?.id ?? null, forced, kind })
     return { ok: true, preview: { token, expiresAt, ...draft, forced, outsideHours } }
   }
 
@@ -1159,22 +1165,9 @@ export class SagaService extends EventEmitter {
   async sendReply(input: SendReplyInput): Promise<SendReplyResult> {
     const jid = input.jid
     const text = input.text.trim()
-    const bind = this.sendGate.consume(input.token, jid, text)
-    if (!bind) {
-      this.diag('send_refused', `chat=${chatHash(jid)} sem confirmação válida`)
-      return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
-    }
-    const refusal = this.sendRefusal(jid, text)
-    if (refusal) {
-      this.diag('send_refused', `chat=${chatHash(jid)} ${refusal}`)
-      return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
-    }
-    // a confirmação sem "Forçar envio" nunca vale fora do horário (mesmo que o diálogo tenha aberto dentro dele)
-    const outside = this.outsideHours(this.settings.sendOptions().schedule)
-    if (outside && !bind.forced) {
-      this.diag('send_outside_hours', `chat=${chatHash(jid)} confirmação sem forçar, fora do horário`)
-      return { ok: false, code: 'outside_hours', message: outsideHoursText(outside) }
-    }
+    const gate = this.consumeConfirmation(input.token, jid, text, 'reply')
+    if (!gate.ok) return gate
+    const { bind, outside } = gate
     const reusedRow = input.replyId ? this.repo.getApproved(input.replyId) : null
     const reused = reusedRow && reusedRow.jid === jid && reusedRow.finalText.trim() === text ? reusedRow : null
     // o pedido anterior desta mesma resposta ainda não terminou: nunca uma segunda tentativa por cima
@@ -1192,9 +1185,76 @@ export class SagaService extends EventEmitter {
             analysisLastMsgId: input.analysisLastMsgId ?? null,
             ...(input.chosenIndex !== undefined ? { chosenIndex: input.chosenIndex } : {})
           })
+    return this.enqueueConfirmed({ idemKey: `${replyId}:${textHash(text)}`, kind: 'reply', replyId, jid, text, bind, outside })
+  }
+
+  /**
+   * v0.6.0 "Enviar mensagem avulsa": a mesma confirmação (token do `prepareSend({ kind: 'avulsa' })`, uso único, preso
+   * a jid + texto + destino + "forçar"), as mesmas regras e a mesma fila das respostas. Nunca cita, nunca grava na
+   * memória (nada em `approved_replies`, nem como resposta enviada). O mesmo rascunho com o mesmo texto nunca vira dois
+   * envios: a chave é conversa + rascunho + impressão do texto.
+   */
+  async sendAvulsa(input: SendAvulsaInput): Promise<SendReplyResult> {
+    const jid = input.jid
+    const text = input.text.trim()
+    if (typeof input.draftId !== 'string' || !DRAFT_ID_RE.test(input.draftId)) {
+      this.diag('send_refused', `chat=${chatHash(jid)} rascunho inválido`)
+      return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
+    }
+    const gate = this.consumeConfirmation(input.token, jid, text, 'avulsa')
+    if (!gate.ok) return gate
+    const idemKey = `avulsa:${jid}:${input.draftId}:${textHash(text)}`
+    const prev = this.repo.sends.byIdemKey(idemKey)
+    if (prev && this.wa.isSendInFlight?.(prev.id)) {
+      this.diag('send_refused', `send #${prev.id} chat=${chatHash(jid)} in_flight`)
+      return { ok: false, code: 'in_flight', message: SEND_REFUSAL_TEXT.in_flight }
+    }
+    return this.enqueueConfirmed({ idemKey, kind: 'avulsa', replyId: null, jid, text, bind: gate.bind, outside: gate.outside })
+  }
+
+  /**
+   * Gasta o token (uso único) e confere de novo as regras e o horário. A confirmação de um tipo (resposta ou avulsa)
+   * nunca vale para o outro.
+   */
+  private consumeConfirmation(
+    token: string,
+    jid: string,
+    text: string,
+    kind: SendKind
+  ): { ok: true; bind: SendBinding; outside: SendHoursInfo | null } | { ok: false; code: SendRefusal | 'not_confirmed'; message: string } {
+    const bind = this.sendGate.consume(token, jid, text, kind)
+    if (!bind) {
+      this.diag('send_refused', `chat=${chatHash(jid)} sem confirmação válida`)
+      return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
+    }
+    const refusal = this.sendRefusal(jid, text)
+    if (refusal) {
+      this.diag('send_refused', `chat=${chatHash(jid)} ${refusal}`)
+      return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
+    }
+    // a confirmação sem "Forçar envio" nunca vale fora do horário (mesmo que o diálogo tenha aberto dentro dele)
+    const outside = this.outsideHours(this.settings.sendOptions().schedule)
+    if (outside && !bind.forced) {
+      this.diag('send_outside_hours', `chat=${chatHash(jid)} confirmação sem forçar, fora do horário`)
+      return { ok: false, code: 'outside_hours', message: outsideHoursText(outside) }
+    }
+    return { ok: true, bind, outside }
+  }
+
+  /** Põe na fila (ou devolve o mesmo envio, pela chave de idempotência) um envio já confirmado. */
+  private enqueueConfirmed(a: {
+    idemKey: string
+    kind: SendKind
+    replyId: number | null
+    jid: string
+    text: string
+    bind: SendBinding
+    outside: SendHoursInfo | null
+  }): SendReplyResult {
+    const { jid, text, bind, outside } = a
     let enq: ReturnType<Repo['sends']['enqueue']>
     try {
-      enq = this.repo.sends.enqueue({ idemKey: `${replyId}:${textHash(text)}`, replyId, jid, text, address: bind.address, quotedId: bind.quotedId, forced: bind.forced })
+      enq = this.repo.sends.enqueue({ idemKey: a.idemKey, kind: a.kind, replyId: a.replyId, jid, text, address: bind.address, quotedId: bind.quotedId, forced: bind.forced })
     } catch (e) {
       if (!(e instanceof SendConflictError)) throw e
       this.diag('send_refused', `chat=${chatHash(jid)} conflito de chave`)
@@ -1204,7 +1264,7 @@ export class SagaService extends EventEmitter {
     if (created) {
       // a geração da conexão vai junto: se a conexão cair antes da vez, este envio nunca sai
       this.queue.enqueue('send_message', sendJobKey(send), { sendId: send.id, attempt: send.attempt, gen: this.wa.connGen?.() ?? 0 }, SEND_PRIORITY)
-      this.sendDiag('send_queued', send, send.attempt > 1 ? `tentativa ${send.attempt}` : '')
+      this.sendDiag('send_queued', send, [send.kind === 'avulsa' ? 'avulsa' : '', send.attempt > 1 ? `tentativa ${send.attempt}` : ''].filter(Boolean).join(' '))
       if (send.forced && outside) this.sendDiag('send_forced', send, 'fora do horário de envio')
     }
     this.markSends(jid)
@@ -1251,6 +1311,7 @@ export class SagaService extends EventEmitter {
     return rows.map((r) => ({
       id: r.id,
       jid: r.jid,
+      kind: r.kind,
       replyId: r.replyId,
       text: r.text,
       status: r.status,

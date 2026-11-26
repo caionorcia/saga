@@ -1,15 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import type { Clock } from '../clock'
-import { SEND_LIMITS } from '../../shared/send'
+import { SEND_LIMITS, type SendKind } from '../../shared/send'
 
 /**
- * O que o mentor viu na confirmação e fica preso ao token: para onde vai, qual mensagem é citada e se marcou "Forçar
- * envio" (v0.4.1: um token sem `forced` nunca vale fora do horário de envio).
+ * O que o mentor viu na confirmação e fica preso ao token: para onde vai, qual mensagem é citada, se marcou "Forçar
+ * envio" (v0.4.1: um token sem `forced` nunca vale fora do horário de envio) e o tipo (v0.6.0: a confirmação de uma
+ * resposta não vale para uma mensagem avulsa, nem o contrário; a avulsa nunca leva citação).
  */
 export interface SendBinding {
   address: string
   quotedId: string | null
   forced: boolean
+  kind: SendKind
 }
 
 /**
@@ -22,21 +24,30 @@ export class SendGate {
 
   constructor(private readonly clock: Clock) {}
 
-  issue(jid: string, text: string, bind: SendBinding = { address: jid, quotedId: null, forced: false }): { token: string; expiresAt: number } {
+  issue(jid: string, text: string, bind: Partial<SendBinding> & Pick<SendBinding, 'address'> = { address: jid }): { token: string; expiresAt: number } {
     this.sweep()
     const token = randomUUID()
     const expiresAt = this.clock.now() + SEND_LIMITS.tokenTtlMs
-    this.tokens.set(token, { jid, text: text.trim(), expiresAt, bind: { address: bind.address, quotedId: bind.quotedId, forced: bind.forced === true } })
+    const kind: SendKind = bind.kind === 'avulsa' ? 'avulsa' : 'reply'
+    this.tokens.set(token, {
+      jid,
+      text: text.trim(),
+      expiresAt,
+      bind: { address: bind.address, quotedId: kind === 'avulsa' ? null : (bind.quotedId ?? null), forced: bind.forced === true, kind }
+    })
     return { token, expiresAt }
   }
 
-  /** O destino e a citação confirmados, só uma vez, para o token certo, dentro do prazo, com o mesmo jid e texto. */
-  consume(token: string, jid: string, text: string): SendBinding | null {
+  /**
+   * O destino e a citação confirmados, só uma vez, para o token certo, dentro do prazo, com o mesmo jid, texto e tipo
+   * (`reply` quando não informado).
+   */
+  consume(token: string, jid: string, text: string, kind: SendKind = 'reply'): SendBinding | null {
     const t = this.tokens.get(token)
     if (!t) return null
     // gasto mesmo quando não confere: uma tentativa errada não deixa o token vivo para outra
     this.tokens.delete(token)
-    return t.expiresAt > this.clock.now() && t.jid === jid && t.text === text.trim() ? t.bind : null
+    return t.expiresAt > this.clock.now() && t.jid === jid && t.text === text.trim() && t.bind.kind === kind ? t.bind : null
   }
 
   private sweep(): void {

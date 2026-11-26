@@ -178,4 +178,14 @@ describe('Copiloto: eventos', () => {
     const echo = b.message(ctx.repo.getMessage('APPMSG1')!)!.event as MessageEvent
     expect(echo).toMatchObject({ id: ev.id, sent_via_sagazap: true })
   })
+
+  it('v0.6.0 mensagem avulsa enviada: igual a uma resposta (mensagem do mentor com sent_via_sagazap)', () => {
+    ctx.add(ANA)
+    const { send } = ctx.repo.sends.enqueue({ idemKey: 'avulsa:k1', kind: 'avulsa', replyId: null, jid: ANA, text: 'Aviso avulso', address: ANA, quotedId: null })
+    ctx.repo.sends.transition(send.id, send.attempt, ['queued'], 'sent', { sentAt: ctx.clock.now(), newMsgId: 'APPMSG2' })
+    const ev = b.send(send.id)!.event as MessageEvent
+    expect(ev).toMatchObject({ id: messageEventId(ANA, 'APPMSG2'), direction: 'outbound', sender: { is_mentor: true }, text: 'Aviso avulso', sent_via_sagazap: true })
+    ctx.add(ANA, { id: 'APPMSG2', fromMe: true, text: 'Aviso avulso', minutesAgo: 0 })
+    expect(b.message(ctx.repo.getMessage('APPMSG2')!)!.event).toMatchObject({ id: ev.id, sent_via_sagazap: true })
+  })
 })

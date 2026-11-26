@@ -209,7 +209,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   /** envio direto simulado (nada sai daqui) */
   const sends = new Map<string, SendView[]>()
   const sendListeners = new Set<{ jid: string; cb: () => void }>()
-  const sendTokens = new Map<string, { jid: string; text: string; expiresAt: number; forced: boolean }>()
+  const sendTokens = new Map<string, { jid: string; text: string; expiresAt: number; forced: boolean; kind: 'reply' | 'avulsa' }>()
   let sendSeq = 0
   let tokenSeq = 0
   const notifySends = (jid: string) => sendListeners.forEach((l) => l.jid === jid && l.cb())
@@ -234,6 +234,33 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     if (!c) return 'unknown_chat' as const
     if (!c.messages.some((m) => !m.fromMe && m.ts >= Date.now() - SEND_LIMITS.recentContactMs)) return 'no_recent_contact' as const
     return null
+  }
+
+  /** v0.6.0: rascunho + texto de cada envio avulso (o mesmo rascunho com o mesmo texto é o mesmo envio) */
+  const avulsaKeys = new Map<number, string>()
+  /** põe na fila (ou devolve o mesmo envio, se ainda vai sair ou já saiu) e simula "digitando…" e "enviada" */
+  const queueFakeSend = (
+    jid: string,
+    text: string,
+    same: SendView | undefined,
+    k: { kind: 'reply'; replyId: number } | { kind: 'avulsa'; replyId: null }
+  ): { ok: true; send: SendView } => {
+    if (same && ['queued', 'typing', 'sending', 'sent'].includes(same.status)) return { ok: true, send: { ...same } }
+    const list = sends.get(jid) ?? []
+    const now = Date.now()
+    const eta = opts.sendEtaMs ?? 42_000
+    const sv: SendView = same ?? { id: ++sendSeq, jid, ...k, text, status: 'queued', queuedAt: now, etaAt: now + eta, waitingFor: null, sentAt: null, error: null }
+    Object.assign(sv, { status: 'queued', queuedAt: now, etaAt: now + eta, sentAt: null, error: null })
+    if (!same) sends.set(jid, [sv, ...list])
+    if (opts.sendAutoAdvance !== false) {
+      setTimeout(() => {
+        if (sv.status !== 'queued') return
+        patchSend(sv.id, { status: 'typing', etaAt: null })
+        setTimeout(() => sv.status === 'typing' && patchSend(sv.id, { status: 'sent', sentAt: Date.now() }), 3_000)
+      }, eta)
+    }
+    notifySends(jid)
+    return { ok: true, send: { ...sv } }
   }
 
   const snapshot = (): AppState => {
@@ -569,14 +596,17 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       record('prepareSend', [input], undefined)
       const text = input.text.trim()
       const forced = input.forced === true
+      const kind: 'reply' | 'avulsa' = input.kind === 'avulsa' ? 'avulsa' : 'reply'
       const code = sendRefusal(input.jid, text)
       if (code) return { ok: false, code, message: SEND_REFUSAL_TEXT[code] }
       const c = find(input.jid)!
-      const q = c.isGroup && settings.sendQuoteInGroups ? quoteOf(c) : null
+      // a mensagem avulsa nunca cita
+      const q = kind === 'reply' && c.isGroup && settings.sendQuoteInGroups ? quoteOf(c) : null
       const body = q ? (q.text ?? q.transcript ?? '[áudio]') : ''
       const draft = {
         jid: input.jid,
         text,
+        kind,
         recipient: { name: displayName(c), phone: c.isGroup ? null : formatDemoPhone(c.jid), isGroup: c.isGroup },
         quote: q ? { senderName: q.senderName ?? 'Participante', text: body.length > 140 ? `${body.slice(0, 139)}…` : body } : null,
         options: sendOptionsNow()
@@ -587,7 +617,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       }
       const token = `00000000-0000-4000-9000-${String(++tokenSeq).padStart(12, '0')}`
       const expiresAt = Date.now() + SEND_LIMITS.tokenTtlMs
-      sendTokens.set(token, { jid: input.jid, text, expiresAt, forced })
+      sendTokens.set(token, { jid: input.jid, text, expiresAt, forced, kind })
       return { ok: true, preview: { token, expiresAt, ...draft, forced, outsideHours: outside } }
     },
     sendReply: async (input) => {
@@ -595,29 +625,32 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       const t = sendTokens.get(input.token)
       sendTokens.delete(input.token)
       const text = input.text.trim()
-      if (!t || t.expiresAt <= Date.now() || t.jid !== input.jid || t.text !== text) return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
+      if (!t || t.expiresAt <= Date.now() || t.jid !== input.jid || t.text !== text || t.kind !== 'reply') return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
       const code = sendRefusal(input.jid, text)
       if (code) return { ok: false, code, message: SEND_REFUSAL_TEXT[code] }
       const outside = outsideHoursNow()
       if (outside && !t.forced) return { ok: false, code: 'outside_hours', message: outsideHoursText(outside) }
       const rid = input.replyId ?? (await api.saveReply({ jid: input.jid, originalSuggestion: input.originalSuggestion ?? null, finalText: text, analysisLastMsgId: input.analysisLastMsgId, chosenIndex: input.chosenIndex }))
       const list = sends.get(input.jid) ?? []
-      const same = list.find((x) => x.replyId === rid && x.text === text)
-      if (same && ['queued', 'typing', 'sending', 'sent'].includes(same.status)) return { ok: true, send: { ...same } }
-      const now = Date.now()
-      const eta = opts.sendEtaMs ?? 42_000
-      const sv: SendView = same ?? { id: ++sendSeq, jid: input.jid, replyId: rid, text, status: 'queued', queuedAt: now, etaAt: now + eta, waitingFor: null, sentAt: null, error: null }
-      Object.assign(sv, { status: 'queued', queuedAt: now, etaAt: now + eta, sentAt: null, error: null })
-      if (!same) sends.set(input.jid, [sv, ...list])
-      if (opts.sendAutoAdvance !== false) {
-        setTimeout(() => {
-          if (sv.status !== 'queued') return
-          patchSend(sv.id, { status: 'typing', etaAt: null })
-          setTimeout(() => sv.status === 'typing' && patchSend(sv.id, { status: 'sent', sentAt: Date.now() }), 3_000)
-        }, eta)
-      }
-      notifySends(input.jid)
-      return { ok: true, send: { ...sv } }
+      const same = list.find((x) => x.kind === 'reply' && x.replyId === rid && x.text === text)
+      return queueFakeSend(input.jid, text, same, { kind: 'reply', replyId: rid })
+    },
+    sendAvulsa: async (input) => {
+      record('sendAvulsa', [input], undefined)
+      const t = sendTokens.get(input.token)
+      sendTokens.delete(input.token)
+      const text = input.text.trim()
+      if (!t || t.expiresAt <= Date.now() || t.jid !== input.jid || t.text !== text || t.kind !== 'avulsa') return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
+      const code = sendRefusal(input.jid, text)
+      if (code) return { ok: false, code, message: SEND_REFUSAL_TEXT[code] }
+      const outside = outsideHoursNow()
+      if (outside && !t.forced) return { ok: false, code: 'outside_hours', message: outsideHoursText(outside) }
+      // nada na memória: a avulsa não passa pelo saveReply; o mesmo rascunho com o mesmo texto é o mesmo envio
+      const key = `${input.draftId}:${text}`
+      const same = (sends.get(input.jid) ?? []).find((x) => x.kind === 'avulsa' && avulsaKeys.get(x.id) === key)
+      const r = queueFakeSend(input.jid, text, same, { kind: 'avulsa', replyId: null })
+      if (r.ok) avulsaKeys.set(r.send.id, key)
+      return r
     },
     cancelSend: async (id) => {
       record('cancelSend', [id], undefined)

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { systemClock, type Clock } from '../clock'
-import type { SendStatus } from '../../shared/send'
+import type { SendKind, SendStatus } from '../../shared/send'
 
 type Row = Record<string, any>
 
@@ -8,7 +8,10 @@ type Row = Record<string, any>
 export interface SendRow {
   id: number
   idemKey: string
-  replyId: number
+  /** v0.6.0: `reply` (resposta a uma sugestão) ou `avulsa` (mensagem escrita fora das sugestões) */
+  kind: SendKind
+  /** a resposta aprovada que este envio leva; null na avulsa (nunca entra na memória) */
+  replyId: number | null
   jid: string
   text: string
   /** para onde vai: o grupo, ou na individual o JID como o contato escreveu por último (@lid ou telefone) */
@@ -43,7 +46,8 @@ function toSend(r: Row): SendRow {
   return {
     id: r.id,
     idemKey: r.idem_key,
-    replyId: r.reply_id,
+    kind: r.kind === 'avulsa' ? 'avulsa' : 'reply',
+    replyId: r.reply_id ?? null,
     jid: r.jid,
     text: r.text,
     address: r.address,
@@ -123,22 +127,26 @@ export class SendRepo {
    * Novo envio na fila, ou o mesmo de antes (mesma chave de idempotência): um que ainda vai sair ou já saiu é devolvido
    * como está (`created: false`); um que falhou, expirou, ficou desconhecido ou foi cancelado volta para a fila com
    * `attempt + 1` e o destino/citação desta nova confirmação (só depois de uma nova confirmação explícita, que é quem
-   * chama). A chave de outra conversa lança `SendConflictError`.
+   * chama). A chave de outra conversa (ou de outro tipo/resposta) lança `SendConflictError`. A avulsa (`replyId`
+   * null) nunca leva citação.
    */
-  enqueue(a: { idemKey: string; replyId: number; jid: string; text: string; address: string; quotedId: string | null; forced?: boolean }): {
+  enqueue(a: { idemKey: string; kind?: SendKind; replyId: number | null; jid: string; text: string; address: string; quotedId: string | null; forced?: boolean }): {
     send: SendRow
     created: boolean
   } {
+    const kind: SendKind = a.kind ?? 'reply'
+    if ((kind === 'reply') !== (a.replyId !== null)) throw new Error('envio: resposta sem resposta aprovada ou avulsa com resposta aprovada')
+    const quotedId = kind === 'avulsa' ? null : a.quotedId
     const forced = a.forced ? 1 : 0
     const now = this.clock.now()
     const cur = this.byIdemKey(a.idemKey)
     if (!cur) {
       const res = this.db
-        .prepare(`INSERT INTO sends(idem_key, reply_id, jid, text, address, quoted_id, forced, status, queued_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)`)
-        .run(a.idemKey, a.replyId, a.jid, a.text, a.address, a.quotedId, forced, now)
+        .prepare(`INSERT INTO sends(idem_key, kind, reply_id, jid, text, address, quoted_id, forced, status, queued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`)
+        .run(a.idemKey, kind, a.replyId, a.jid, a.text, a.address, quotedId, forced, now)
       return { send: this.get(Number(res.lastInsertRowid))!, created: true }
     }
-    if (cur.jid !== a.jid || cur.replyId !== a.replyId) throw new SendConflictError()
+    if (cur.jid !== a.jid || cur.kind !== kind || cur.replyId !== a.replyId) throw new SendConflictError()
     if (cur.status === 'queued' || cur.status === 'typing' || cur.status === 'sending' || cur.status === 'sent') {
       return { send: cur, created: false }
     }
@@ -148,7 +156,7 @@ export class SendRepo {
            error = NULL, address = ?, quoted_id = ?, forced = ?
          WHERE id = ? AND attempt = ?`
       )
-      .run(now, a.address, a.quotedId, forced, cur.id, cur.attempt)
+      .run(now, a.address, quotedId, forced, cur.id, cur.attempt)
     return { send: this.get(cur.id)!, created: true }
   }
 

@@ -1107,7 +1107,9 @@ export class WhatsAppClient extends EventEmitter {
    * últimos 30 dias, conexão aberta) e então: "digitando…" proporcional ao texto → "parou" → envia para o destino
    * confirmado (nos grupos citando a mensagem confirmada, com um id de mensagem gerado aqui) → marca como lidas as
    * mensagens do contato SÓ dessa conversa → volta a indisponível. Nunca tenta de novo sozinho: uma falha antes do envio
-   * fica `failed`/`expired`; uma queda durante o envio fica `unknown` (e é conferida pelo id).
+   * fica `failed`/`expired`; uma queda durante o envio fica `unknown` (e é conferida pelo id). A mensagem avulsa
+   * (v0.6.0) passa exatamente por aqui, com as mesmas regras; só não cita e não grava `sent_text` (não tem resposta
+   * aprovada). "Marcar como lida" vale igual: mandar mensagem numa conversa, no celular, também a deixa lida.
    */
   private async executeSend(payload: { sendId?: unknown; attempt?: unknown; gen?: unknown }, signal?: AbortSignal): Promise<void> {
     const { repo, clock, queue } = this.deps
@@ -1150,7 +1152,8 @@ export class WhatsAppClient extends EventEmitter {
     // responder, nunca iniciar conversa
     if (!hasRecentContactMessage(messages, clock.now())) return fail(['queued'], 'sem mensagem do contato nos últimos 30 dias')
     // a citação é a que o mentor viu na confirmação; se ela sumiu, vai sem citação
-    const quoteRow = s.quotedId ? repo.getMessage(s.quotedId) : null
+    // (a mensagem avulsa nunca cita, nem em grupo)
+    const quoteRow = s.quotedId && s.kind !== 'avulsa' ? repo.getMessage(s.quotedId) : null
     const quote = quoteRow && quoteRow.jid === s.jid && !quoteRow.fromMe ? quoteRow : null
     const keys = opts.markRead ? unreadKeys(messages) : []
     if (!repo.sends.transition(s.id, s.attempt, ['queued'], 'typing', { startedAt: clock.now() })) return
@@ -1177,7 +1180,7 @@ export class WhatsAppClient extends EventEmitter {
         const echo = findSentEcho(s.msgIds, (mid) => repo.getMessage(mid))
         if (echo) {
           if (repo.sends.transition(s.id, s.attempt, ['typing'], 'sent', { sentAt: echo.ts, waMsgId: echo.id, error: null })) {
-            repo.setApprovedSentText(s.replyId, echo.text ?? s.text)
+            if (s.replyId !== null) repo.setApprovedSentText(s.replyId, echo.text ?? s.text)
             this.diag('send_sent', `${tag} a tentativa anterior já tinha chegado`)
             this.emitSend(s.jid)
           }
@@ -1220,8 +1223,9 @@ export class WhatsAppClient extends EventEmitter {
       }
       presence = true
       if (repo.sends.transition(s.id, s.attempt, ['sending', 'unknown'], 'sent', { sentAt: clock.now(), waMsgId: res?.key?.id ?? msgId, error: null })) {
-        repo.setApprovedSentText(s.replyId, s.text)
-        this.diag('send_sent', `${tag}${quote ? ' com citação' : ''}`)
+        // a mensagem avulsa não tem resposta aprovada: nunca ensina a memória
+        if (s.replyId !== null) repo.setApprovedSentText(s.replyId, s.text)
+        this.diag('send_sent', `${tag}${quote ? ' com citação' : ''}${s.kind === 'avulsa' ? ' avulsa' : ''}`)
         this.emitSend(s.jid)
       }
       if (keys.length && sock.readMessages && gen === this.gen) {

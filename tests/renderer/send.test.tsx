@@ -150,7 +150,7 @@ describe('Enviar (envio direto)', () => {
   })
 
   it('textos do estado', () => {
-    const base: SendView = { id: 1, jid: ANA, replyId: 1, text: 'x', status: 'queued', queuedAt: 0, etaAt: 42_000, waitingFor: null, sentAt: null, error: null }
+    const base: SendView = { id: 1, jid: ANA, kind: 'reply', replyId: 1, text: 'x', status: 'queued', queuedAt: 0, etaAt: 42_000, waitingFor: null, sentAt: null, error: null }
     expect(sendStatusText(base, 0)).toBe('Na fila — envia em 42 s')
     expect(sendStatusText({ ...base, etaAt: 65_000 }, 0)).toBe('Na fila — envia em 1 min 05 s')
     expect(sendStatusText({ ...base, etaAt: 0 }, 10)).toBe('Na fila — envia já')

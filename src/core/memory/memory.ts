@@ -115,6 +115,8 @@ export function saveApproved(
 /** Liga uma mensagem realmente enviada à resposta aprovada correspondente (se houver). */
 export function reconcileSent(repo: Repo, msg: NormalizedMessage): void {
   if (!msg.fromMe || msg.kind !== 'text' || !msg.text?.trim()) return
+  // v0.6.0: o eco de uma mensagem avulsa enviada pelo SagaZap nunca vira "resposta enviada" de uma sugestão
+  if (isAvulsaEcho(repo, msg.id)) return
   const candidates = repo.listUnsentApproved(msg.jid, msg.ts - SIX_HOURS, msg.ts + CLOCK_SLACK)
   let best: { id: number; score: number } | null = null
   for (const c of candidates) {
@@ -134,8 +136,14 @@ export function reconcileSaved(repo: Repo, a: { id: number; jid: string; finalTe
   let best: { text: string; score: number } | null = null
   for (const m of repo.listMessages(a.jid, 300)) {
     if (!m.fromMe || m.kind !== 'text' || !m.text?.trim() || m.ts < from || m.ts > to) continue
+    if (isAvulsaEcho(repo, m.id)) continue
     const score = similarity(a.finalText, m.text)
     if (score >= 0.6 && (!best || score >= best.score)) best = { text: m.text, score }
   }
   if (best) repo.setApprovedSentText(a.id, best.text)
+}
+
+/** A mensagem do mentor com este id saiu por um envio avulso do SagaZap (v0.6.0)? Essas não ensinam a memória. */
+export function isAvulsaEcho(repo: Repo, msgId: string): boolean {
+  return repo.sends.byMsgId(msgId)?.kind === 'avulsa'
 }

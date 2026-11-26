@@ -301,7 +301,7 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
           persistedReplyId={analysis.chosenIndex === i ? (analysis.chosenReplyId ?? null) : null}
           onChoose={(replyId) => choose(i, replyId)}
           directSend={directSend}
-          send={chosen === i ? (sends.find((x) => x.replyId === chosenReplyId) ?? null) : null}
+          send={chosen === i ? (sends.find((x) => x.kind !== 'avulsa' && x.replyId === chosenReplyId) ?? null) : null}
           onQueued={(send) => setSends((cur) => [send, ...cur.filter((x) => x.id !== send.id)])}
         />
       ))}
@@ -431,7 +431,7 @@ function SuggestionCard({
     lastSavedId.current = sv.replyId
     setSaved(true)
     onQueued(sv)
-    onChoose(sv.replyId)
+    onChoose(sv.replyId ?? undefined)
   }
   /** o envio da escolha está acontecendo ou já saiu: não oferece Enviar de novo */
   const sendBusy = !!send && (send.status === 'queued' || send.status === 'typing' || send.status === 'sending' || send.status === 'sent')

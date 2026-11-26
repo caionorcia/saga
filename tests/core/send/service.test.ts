@@ -294,6 +294,120 @@ describe('envio direto no serviço', () => {
     })
   })
 
+  describe('mensagem avulsa (v0.6.0)', () => {
+    const DRAFT = '6a0c1e2f-3b4d-4e5f-8a9b-0c1d2e3f4a5b'
+    const prepareAvulsa = async (jid: string, text: string, forced = false) => {
+      const r = await service.prepareSend({ jid, text, kind: 'avulsa', forced })
+      if (!r.ok) throw new Error(r.code)
+      return r.preview
+    }
+
+    it('token preso a tipo + jid + texto: o de resposta não vale para a avulsa (nem o contrário); rascunho inválido recusado', async () => {
+      await startOpen()
+      const p = await prepareAvulsa(JID, '  Bom dia!  ')
+      expect(p).toMatchObject({ kind: 'avulsa', jid: JID, text: 'Bom dia!', quote: null, recipient: { name: 'Ana', isGroup: false } })
+      // o token da avulsa não serve no sendReply (e é gasto)
+      expect(await service.sendReply({ token: p.token, jid: JID, text: 'Bom dia!' })).toMatchObject({ ok: false, code: 'not_confirmed' })
+      expect(await service.sendAvulsa({ token: p.token, jid: JID, text: 'Bom dia!', draftId: DRAFT })).toMatchObject({ ok: false, code: 'not_confirmed' })
+      // o de resposta não serve na avulsa
+      const r = await prepare(JID, 'Bom dia!')
+      expect(r.kind).toBe('reply')
+      expect(await service.sendAvulsa({ token: r.token, jid: JID, text: 'Bom dia!', draftId: DRAFT })).toMatchObject({ ok: false, code: 'not_confirmed' })
+      // outro texto, outra conversa, vencido
+      const a1 = await prepareAvulsa(JID, 'Bom dia!')
+      expect(await service.sendAvulsa({ token: a1.token, jid: JID, text: 'Boa tarde!', draftId: DRAFT })).toMatchObject({ ok: false, code: 'not_confirmed' })
+      const a2 = await prepareAvulsa(JID, 'Bom dia!')
+      expect(await service.sendAvulsa({ token: a2.token, jid: OLD, text: 'Bom dia!', draftId: DRAFT })).toMatchObject({ ok: false, code: 'not_confirmed' })
+      const a3 = await prepareAvulsa(JID, 'Bom dia!')
+      expect(await service.sendAvulsa({ token: a3.token, jid: JID, text: 'Bom dia!', draftId: 'x y' })).toMatchObject({ ok: false, code: 'not_confirmed' })
+      clock.advance(5 * 60_000)
+      expect(await service.sendAvulsa({ token: a3.token, jid: JID, text: 'Bom dia!', draftId: DRAFT })).toMatchObject({ ok: false, code: 'not_confirmed' })
+      await drain()
+      expect(repo.sends.counts().queued).toBe(0)
+      expect(writes()).toBe(0)
+      // as regras de sempre valem: responder, nunca iniciar conversa
+      clock.advance(2 * DAY)
+      expect(await service.prepareSend({ jid: OLD, text: 'Oi', kind: 'avulsa' })).toMatchObject({ ok: false, code: 'no_recent_contact' })
+    })
+
+    it('sai pela mesma fila, sem citação e sem memória; o eco tira de "Para responder" e não vira resposta enviada', async () => {
+      await startOpen()
+      // uma resposta salva (não enviada) com o mesmo texto: o eco da avulsa nunca é ligado a ela
+      const saved = await service.saveReply({ jid: JID, originalSuggestion: null, finalText: 'Combinado, até amanhã!', analysisLastMsgId: null })
+      const before = repo.listApproved({ limit: 100 }).length
+      const p = await prepareAvulsa(JID, 'Combinado, até amanhã!')
+      const r = await service.sendAvulsa({ token: p.token, jid: JID, text: 'Combinado, até amanhã!', draftId: DRAFT })
+      if (!r.ok) throw new Error(r.code)
+      expect(r.send).toMatchObject({ kind: 'avulsa', replyId: null, status: 'queued', text: 'Combinado, até amanhã!' })
+      expect(repo.sends.get(r.send.id)).toMatchObject({ kind: 'avulsa', replyId: null, quotedId: null, address: JID })
+      expect(diag.find(([k]) => k === 'send_queued')![1]).toMatch(/ avulsa$/)
+      await drain()
+      const row = repo.sends.get(r.send.id)!
+      expect(row.status).toBe('sent')
+      expect(last().spies.sendPresenceUpdate).toHaveBeenCalledWith('composing', JID)
+      expect(last().spies.sendMessage).toHaveBeenCalledTimes(1)
+      expect(last().spies.sendMessage).toHaveBeenCalledWith(JID, { text: 'Combinado, até amanhã!' }, { messageId: row.msgIds[0] })
+      // nada novo na memória, nem escolha de sugestão
+      expect(repo.listApproved({ limit: 100 })).toHaveLength(before)
+      expect(repo.getApproved(saved)!.sentText).toBeNull()
+      // o eco chega pela ingestão normal (com o id gerado): sai de "Para responder" como numa resposta do mentor
+      await emit('messages.upsert', { messages: [wamsg({ id: row.msgIds[0], fromMe: true, ts: NOW + 30_000, text: 'Combinado, até amanhã!' })] })
+      expect((await service.listContacts(false)).find((c) => c.jid === JID)!.needsReply).toBe(false)
+      expect(repo.getApproved(saved)!.sentText).toBeNull()
+      // e um "Salvar" depois também não liga a resposta ao texto da avulsa
+      const later = await service.saveReply({ jid: JID, originalSuggestion: null, finalText: 'Combinado, até amanhã!', analysisLastMsgId: null })
+      expect(repo.getApproved(later)!.sentText).toBeNull()
+    })
+
+    it('idempotente pelo rascunho: o mesmo rascunho com o mesmo texto nunca envia duas vezes; outro rascunho é outro envio', async () => {
+      await startOpen()
+      const text = 'Lembrete: encontro hoje.'
+      const r1 = await service.sendAvulsa({ token: (await prepareAvulsa(JID, text)).token, jid: JID, text, draftId: DRAFT })
+      const r2 = await service.sendAvulsa({ token: (await prepareAvulsa(JID, text)).token, jid: JID, text, draftId: DRAFT })
+      if (!r1.ok || !r2.ok) throw new Error('falhou')
+      expect(r2.send.id).toBe(r1.send.id)
+      expect(repo.jobCounts('send_message').pending).toBe(1)
+      // falhou no "digitando": só volta com nova confirmação, na mesma linha (tentativa 2)
+      last().spies.sendPresenceUpdate.mockRejectedValueOnce(new Error('Connection Closed'))
+      await drain()
+      expect(repo.sends.get(r1.send.id)!.status).toBe('failed')
+      const r3 = await service.sendAvulsa({ token: (await prepareAvulsa(JID, text)).token, jid: JID, text, draftId: DRAFT })
+      if (!r3.ok) throw new Error('falhou')
+      expect(r3.send.id).toBe(r1.send.id)
+      expect(repo.sends.get(r1.send.id)!.attempt).toBe(2)
+      // o ritmo seguro (30 a 90 s entre envios) vale para a avulsa também
+      await drain(120_000)
+      expect(repo.sends.get(r1.send.id)!.status).toBe('sent')
+      // já enviada: o mesmo rascunho e texto devolvem o mesmo envio, sem enviar de novo
+      const r4 = await service.sendAvulsa({ token: (await prepareAvulsa(JID, text)).token, jid: JID, text, draftId: DRAFT })
+      if (!r4.ok) throw new Error('falhou')
+      expect(r4.send).toMatchObject({ id: r1.send.id, status: 'sent' })
+      await drain()
+      expect(last().spies.sendMessage).toHaveBeenCalledTimes(1)
+      // rascunho novo: outro envio
+      const r5 = await service.sendAvulsa({ token: (await prepareAvulsa(JID, text)).token, jid: JID, text, draftId: 'outro-rascunho-1' })
+      if (!r5.ok) throw new Error('falhou')
+      expect(r5.send.id).not.toBe(r1.send.id)
+    })
+
+    it('horário de envio: fora dele sem forçar não há token; com "Forçar envio" sai, preso ao token', async () => {
+      await startOpen()
+      const d = new Date(NOW)
+      clock.advance(new Date(d.getFullYear(), d.getMonth(), d.getDate(), 20, 15).getTime() - clock.now())
+      const r = await service.prepareSend({ jid: JID, text: 'Oi!', kind: 'avulsa' })
+      expect(r).toMatchObject({ ok: false, code: 'outside_hours', draft: { kind: 'avulsa', quote: null } })
+      expect(r).not.toHaveProperty('preview')
+      const f = await prepareAvulsa(JID, 'Oi!', true)
+      expect(f).toMatchObject({ kind: 'avulsa', forced: true, outsideHours: { next: 'amanhã 09:00' } })
+      const q = await service.sendAvulsa({ token: f.token, jid: JID, text: 'Oi!', draftId: DRAFT })
+      if (!q.ok) throw new Error(q.code)
+      expect(repo.sends.get(q.send.id)!.forced).toBe(true)
+      await drain()
+      expect(repo.sends.get(q.send.id)!.status).toBe('sent')
+      expect(diag.map(([k]) => k)).toContain('send_forced')
+    })
+  })
+
   it('confirmado: escolhe a sugestão (memória com as não escolhidas), envia uma vez e grava o texto enviado', async () => {
     await startOpen()
     const a = await service.getAnalysis(JID)
@@ -306,7 +420,7 @@ describe('envio direto no serviço', () => {
     expect(r.send.etaAt).toBeGreaterThanOrEqual(NOW)
     const stored = repo.getAnalysis(JID)!
     expect([stored.chosenIndex, stored.chosenReplyId]).toEqual([0, r.send.replyId])
-    expect(repo.getApproved(r.send.replyId)).toMatchObject({ finalText: text, rejected: ['Claro, te explico.'] })
+    expect(repo.getApproved(r.send.replyId!)).toMatchObject({ finalText: text, rejected: ['Claro, te explico.'] })
     expect(diag.find(([k]) => k === 'send_queued')![1]).toMatch(new RegExp(`^send #${r.send.id} job #\\d+ chat=${chatHash(JID)}$`))
 
     const events: string[] = []
@@ -316,7 +430,7 @@ describe('envio direto no serviço', () => {
     expect(last().spies.sendMessage).toHaveBeenCalledWith(JID, { text }, { messageId: repo.sends.get(r.send.id)!.msgIds[0] })
     const [view] = await service.listSends(JID)
     expect(view).toMatchObject({ id: r.send.id, status: 'sent', etaAt: null })
-    expect(repo.getApproved(r.send.replyId)!.sentText).toBe(text)
+    expect(repo.getApproved(r.send.replyId!)!.sentText).toBe(text)
     expect(events.length).toBeGreaterThan(0)
     expect(diag.map(([k]) => k).filter((k) => k.startsWith('send_'))).toEqual(['send_queued', 'send_typing', 'send_sent'])
 
@@ -488,7 +602,7 @@ describe('envio direto no serviço', () => {
       repo.insertMessage({ id: `3EB0SEED${s}`, jid: JID, fromMe: true, ts: NOW - 30_000, kind: 'text', text: 'Combinado!', mediaKeyJson: null, durationSec: null })
       await startOpen()
       expect(repo.sends.get(s)).toMatchObject({ status: 'sent', waMsgId: `3EB0SEED${s}`, sentAt: NOW - 30_000 })
-      expect(repo.getApproved(repo.sends.get(s)!.replyId)!.sentText).toBe('Combinado!')
+      expect(repo.getApproved(repo.sends.get(s)!.replyId!)!.sentText).toBe('Combinado!')
       expect(writes()).toBe(0)
     })
 

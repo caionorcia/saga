@@ -57,12 +57,19 @@ export interface SendOptions {
 
 export const DEFAULT_SEND_OPTIONS: SendOptions = { enabled: true, typing: true, markRead: true, quoteInGroups: true, schedule: cloneSchedule(DEFAULT_SEND_SCHEDULE) }
 
+/**
+ * v0.6.0: o que o envio leva. `reply` = a resposta a uma sugestão (vira resposta aprovada na memória); `avulsa` = uma
+ * mensagem escrita pelo mentor fora das sugestões ("Enviar mensagem avulsa"): nunca cita, nunca entra na memória.
+ */
+export type SendKind = 'reply' | 'avulsa'
+
 /** Um envio, como a interface vê (nunca o jid de quem mandou a mensagem citada). */
 export interface SendView {
   id: number
   jid: string
-  /** a resposta aprovada (memória) que este envio leva */
-  replyId: number
+  kind: SendKind
+  /** a resposta aprovada (memória) que este envio leva; null na mensagem avulsa */
+  replyId: number | null
   text: string
   status: SendStatus
   /** epoch ms: quando foi confirmado */
@@ -84,8 +91,10 @@ export interface SendPreview {
   expiresAt: number
   jid: string
   text: string
+  /** v0.6.0: resposta a uma sugestão ou mensagem avulsa (a confirmação de uma não vale para a outra) */
+  kind: SendKind
   recipient: { name: string; phone: string | null; isGroup: boolean }
-  /** grupo: a mensagem que vai ser citada (quem mandou e o começo do texto) */
+  /** grupo: a mensagem que vai ser citada (quem mandou e o começo do texto); a avulsa nunca cita */
   quote: { senderName: string; text: string } | null
   options: SendOptions
   /** v0.4.1: confirmação com "Forçar envio" (pode sair fora do horário de envio) */
@@ -101,12 +110,12 @@ export type SendRefusal = 'outside_hours' | 'disabled' | 'empty' | 'too_long' | 
 
 export const SEND_REFUSAL_TEXT: Record<SendRefusal, string> = {
   disabled: 'O envio direto está desligado nas Configurações.',
-  empty: 'A resposta está vazia.',
-  too_long: 'A resposta é longa demais para enviar de uma vez.',
+  empty: 'A mensagem está vazia.',
+  too_long: 'A mensagem é longa demais para enviar de uma vez.',
   no_recent_contact: 'O SagaZap só envia para quem mandou mensagem nos últimos 30 dias (responder, nunca iniciar conversa).',
   unknown_chat: 'Conversa não encontrada.',
   offline: 'O WhatsApp não está conectado. Envie quando ele voltar (a faixa de cima mostra "Conectado").',
-  in_flight: 'O envio anterior desta resposta ainda está em andamento. Espere um pouco e clique em Conferir.',
+  in_flight: 'O envio anterior desta mensagem ainda está em andamento. Espere um pouco e clique em Conferir.',
   outside_hours: 'Fora do horário de envio. Marque "Forçar envio" para enviar agora mesmo assim.'
 }
 
@@ -126,6 +135,8 @@ export interface PrepareSendInput {
   text: string
   /** v0.4.1: "Forçar envio" marcado: a confirmação vale fora do horário de envio (fica presa ao token) */
   forced?: boolean
+  /** v0.6.0: `avulsa` = mensagem escrita fora das sugestões (sem citação); padrão `reply` */
+  kind?: SendKind
 }
 
 export interface SendReplyInput {
@@ -139,6 +150,22 @@ export interface SendReplyInput {
   originalSuggestion?: string | null
   analysisLastMsgId?: string | null
   chosenIndex?: number
+}
+
+/** v0.6.0: limite do id do rascunho da mensagem avulsa (gerado na interface; letras, números e hífen) */
+export const DRAFT_ID_RE = /^[A-Za-z0-9-]{8,64}$/
+
+/** "Enviar" de uma mensagem avulsa (v0.6.0). */
+export interface SendAvulsaInput {
+  /** o token do `prepareSend({ kind: 'avulsa' })` para exatamente este jid + texto */
+  token: string
+  jid: string
+  text: string
+  /**
+   * id do rascunho, gerado pela interface quando a caixa abre: o mesmo rascunho com o mesmo texto nunca vira dois
+   * envios (a chave de idempotência é conversa + rascunho + impressão do texto)
+   */
+  draftId: string
 }
 
 export type SendReplyResult =

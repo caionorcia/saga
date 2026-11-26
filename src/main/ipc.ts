@@ -68,8 +68,10 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     regenerate: (jid) => service.regenerate(String(jid)),
     saveReply: (input) => service.saveReply(input),
     copyToClipboard: async (text) => clipboard.writeText(String(text)),
-    prepareSend: (input) => service.prepareSend({ jid: String(input.jid), text: String(input.text), forced: input.forced === true }),
+    prepareSend: (input) =>
+      service.prepareSend({ jid: String(input.jid), text: String(input.text), forced: input.forced === true, kind: input.kind === 'avulsa' ? 'avulsa' : 'reply' }),
     sendReply: (input) => service.sendReply(input),
+    sendAvulsa: (input) => service.sendAvulsa({ token: String(input.token), jid: String(input.jid), text: String(input.text), draftId: String(input.draftId) }),
     cancelSend: (id) => service.cancelSend(Number(id)),
     listSends: (jid) => service.listSends(String(jid)),
     checkSend: (id) => service.checkSend(Number(id)),

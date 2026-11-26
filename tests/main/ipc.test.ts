@@ -218,7 +218,45 @@ describe('IPC do envio direto', () => {
       await call('sendReply', APP, input)
       expect(service.sendReply).toHaveBeenCalledWith(input)
       await call('prepareSend', APP, { jid: input.jid, text: 'Oi!' })
-      expect(service.prepareSend).toHaveBeenCalledWith({ jid: input.jid, text: 'Oi!', forced: false })
+      expect(service.prepareSend).toHaveBeenCalledWith({ jid: input.jid, text: 'Oi!', forced: false, kind: 'reply' })
+    } finally {
+      off()
+    }
+  })
+
+  it('v0.6.0 mensagem avulsa: prepareSend com kind; sendAvulsa só com token, conversa, texto e rascunho válidos', async () => {
+    const service = {
+      sendAvulsa: vi.fn(async () => ({ ok: false, code: 'not_confirmed', message: 'x' })),
+      prepareSend: vi.fn(async () => ({ ok: false, code: 'disabled', message: 'x' })),
+      onState: vi.fn(() => () => {}),
+      onContactsChanged: vi.fn(() => () => {}),
+      on: vi.fn(),
+      off: vi.fn()
+    }
+    const off = registerIpc(service as never, { getWindow: () => null, isTrustedSender: (u) => u === APP })
+    try {
+      const input = { token: '0f8e4f9a-3c1b-4d2e-9a7b-1c2d3e4f5a6b', jid: '5547999998888@s.whatsapp.net', text: 'Oi!', draftId: '6a0c1e2f-3b4d-4e5f-8a9b-0c1d2e3f4a5b' }
+      await expect(call('sendAvulsa', 'https://evil.example/', input)).rejects.toThrow(/origem não confiável/)
+      for (const bad of [
+        { ...input, token: 'x' },
+        { ...input, draftId: 'curto' },
+        { ...input, draftId: 'com espaço e acento ç' },
+        { ...input, draftId: undefined },
+        { ...input, text: '   ' },
+        { ...input, text: 'x'.repeat(4097) },
+        // a avulsa não leva "forçar" (só o token decide), nem citação, nem resposta aprovada
+        { ...input, forced: true },
+        { ...input, quotedId: 'Q1' },
+        { ...input, replyId: 3 }
+      ]) {
+        await expect(call('sendAvulsa', APP, bad)).rejects.toThrow(/argumentos inválidos/)
+      }
+      expect(service.sendAvulsa).not.toHaveBeenCalled()
+      await call('sendAvulsa', APP, input)
+      expect(service.sendAvulsa).toHaveBeenCalledWith(input)
+      await expect(call('prepareSend', APP, { jid: input.jid, text: 'Oi!', kind: 'outro' })).rejects.toThrow(/argumentos inválidos/)
+      await call('prepareSend', APP, { jid: input.jid, text: 'Oi!', kind: 'avulsa', forced: true })
+      expect(service.prepareSend).toHaveBeenCalledWith({ jid: input.jid, text: 'Oi!', forced: true, kind: 'avulsa' })
     } finally {
       off()
     }

@@ -18,7 +18,7 @@ import type {
   BackupRestoreResult,
   BackupStatus
 } from './backup'
-import type { PrepareSendInput, PrepareSendResult, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView } from './send'
+import type { PrepareSendInput, PrepareSendResult, SendAvulsaInput, SendKind, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView } from './send'
 import type { SendHoursInfo, SendSchedule } from './sendHours'
 import type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult } from './copiloto'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
@@ -28,7 +28,7 @@ export type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateRea
 export type { KbChunkView, KbFilePatch, KbImportResult, KbPackageView, KbRole, KbSource }
 export type { SearchFilters, SearchResult, SearchSummaryResult }
 export type { AutoBackupPatch, BackupExportOptions, BackupExportResult, BackupOpenResult, BackupRestoreMode, BackupRestoreResult, BackupStatus }
-export type { PrepareSendInput, PrepareSendResult, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView }
+export type { PrepareSendInput, PrepareSendResult, SendAvulsaInput, SendKind, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView }
 export type { SendHoursInfo, SendSchedule }
 export type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult }
 export { ALERT_KINDS }
@@ -241,6 +241,11 @@ export interface SagaApi {
   prepareSend(input: PrepareSendInput): Promise<PrepareSendResult>
   /** "Enviar" no diálogo: exige o token do `prepareSend` (mesmo jid e texto); escolhe a sugestão e põe na fila */
   sendReply(input: SendReplyInput): Promise<SendReplyResult>
+  /**
+   * v0.6.0 "Enviar mensagem avulsa": exige o token do `prepareSend({ kind: 'avulsa' })` (mesmo jid e texto); mesma fila e
+   * mesmas regras das respostas, sem citação e sem gravar na memória. O mesmo rascunho com o mesmo texto não envia duas vezes
+   */
+  sendAvulsa(input: SendAvulsaInput): Promise<SendReplyResult>
   /** "Cancelar envio" (só enquanto está na fila); `true` se cancelou */
   cancelSend(id: number): Promise<boolean>
   /** os envios recentes da conversa, mais novos primeiro */
@@ -348,6 +353,7 @@ export const INVOKE_METHODS = [
   'copyToClipboard',
   'prepareSend',
   'sendReply',
+  'sendAvulsa',
   'cancelSend',
   'listSends',
   'checkSend',
