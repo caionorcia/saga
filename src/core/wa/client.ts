@@ -98,11 +98,6 @@ export interface WhatsAppClientDeps {
    * follow-up só sai se a opção e a integração continuam ligadas). Devolve o motivo para não enviar, ou null.
    */
   sendGuard?: (s: SendRow) => string | null
-  /**
-   * v1.2.1: conferência que precisa de rede, logo antes do "digitando…" (ex.: o envio automático de um follow-up
-   * pergunta de novo ao Copiloto se ele foi cancelado). Devolve o motivo para não enviar, ou null. Falhar = não enviar.
-   */
-  sendPreflight?: (s: SendRow) => Promise<string | null>
 }
 
 /** outro envio ainda em andamento: este espera 15 s, sem gastar tentativa (o envio expira se passar de 10 min na fila) */
@@ -1166,21 +1161,6 @@ export class WhatsAppClient extends EventEmitter {
       return true
     }
     if (outsideHours(['queued'])) return
-    if (this.deps.sendPreflight) {
-      let why: string | null
-      try {
-        why = await this.deps.sendPreflight(s)
-      } catch {
-        why = 'conferência do envio falhou'
-      }
-      if (why) return expire(['queued'], why)
-      // a conferência leva tempo: as regras de antes valem de novo
-      const cur = repo.sends.get(s.id)
-      if (!cur || cur.status !== 'queued' || cur.attempt !== s.attempt) return
-      if (payload?.gen !== this.gen) return expire(['queued'], CONN_LOST_REASON)
-      if (!this.sendOptions().enabled) return expire(['queued'], 'envio direto desligado')
-      if (guarded(['queued']) || outsideHours(['queued'])) return
-    }
     const sock = this.sock
     const gen = this.gen
     if (!sock || this.status !== 'open' || !sock.sendMessage) return expire(['queued'], CONN_LOST_REASON)

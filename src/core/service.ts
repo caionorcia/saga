@@ -348,6 +348,16 @@ export class SagaService extends EventEmitter {
       clock,
       rng,
       active: () => this.autoActive(),
+      enabledAt: () => this.copiloto.autoFollowupsAt(),
+      checkCancelled: (id) => this.copiloto.checkCancelled(id),
+      getBackoff: () => ({
+        failures: Number(this.repo.getSetting('copiloto.autoPollFailures') ?? 0) || 0,
+        until: Number(this.repo.getSetting('copiloto.autoPollUntil') ?? 0) || 0
+      }),
+      setBackoff: (b) => {
+        this.repo.setSetting('copiloto.autoPollFailures', String(b.failures))
+        this.repo.setSetting('copiloto.autoPollUntil', String(b.until))
+      },
       schedule: () => this.settings.sendOptions().schedule,
       ready: () => this.autoReady(),
       busy: () => this.repo.sends.listByStatus('queued', 'typing', 'sending').length > 0,
@@ -477,8 +487,7 @@ export class SagaService extends EventEmitter {
       ...(opts.fetchWaVersion ? { fetchWaVersion: opts.fetchWaVersion } : {}),
       ...(opts.diag ? { diag: opts.diag } : {}),
       sendOptions: () => this.settings.sendOptions(),
-      sendGuard: (s) => this.autoSendGuard(s),
-      sendPreflight: (s) => this.autoPreflight(s)
+      sendGuard: (s) => this.autoSendGuard(s)
     })
     this.wa.on('send', (jid: string) => this.markSends(jid))
     this.wa.on('qr', (dataUrl: string) => {
@@ -1379,7 +1388,7 @@ export class SagaService extends EventEmitter {
 
   /** A opção ligada, a integração ligada e o envio direto ligado. */
   private autoActive(): boolean {
-    return this.copiloto.enabled() && this.copiloto.autoFollowups() && this.settings.sendOptions().enabled
+    return this.copiloto.healthy() && this.copiloto.autoFollowups() && this.settings.sendOptions().enabled
   }
 
   /** WhatsApp conectado e estável (de pé há 1 min), sem "Pausar tudo" nem parada guardada. */
@@ -1390,10 +1399,17 @@ export class SagaService extends EventEmitter {
 
   private autoTick(): void {
     if (this.stopping) return
+    const fail = (e: unknown) => {
+      try {
+        this.repo.logEvent('copiloto_error', `envio automático: ${e instanceof Error ? e.name : 'Error'}`)
+      } catch {
+        // banco fechado
+      }
+    }
     try {
-      this.autoFollowups.tick()
+      void this.autoFollowups.tick().catch(fail)
     } catch (e) {
-      this.repo.logEvent('copiloto_error', `envio automático: ${e instanceof Error ? e.name : 'Error'}`)
+      fail(e)
     }
   }
 
@@ -1422,26 +1438,6 @@ export class SagaService extends EventEmitter {
     const f = this.repo.followups.bySendId(s.id)
     if (!f || f.status !== 'sending' || !f.autoSend || f.autoOff) return 'o follow-up não está mais para envio automático'
     return null
-  }
-
-  /**
-   * v1.2.1: logo antes do "digitando…" de um envio automático, pergunta de novo ao Copiloto (na fila de uma requisição
-   * por vez). Cancelado lá → não sai (o follow-up já foi tirado daqui). Sem resposta válida → não sai agora: adia o item
-   * (sem gastar tentativa) e tenta de novo depois, com as mesmas regras.
-   */
-  private async autoPreflight(s: SendRow): Promise<string | null> {
-    if (!s.auto) return null
-    const f = this.repo.followups.bySendId(s.id)
-    if (!f) return 'o follow-up não está mais para envio automático'
-    const r = await this.copiloto.checkCancelled(f.id)
-    if (r === 'ok') return null
-    if (r === 'cancelled') {
-      this.sendDiag('send_refused', s, 'cancelado no Copiloto')
-      return 'cancelado no Copiloto'
-    }
-    this.repo.followups.postponeAuto(f.id, this.clock.now() + FOLLOWUP_AUTO.postponeMs)
-    this.sendDiag('send_refused', s, 'Copiloto sem resposta: envio automático adiado')
-    return 'o Copiloto não respondeu; envio adiado'
   }
 
   /** O que está na fila de envio automático não sai (vira "não enviada"; o follow-up volta ao cartão ou a esperar). */

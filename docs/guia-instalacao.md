@@ -332,7 +332,7 @@ Em **Configurações › Copiloto da Saga** há a opção **Enviar follow-ups do
 - Só saem com o WhatsApp conectado. Sem conexão, esperam.
 - Na conversa, no lugar do aviso com "Abrir para enviar", aparece uma linha: **📨 Follow-up do Copiloto: envio automático às 09:14** (depois "enviando…" e "enviado ✓"). **Não enviar** cancela: a equipe vê que você recusou.
 - Se o SagaZap não souber se uma mensagem saiu (a conexão caiu no meio), ele **não envia de novo sozinho**: o aviso volta a ser o de sempre, com **Conferir**.
-- Desligar a opção vale na hora: o que ainda não saiu fica esperando você, como antes. As mensagens que o Copiloto não marcar como automáticas continuam pedindo a sua confirmação.
+- Desligar a opção vale na hora: o que ainda não saiu fica esperando você, como antes. As mensagens que o Copiloto não marcar como automáticas continuam pedindo a sua confirmação. Ao ligar, só as mensagens que chegarem depois saem sozinhas; as que já estavam na conversa continuam esperando você. Se a equipe cancelar uma mensagem no Copiloto, ela some daqui e não sai.
 
 ## 5. O que significa a faixa de cima
 

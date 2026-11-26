@@ -264,6 +264,8 @@ Aprovado pelo mentor (único usuário do SagaZap):
 
 Implementação no SagaZap (v0.8.0): `cancelled_ids` ausente ou fora do formato → `[]`. A cada consulta, os cancelados
 saem (esperando o mentor, agendados, ou com o envio ainda só na fila, que é cancelado), sem `followup_update`; um que já
-saiu, está saindo ou ficou desconhecido fica como está. Logo antes do "digitando…" de cada envio automático, o
-`executeSend` espera uma consulta nova (na fila de uma requisição por vez): id cancelado → não sai; sem resposta válida
-(rede, 5xx, 401) → não sai e o item é adiado 5 min, sem gastar tentativa.
+saiu, está saindo ou ficou desconhecido fica como está. Antes de pôr cada envio automático na fila (sem gastar vaga do
+limitador do WhatsApp nem ocupar a fila dele), uma consulta nova na fila de uma requisição por vez: id cancelado → não
+sai. Só põe na fila com o limitador já livre, então o "digitando…" vem segundos depois da consulta (não há outra
+consulta dentro do `executeSend`). Sem resposta válida (rede, 5xx) → nada sai e todos os automáticos esperam 5 → 10 →
+20 → 30 min (volta ao começo na primeira resposta boa). Código recusado (401) → o automático para.

@@ -210,16 +210,19 @@ export class FollowupRepo {
 
   // --- v0.8.0: envio automático (contrato v1.2) ---
 
-  /** Os que esperam e estão marcados para envio automático (ainda valendo), mais antigos primeiro. */
-  listAutoWaiting(): Array<FollowupRow & { jid: string }> {
+  /**
+   * Os que esperam e estão marcados para envio automático (ainda valendo), recebidos a partir de `since` (quando a opção
+   * foi ligada), mais antigos primeiro.
+   */
+  listAutoWaiting(since: number): Array<FollowupRow & { jid: string }> {
     return (
       this.db
         .prepare(
           `SELECT * FROM copiloto_followups
-            WHERE local_status = 'waiting' AND jid IS NOT NULL AND auto_send = 1 AND auto_off = 0
+            WHERE local_status = 'waiting' AND jid IS NOT NULL AND auto_send = 1 AND auto_off = 0 AND received_at >= ?
             ORDER BY created_at, id`
         )
-        .all() as Row[]
+        .all(Number.isFinite(since) ? since : Number.MAX_SAFE_INTEGER) as Row[]
     ).map((r) => toRow(r) as FollowupRow & { jid: string })
   }
 
@@ -232,14 +235,6 @@ export class FollowupRepo {
   /** Mais uma tentativa automática posta na fila. */
   addAutoAttempt(id: string): void {
     this.db.prepare('UPDATE copiloto_followups SET auto_attempts = auto_attempts + 1 WHERE id = ?').run(id)
-  }
-
-  /**
-   * v1.2.1: o Copiloto não respondeu à conferência antes do envio automático: adia para `at`, sem gastar a tentativa
-   * (nunca envia no escuro, e uma rede ruim não tira o item do automático).
-   */
-  postponeAuto(id: string, at: number): void {
-    this.db.prepare('UPDATE copiloto_followups SET auto_at = ?, auto_attempts = MAX(0, auto_attempts - 1) WHERE id = ?').run(at, id)
   }
 
   /** O envio automático deste item acabou: daqui em diante é o cartão da v1.1 (o mentor confirma). `true` se mudou. */

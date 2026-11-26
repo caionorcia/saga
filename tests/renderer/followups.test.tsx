@@ -135,6 +135,7 @@ describe('Follow-up com envio automático (v0.8.0)', () => {
     expect(autoStatusText({ state: 'sending', at: null, wait: null, canCancel: false })).toBe('enviando…')
     expect(autoStatusText({ state: 'sent', at, wait: null, canCancel: false })).toBe('enviado ✓ às 14:05')
     expect(autoStatusText({ state: 'scheduled', at: null, wait: 'connection', canCancel: true })).toMatch(/WhatsApp estiver conectado/)
+    expect(autoStatusText({ state: 'scheduled', at: null, wait: 'copiloto', canCancel: true })).toMatch(/Copiloto responder/)
     expect(autoStatusText({ state: 'scheduled', at, wait: null, canCancel: true }, new Date(2026, 10, 26, 9, 0).getTime())).toBe('envio automático às 14:05')
   })
 })

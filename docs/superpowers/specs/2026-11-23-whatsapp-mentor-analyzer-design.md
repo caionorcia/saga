@@ -587,9 +587,12 @@ confirmação dele. Contrato: adendo v1.2 de `2026-11-26-copiloto-integration.md
   "enviado ✓", esperando conexão/limite do dia) e "Não enviar" (= `declined` `recusado_pelo_mentor`; cancela o envio
   se ainda estiver na fila).
 - **Cancelados (v1.2.1):** `cancelled_ids` do `followups_pending` tira os itens daqui a cada consulta (sem relatório;
-  nunca um que já saiu ou está saindo). Logo antes do "digitando…" de um automático, o `executeSend` espera uma consulta
-  nova (`sendPreflight`, na fila de uma requisição por vez do Copiloto): cancelado → não sai; falha → não sai, adia 5 min
-  sem gastar tentativa.
+  nunca um que já saiu ou está saindo). Antes de pôr cada automático na fila, uma consulta nova (na fila de uma
+  requisição por vez do Copiloto; nenhuma vaga do limitador gasta, a fila do WhatsApp não fica parada esperando a
+  rede): cancelado → não sai. Só põe na fila com o limitador livre, então o "digitando…" vem segundos depois. Falha →
+  todos os automáticos esperam 5 → 10 → 20 → 30 min (gravado; zera na primeira resposta boa).
+- **Só com a integração saudável:** código recusado (401) para o automático. **Só o que chegou depois de ligar a
+  opção** (`copiloto.autoFollowupsAt`): o que já estava como cartão continua cartão.
 - **Registro:** `copiloto_auto` e as linhas `send_*` de sempre ("automático" no `send_queued`); nunca texto nem jid.
 
 ### Versão 0.3.1 (a pedido do mentor)

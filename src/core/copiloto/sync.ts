@@ -62,7 +62,12 @@ export const COPILOTO_KEYS = {
   lastErrorAt: 'copiloto.lastErrorAt',
   authFailed: 'copiloto.authFailed',
   /** v0.8.0: "Enviar follow-ups do Copiloto automaticamente" ('1' = ligado; padrão desligado) */
-  autoFollowups: 'copiloto.autoFollowups'
+  autoFollowups: 'copiloto.autoFollowups',
+  /** quando a opção foi ligada (epoch ms): só os follow-ups recebidos depois disso saem sozinhos */
+  autoFollowupsAt: 'copiloto.autoFollowupsAt',
+  /** falhas seguidas da conferência antes do envio automático e até quando todos esperam (espera crescente) */
+  autoPollFailures: 'copiloto.autoPollFailures',
+  autoPollUntil: 'copiloto.autoPollUntil'
 } as const
 
 const K = COPILOTO_KEYS
@@ -118,6 +123,17 @@ export class CopilotoSync {
   /** v0.8.0: a opção "Enviar follow-ups do Copiloto automaticamente" (desligada por padrão). */
   autoFollowups(): boolean {
     return this.repo.getSetting(K.autoFollowups) === '1'
+  }
+
+  /** Quando a opção foi ligada (epoch ms); só os recebidos a partir daí saem sozinhos. */
+  autoFollowupsAt(): number {
+    const v = Number(this.repo.getSetting(K.autoFollowupsAt) ?? NaN)
+    return Number.isFinite(v) ? v : Infinity
+  }
+
+  /** A integração está ligada, configurada e o Copiloto não recusou o código (401). */
+  healthy(): boolean {
+    return this.enabled() && this.repo.getSetting(K.authFailed) !== '1' && !!this.url() && this.code() !== null
   }
 
   private url(): string | null {
@@ -182,8 +198,11 @@ export class CopilotoSync {
   /** Liga/desliga e o endereço. Ligar exige endereço e código; desligar apaga a fila local. */
   save(patch: CopilotoPatch): CopilotoSaveResult {
     if (patch.autoFollowups !== undefined && patch.autoFollowups !== this.autoFollowups()) {
-      if (patch.autoFollowups) this.repo.setSetting(K.autoFollowups, '1')
-      else {
+      if (patch.autoFollowups) {
+        this.repo.setSetting(K.autoFollowups, '1')
+        // os que já estavam aqui (mostrados como cartão) continuam esperando o mentor
+        this.repo.setSetting(K.autoFollowupsAt, String(this.deps.clock.now()))
+      } else {
         this.repo.setSetting(K.autoFollowups, '0')
         // ligada de novo, escolhe outros horários (com as mesmas regras)
         this.repo.followups.clearAutoSchedule()

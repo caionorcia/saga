@@ -81,6 +81,7 @@ export function autoStatusText(auto: NonNullable<FollowupView['auto']>, now = Da
   if (auto.state === 'sending') return 'enviando…'
   if (auto.wait === 'no_hours') return 'envio automático quando houver um dia liberado no horário de envio'
   if (auto.wait === 'connection') return 'envio automático assim que o WhatsApp estiver conectado'
+  if (auto.wait === 'copiloto') return 'envio automático quando o Copiloto responder de novo'
   if (auto.wait === 'daily_cap') return 'envio automático amanhã (limite de 30 por dia)'
   if (auto.at !== null && auto.at > now) return `envio automático ${autoWhen(auto.at, now)}`
   return 'envio automático em instantes'

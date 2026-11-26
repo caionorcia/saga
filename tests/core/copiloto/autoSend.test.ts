@@ -307,9 +307,12 @@ describe('follow-up com envio automático no serviço (v0.8.0, contrato v1.2)', 
     expect((await view(FU))?.auto).toBeNull()
     expect((await view(FU_OLD))?.auto).toBeNull()
     await service.copilotoSave({ autoFollowups: true })
-    await drain(60_000)
+    await drain(3 * MIN)
     // o marcado false continua esperando o mentor
     expect((await view(FU))).toMatchObject({ status: 'waiting', auto: null })
+    // o marcado true, mas que já estava aqui como cartão antes de ligar a opção, também continua cartão
+    expect((await view(FU_OLD))).toMatchObject({ status: 'waiting', auto: null })
+    expect(writes()).toBe(0)
     expect(repo.sends.listForJid(JID)).toHaveLength(0)
   })
 
@@ -350,15 +353,13 @@ describe('follow-up com envio automático no serviço (v0.8.0, contrato v1.2)', 
 
   it('app fechado na hora marcada e aberto no minuto da abertura do dia seguinte: espera abertura + 7..25', async () => {
     await startOpen()
-    await withFollowups([item(FU, '5547999998888', true, 'Oi! Como foi a semana?')], { auto: false })
-    // a hora marcada (ontem) já passou com o app fechado
-    repo.followups.setAutoAt(FU, local(24, 9, 16))
+    await withFollowups([item(FU, '5547999998888', true, 'Oi! Como foi a semana?')])
+    // o app fecha antes da conexão ficar estável; a hora marcada (ontem 09:16) passa com ele fechado
     await service.stop()
+    repo.followups.setAutoAt(FU, local(24, 9, 16))
     clock.advance(local(25, 8, 59, 50) - clock.now())
     service = make()
     await startOpen()
-    await service.copilotoSave({ autoFollowups: true })
-    repo.followups.setAutoAt(FU, local(24, 9, 16))
     await drain(3 * MIN)
     expect(sentCount()).toBe(0)
     expect(repo.followups.get(FU)!.autoAt).toBe(local(25, 9, 7))
@@ -481,7 +482,7 @@ describe('follow-up com envio automático no serviço (v0.8.0, contrato v1.2)', 
     await startOpen()
     await withFollowups([item(FU, '5547999998888', true, 'Oi! Como foi a semana?')])
     clock.advance(61_000)
-    ;(service as any).autoTick()
+    await (service as any).autoFollowups.tick()
     expect(repo.sends.listForJid(JID)[0]?.status).toBe('queued')
     await service.copilotoSave({ autoFollowups: false })
     expect(repo.sends.listForJid(JID)[0]).toMatchObject({ status: 'expired', error: 'envio automático desligado' })
@@ -522,7 +523,9 @@ describe('follow-up com envio automático no serviço (v0.8.0, contrato v1.2)', 
       expect(pendingCalls).toBeGreaterThan(before)
       expect(sentCount()).toBe(0)
       expect(writes(['sendPresenceUpdate'])).toBe(0)
-      expect(repo.sends.listForJid(JID)[0].status).toBe('canceled')
+      // a consulta é antes de pôr na fila: nenhum envio criado, nenhuma vaga do limitador gasta
+      expect(repo.sends.listForJid(JID)).toHaveLength(0)
+      expect(service.limiters.wa_send.nextAllowedAt(clock.now())).toBeLessThanOrEqual(clock.now())
       expect(repo.followups.get(FU)!.status).toBe('cancelled')
       await report()
       expect(updates).toEqual([])
@@ -531,21 +534,50 @@ describe('follow-up com envio automático no serviço (v0.8.0, contrato v1.2)', 
     })
 
     for (const fail of ['network', 503] as const) {
-      it(`consulta antes do envio falhou (${fail}): não envia no escuro; adia sem gastar tentativa e sai depois`, async () => {
+      it(`consulta antes de pôr na fila falhou (${fail}): nada na fila nem no limitador; todos esperam 5 → 10 → 20 → 30 min`, async () => {
         await startOpen()
-        await withFollowups([item(FU, '5547999998888', true, 'Oi! Como foi a semana?')])
+        await withFollowups([item(FU, '5547999998888', true, 'Oi! Como foi a semana?'), item(FU_OLD, '5511988887777', true, 'Faz tempo! Tudo bem?')])
         pendingFail = fail
         await drain(90_000)
         expect(sentCount()).toBe(0)
         expect(writes(['sendPresenceUpdate'])).toBe(0)
-        expect(repo.sends.listForJid(JID)[0]).toMatchObject({ status: 'expired', error: 'o Copiloto não respondeu; envio adiado' })
-        const f = repo.followups.get(FU)!
-        expect(f).toMatchObject({ status: 'waiting', autoAttempts: 0, autoOff: false })
-        expect(f.autoAt).toBeGreaterThan(clock.now())
+        expect(repo.sends.listForJid(JID)).toHaveLength(0)
+        expect(repo.sends.listForJid(OLD)).toHaveLength(0)
+        expect(service.limiters.wa_send.nextAllowedAt(clock.now())).toBeLessThanOrEqual(clock.now())
+        expect(repo.followups.get(FU)).toMatchObject({ status: 'waiting', autoAttempts: 0, autoOff: false })
+        expect((await view(FU))?.auto).toMatchObject({ wait: 'copiloto' })
+        expect((await view(FU_OLD))?.auto).toMatchObject({ wait: 'copiloto' })
+        // cada falha: uma consulta só, e a espera de todos cresce (5 → 10 → 20 → 30 → 30 min)
+        const backoffs = () => diag.filter(([k, d]) => k === 'copiloto_auto' && d.startsWith('Copiloto sem resposta')).map(([, d]) => Number(/(\d+) min/.exec(d)![1]))
+        expect(backoffs()).toEqual([5])
+        for (let i = 0; i < 4; i++) {
+          const until = Number(repo.getSetting('copiloto.autoPollUntil'))
+          await drain(until - clock.now() - 20_000)
+          expect(backoffs()).toHaveLength(i + 1)
+          await drain(40_000)
+        }
+        expect(backoffs()).toEqual([5, 10, 20, 30, 30])
+        expect(repo.getSetting('copiloto.autoPollFailures')).toBe('5')
+        expect(sentCount()).toBe(0)
+        // o Copiloto voltou: cada um sai uma vez (com o intervalo normal), e a espera volta ao começo
         pendingFail = null
-        await drain(7 * MIN)
-        expect(sentCount()).toBe(1)
+        await drain(32 * MIN)
+        expect(sentCount()).toBe(2)
+        expect(repo.sends.listForJid(JID)).toHaveLength(1)
+        expect(repo.sends.listForJid(OLD)).toHaveLength(1)
+        expect(repo.getSetting('copiloto.autoPollFailures')).toBe('0')
       })
     }
+
+    it('código recusado (401): o automático para (nada de consultas em laço nem envios)', async () => {
+      await startOpen()
+      await withFollowups([item(FU, '5547999998888', true, 'Oi! Como foi a semana?')])
+      repo.setSetting('copiloto.authFailed', '1')
+      const calls = pendingCalls
+      await drain(30 * MIN)
+      expect(pendingCalls).toBe(calls)
+      expect(sentCount()).toBe(0)
+      expect((await view(FU))?.auto).toBeNull()
+    })
   })
 })

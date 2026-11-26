@@ -109,13 +109,16 @@ export const FOLLOWUP_AUTO = {
   /** tentativas automáticas de um mesmo item que não chegaram a sair (conexão caiu antes etc.); depois, o cartão */
   maxAttempts: 3,
   /** um limitador do WhatsApp (hora/dia) que só libera depois disso: espera, sem pôr na fila (expiraria lá) */
-  limiterSlackMs: 2 * 60_000,
-  /** v1.2.1: a conferência com o Copiloto antes do envio falhou (rede, 5xx): tenta de novo depois disso */
-  postponeMs: 5 * 60_000
+  /**
+   * v1.2.1: a conferência com o Copiloto antes de pôr um automático na fila falhou (rede, 5xx): todos os automáticos
+   * esperam 5 → 10 → 20 → 30 min (no máximo); volta ao começo na primeira resposta boa
+   */
+  pollBackoffMinMs: 5 * 60_000,
+  pollBackoffMaxMs: 30 * 60_000
 } as const
 
 /** Por que um envio automático ainda não saiu (a linha de estado na conversa). */
-export type FollowupAutoWait = 'connection' | 'daily_cap' | 'no_hours' | 'busy' | null
+export type FollowupAutoWait = 'connection' | 'daily_cap' | 'no_hours' | 'busy' | 'copiloto' | null
 
 /** v0.8.0: o envio automático de um follow-up, como a interface vê; null no follow-up = cartão da v1.1. */
 export interface FollowupAuto {
