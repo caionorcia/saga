@@ -54,6 +54,8 @@ Regras:
 /** Instruções da base de conhecimento (valem mais que as regras do método, que vêm de arquivos importados). */
 const KB_SYSTEM = `Base de conhecimento do método do mentor:
 - Siga as regras do método (abaixo, se houver) ao escrever as sugestões.
+- Atenção: as regras do método foram escritas para os textos que o aluno produz (proposta, posts, anúncios, scripts do artista). A sua sugestão é sempre uma mensagem do mentor para o aluno: use as regras para orientar o aluno e para corrigir ou propor textos que ele vai usar. Só escreva na primeira pessoa do artista dentro de um texto proposto para o aluno usar (deixe claro que é um modelo).
+- Não cite nomes de pessoas que aparecem na base (autores, mentores, outros alunos) a menos que o próprio aluno tenha citado na conversa.
 - Use os trechos da base que vierem no pedido para responder com precisão ao que foi perguntado, com as palavras do mentor.
 - Trechos marcados "Conhecimento" podem ser usados e mencionados de forma natural (o nome do conceito ou da aula, por exemplo).
 - Trechos marcados "Orientação interna" servem só para você entender o método e o tom: nunca copie frases deles e nunca cite nomes de pessoas, preços, cachês, resultados, depoimentos ou falas que aparecem neles.
