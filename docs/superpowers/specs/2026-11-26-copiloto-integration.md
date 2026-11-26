@@ -257,3 +257,9 @@ Aprovado pelo mentor (único usuário do SagaZap):
 - **Limite conhecido:** o SagaZap só fica sabendo de um cancelamento feito no Copiloto pelo `followup_update`
   (`cancelled`), ou seja, depois de enviar. Um item automático já recebido e cancelado lá antes do horário ainda pode
   sair. Para fechar isso, o Copiloto precisaria informar os cancelados (ex.: na resposta do `followups_pending`).
+
+### v1.2.1 — cancelados informados
+- A resposta de `followups_pending` ganha `cancelled_ids: string[]`: ids cancelados no Copiloto que já tinham sido
+  entregues ao SagaZap nos últimos 7 dias (no máximo 200). Ausente → `[]`.
+- O SagaZap remove esses itens (cartão ou envio automático agendado) a cada consulta e, **logo antes de cada envio
+  automático**, faz uma consulta nova e não envia se o id vier em `cancelled_ids`.
