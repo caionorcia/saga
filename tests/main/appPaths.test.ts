@@ -20,7 +20,7 @@ describe('pasta de dados depois do nome SagaZap', () => {
 
   it('fica dentro de appData', () => {
     expect(userDataDir('C:\\Users\\Ana\\AppData\\Roaming').replace(/\\/g, '/')).toBe('C:/Users/Ana/AppData/Roaming/saga')
-    expect(userDataDir('/home/ana/.config')).toBe('/home/ana/.config/saga')
+    expect(userDataDir('/home/ana/.config').replace(/\\/g, '/')).toBe('/home/ana/.config/saga')
   })
 
   it('o main fixa a pasta antes de qualquer leitura de userData e não renomeia o app', () => {
