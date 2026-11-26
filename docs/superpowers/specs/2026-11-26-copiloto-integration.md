@@ -220,3 +220,23 @@ aviso, o `followup_update` volta `cancelled` e o SagaZap remove o aviso (se aind
   confirmado (o Copiloto guarda o envio).
 - Envio que não saiu (falha, fora do horário, cancelado pelo mentor) não vira `failed`: o aviso volta a esperar o
   mentor, que envia de novo ou recusa.
+
+---
+
+# Adendo v1.2 — Follow-up com envio automático (2026-11-26)
+
+Aprovado pelo mentor (único usuário do SagaZap):
+- Cada item de `followups_pending` ganha `auto_send: boolean`. O Copiloto põe `true` só quando o autor é
+  administrador (e a criação de follow-up passa a ser só para administrador). O clique "Enviar pelo SagaZap" no
+  Copiloto, com a janela de confirmação, é a confirmação do mentor.
+- No SagaZap, a opção **"Enviar follow-ups do Copiloto automaticamente"** (Configurações, desligada por padrão).
+  Ligada + `auto_send: true` → o SagaZap envia sem tela de confirmação, pelo mesmo caminho da mensagem avulsa e
+  com todas as travas (regra dos 30 dias, "digitando…", intervalo 30–90 s, limites por hora/dia, nunca duas vezes,
+  marcar como lida). Limite próprio: **30 envios automáticos por dia**; o excedente fica para o dia seguinte.
+- **Fora do horário permitido:** espera; sai no próximo horário permitido **com alguns minutos a mais, nunca no
+  minuto de abertura** (atraso aleatório de 7 a 25 min depois da abertura; vários itens seguem o intervalo normal
+  entre envios). Nunca usa "Forçar envio".
+- Opção desligada ou `auto_send: false` → comportamento da v1.1 (cartão e confirmação no SagaZap).
+- Sem mudança no `followup_update`.
+- No Copiloto, follow-ups **enviados** (e cancelados) saem da lista do quadro; ficam só os pendentes e os que
+  falharam ou foram recusados (com "dispensar"). A mensagem enviada continua visível na conversa.
