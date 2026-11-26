@@ -1,6 +1,6 @@
 # SagaZap (antes Saga) — Assistente de respostas para mentorados (WhatsApp)
 
-Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.5.0, Copiloto da Saga)
+Data: 2026-11-23 · Status: aprovado · Atualizado: 2026-11-26 (v0.6.0, mensagem avulsa)
 
 ## Intenção e o porquê
 
@@ -419,6 +419,39 @@ O mentor pediu: "configurar os dias e horários disponíveis pra mensagem, por e
   por isso, com a etapa) e `send_forced` (envio forçado posto na fila fora do horário); só id do envio/job e a impressão
   da conversa, nunca texto nem jid.
 
+### Mensagem avulsa (v0.6.0, a pedido do mentor)
+
+O mentor pediu "uma opção pra poder enviar uma mensagem normalmente, sem precisar ser uma resposta", com um botão
+"Enviar mensagem avulsa" abaixo do "Gerar sugestões mesmo assim".
+
+- **Interface:** botão discreto (não é o principal) **Enviar mensagem avulsa**, logo abaixo de "Gerar sugestões mesmo
+  assim" quando a conversa não precisa de resposta, e no fim da coluna de sugestões nos outros estados (com sugestões
+  ou com erro), para estar sempre ao alcance. Só aparece com o envio direto ligado. Abre uma caixa "Mensagem avulsa"
+  (editável como um cartão de sugestão; o rascunho sobrevive a trocar de tela) com **Descartar** e **Enviar**. Enviar
+  abre a mesma confirmação ("Enviar mensagem avulsa"), com "Forçar envio" fora do horário. Embaixo da caixa aparece o
+  mesmo estado do envio (fila, digitando, enviada, erros, conferir); enviada, **Nova mensagem avulsa** começa outra.
+- **Mesmo caminho e mesma segurança das respostas:** `prepareSend({ kind: 'avulsa' })` → token de uso único preso a
+  jid + texto + destino + "forçar" + **tipo** (o token de resposta não vale para a avulsa, nem o contrário) →
+  `sendAvulsa({ token, jid, text, draftId })` → mesma fila `send_message`, mesmo `executeSend` (único caminho de
+  escrita), ritmo de 30–90 s, tetos de 40/h e 200/dia, horário de envio, "digitando…", expiração por queda/reinício/10
+  min, conferência pelo id no estado desconhecido, nada sobreposto. Também vale "responder, nunca iniciar conversa":
+  só para quem mandou mensagem nos últimos 30 dias.
+- **Diferenças:** nunca cita (nem em grupo; o banco recusa citação numa avulsa). Não entra na memória: nada em
+  `approved_replies` (nem `sent_text`), não escolhe sugestão, não conta como avaliação; o eco da avulsa também não é
+  ligado a uma resposta salva parecida (`reconcileSent`/`reconcileSaved` pulam mensagens que saíram por uma avulsa).
+  Ela continua aparecendo na conversa como qualquer mensagem do mentor (como se ele tivesse digitado no celular).
+- **Marcar como lida (decisão):** igual às respostas, se a opção estiver ligada: as mensagens do contato depois da
+  última do mentor, só daquela conversa. Mandar mensagem numa conversa pelo celular também a deixa lida; quase sempre
+  não há nada pendente quando a conversa não precisa de resposta.
+- **Depois do envio:** como numa resposta, o eco chega pela ingestão normal, a conversa sai de "Para responder" e os
+  alertas anteriores se resolvem. No Copiloto da Saga vai como mensagem do mentor com `sent_via_sagazap = true`.
+- **Banco (schema v17):** `sends` ganha `kind` (`reply`/`avulsa`) e `reply_id` passa a ser opcional (a tabela é refeita,
+  com os mesmos dados, índices e o gatilho do Copiloto; uma restrição exige resposta aprovada em `reply` e nenhuma, nem
+  citação, em `avulsa`). Idempotência da avulsa: `idem_key = 'avulsa:' + conversa + id do rascunho + impressão do
+  texto`; o id do rascunho é gerado pela interface quando a caixa abre, então o mesmo rascunho com o mesmo texto nunca
+  vira dois envios (depois de falha/expiração, uma nova confirmação reaproveita a linha, como nas respostas).
+- **Registro:** as mesmas linhas `send_*`, com " avulsa" em `send_queued`/`send_sent`; nunca texto nem jid.
+
 ### Copiloto da Saga (v0.5.0, a pedido do mentor)
 
 O mentor pediu que o que acontece no WhatsApp profissional chegue ao Copiloto da Saga, mas só dos mentorados
@@ -773,7 +806,8 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 - `settings_kv`: `window.state` (janela) e `backup.*` (última cópia, cópia automática) — v0.3.1
 - `approved_replies` (como acima)
 - `messages.wa_key_json` (chave original da mensagem do contato) e `sends` (envios confirmados: resposta, conversa,
-  texto, estado, tentativa, horários, id da mensagem no WhatsApp) — v0.4.0
+  texto, estado, tentativa, horários, id da mensagem no WhatsApp) — v0.4.0; `kind` (resposta ou avulsa) e `reply_id`
+  opcional — v0.6.0
 - `jobs` (fila única: tipo, chave única, status, tentativas, próxima_execução)
 - `rate_state` e `events` (histórico de ações e de desconexões, para o painel)
 - Sessão do Baileys na pasta de dados do app (`%APPDATA%`), com cópia de segurança.

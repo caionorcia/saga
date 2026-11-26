@@ -258,6 +258,19 @@ Se uma resposta ainda estiver na fila quando o horário acabar, ela **não sai d
 
 E você pode ajudar: responda de verdade a cada pessoa (evite mandar o mesmo texto para muita gente), não tente "zerar" dezenas de conversas de uma vez e continue usando o WhatsApp normalmente pelo celular. Se aparecer **Conta restrita pelo WhatsApp**, pare de enviar pelo SagaZap por alguns dias.
 
+### Enviar mensagem avulsa (versão 0.6.0)
+
+Para mandar uma mensagem que não é resposta a uma sugestão (um lembrete, um aviso, um "e aí, como foi?"):
+
+1. Abra a conversa.
+2. Na coluna da direita, clique em **Enviar mensagem avulsa**. Ele fica logo abaixo de **Gerar sugestões mesmo assim** (quando a conversa não precisa de resposta) ou no fim das sugestões.
+3. Escreva a mensagem na caixa e clique em **Enviar**.
+4. Confira para quem vai e clique em **Enviar** de novo (ou Ctrl+Enter).
+
+Funciona igual às respostas: você confirma cada envio, o SagaZap espera a vez, mostra "digitando…", respeita o horário de envio (fora dele, marque **Forçar envio**) e os limites. Também só vai para quem mandou mensagem nos últimos 30 dias. A diferença: a mensagem avulsa **não cita** nenhuma mensagem (nem em grupo) e **não entra no aprendizado** das sugestões. Depois que ela sai, a conversa deixa de aparecer em "Para responder", como quando você responde pelo celular.
+
+O botão só aparece com **Configurações › Envio direto** ligado. **Descartar** fecha a caixa e apaga o rascunho; depois de enviada, **Nova mensagem avulsa** abre a caixa vazia para outra.
+
 ### Copiloto da Saga (versão 0.5.0)
 
 O SagaZap pode enviar ao **Copiloto da Saga** o que acontece nas conversas dos **mentorados cadastrados lá**: as mensagens (com os áudios já transcritos), os alertas, o "Para responder", os resumos e as respostas que você enviou. Entram também os grupos em que há um mentorado. Não vão as chaves de IA, as respostas aprovadas, a base de conhecimento, os arquivos de mídia nem nada de quem não é mentorado (num grupo, os números de quem não é mentorado ficam no computador).
