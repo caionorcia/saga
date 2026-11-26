@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { systemClock, type Clock } from '../clock'
 import type { NormalizedMessage } from '../types'
-import { ALERT_KINDS, AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../shared/triage'
+import { ALERT_KINDS, AI_ALERT_KINDS, GROUP_ANSWER_MAX_MEMBERS, alertSeverity, type AlertKind } from '../../shared/triage'
 import type { GroupAnswer, ReasonCode, ReplyDecision, ReplyDecisionSource, ReplyReasonCode, ReplyVerdict, Verdict } from '../../shared/feedback'
 
 /** Qualidade da fonte do nome guardado em `push_name` (maior vence; empate: o mais novo). */
@@ -297,15 +297,23 @@ const WAITING_SINCE_SQL = (cjid: string) => `(
    WHERE w.jid = ${cjid} AND w.from_me = 0
      AND w.ts > COALESCE((SELECT MAX(me.ts) FROM messages me WHERE me.jid = ${cjid} AND me.from_me = 1), -1))`
 
+export { GROUP_ANSWER_MAX_MEMBERS }
+
 /**
- * SQL: a mensagem mais recente do mentor, depois de `since`, num grupo de que o contato `cjid` participa (pelos
- * participantes do grupo ou porque já mandou mensagem lá), como "<ts> <jid do grupo>"; NULL se não houver.
+ * SQL: a mensagem mais recente do mentor, depois de `since`, que responde ao contato `cjid` num grupo, como
+ * "<ts> <jid do grupo>"; NULL se não houver. Conta:
+ * (a) qualquer mensagem num grupo de que o contato participa (pelos participantes do grupo ou porque já mandou mensagem
+ *     lá) com até GROUP_ANSWER_MAX_MEMBERS participantes conhecidos (tamanho desconhecido = grande);
+ * (b) em qualquer grupo, a mensagem que menciona (@) o contato ou cita uma mensagem dele.
  */
 const GROUP_ANSWER_SQL = (cjid: string, since: string) => `(
   SELECT gm.ts || ' ' || gm.jid FROM messages gm
    WHERE gm.from_me = 1 AND gm.ts > ${since} AND gm.jid LIKE '%@g.us'
-     AND gm.jid IN (SELECT g.group_jid FROM group_members g WHERE g.member_jid = ${cjid}
-                    UNION SELECT s.jid FROM messages s WHERE s.sender_jid = ${cjid})
+     AND (
+       (gm.jid IN (SELECT gs.group_jid FROM group_sizes gs WHERE gs.members <= ${GROUP_ANSWER_MAX_MEMBERS})
+        AND gm.jid IN (SELECT g.group_jid FROM group_members g WHERE g.member_jid = ${cjid}
+                       UNION SELECT s.jid FROM messages s WHERE s.sender_jid = ${cjid}))
+       OR EXISTS (SELECT 1 FROM message_targets t WHERE t.msg_id = gm.id AND t.target_jid = ${cjid}))
    ORDER BY gm.ts DESC LIMIT 1)`
 
 function toApproved(r: Row): ApprovedRow {
@@ -519,12 +527,20 @@ export class Repo {
    * Troca os participantes conhecidos de um grupo (da consulta `groupFetchAllParticipating`). Cada participante pode
    * vir em mais de uma forma (telefone e @lid): todas entram. `true` se algo mudou.
    */
-  setGroupMembers(groupJid: string, memberJids: Iterable<string>): boolean {
+  setGroupMembers(groupJid: string, memberJids: Iterable<string>, memberCount?: number): boolean {
     const next = new Set([...memberJids].filter((j) => j && j !== groupJid))
+    // quantas pessoas (cada uma pode ter duas formas de JID); sem contagem, as formas distintas
+    const count = memberCount ?? next.size
+    const size = this.db.prepare('SELECT members FROM group_sizes WHERE group_jid = ?').get(groupJid) as Row | undefined
+    let sizeChanged = false
+    if (size?.members !== count) {
+      this.db.prepare('INSERT INTO group_sizes(group_jid, members) VALUES (?, ?) ON CONFLICT(group_jid) DO UPDATE SET members = excluded.members').run(groupJid, count)
+      sizeChanged = true
+    }
     const cur = new Set(
       (this.db.prepare('SELECT member_jid FROM group_members WHERE group_jid = ?').all(groupJid) as Row[]).map((r) => r.member_jid as string)
     )
-    if (cur.size === next.size && [...next].every((j) => cur.has(j))) return false
+    if (cur.size === next.size && [...next].every((j) => cur.has(j))) return sizeChanged
     this.db.exec('BEGIN')
     try {
       this.db.prepare('DELETE FROM group_members WHERE group_jid = ?').run(groupJid)
@@ -844,7 +860,12 @@ export class Repo {
         m.senderName ?? null,
         m.mentionsMe ? 1 : 0
       )
-    return Number(res.changes) > 0
+    const inserted = Number(res.changes) > 0
+    if (inserted && m.fromMe && m.targets?.length) {
+      const ins = this.db.prepare('INSERT OR IGNORE INTO message_targets(msg_id, target_jid) VALUES (?, ?)')
+      for (const t of new Set(m.targets)) ins.run(m.id, t)
+    }
+    return inserted
   }
 
   /** Últimas `limit` mensagens (todas, sem limite), em ordem cronológica. */

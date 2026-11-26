@@ -17,4 +17,9 @@ export interface NormalizedMessage {
   senderName?: string | null
   /** grupo: a mensagem me menciona (@) ou cita uma mensagem minha */
   mentionsMe?: boolean
+  /**
+   * grupo, só nas minhas: quem a mensagem menciona (@) e o autor da mensagem citada (sem dispositivo), para saber se
+   * respondi a alguém num grupo grande ("Respondido no grupo")
+   */
+  targets?: string[]
 }

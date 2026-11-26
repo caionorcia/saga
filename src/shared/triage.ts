@@ -13,6 +13,13 @@ export const AI_ALERT_KINDS: ReadonlyArray<AlertKind> = ['urgente', 'desanimo', 
 export const alertSeverity = (k: AlertKind): number => ALERT_KINDS.indexOf(k)
 
 const HOUR = 3_600_000
+/**
+ * "Respondido no grupo": num grupo com até este número de participantes conhecidos (o grupo do mentorado), qualquer
+ * mensagem do mentor conta como resposta; em grupos maiores (ou de tamanho desconhecido), só se mencionar (@) o contato
+ * ou citar uma mensagem dele.
+ */
+export const GROUP_ANSWER_MAX_MEMBERS = 10
+
 /** espera a partir da qual o selo fica âmbar */
 export const WAIT_AMBER_MS = 24 * HOUR
 /** espera a partir da qual o selo fica vermelho e nasce o alerta "esperando" */

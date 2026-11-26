@@ -362,6 +362,17 @@ describe('WhatsAppClient', () => {
           expect(repo.listJobs('done').some((j) => j.type === 'fetch_profile')).toBe(true)
         })
 
+        it('minha menção a um @lid num grupo grande casa com a conversa individual pelo telefone', async () => {
+          last().signalRepository.lidMapping.getPNForLID.mockImplementation(async (l: string) => (l === '4242@lid' ? JID2 : null))
+          await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'p1', jid: JID2, ts: NOW - 80_000 })] })
+          await emit('messages.upsert', {
+            type: 'notify',
+            messages: [wamsg({ id: 'g3', jid: GRP, fromMe: true, ts: NOW - 50_000, contextInfo: { mentionedJid: ['4242:5@lid'] } })]
+          })
+          const c = repo.listContacts({ includeHidden: true }).find((x) => x.jid === JID2)!
+          expect(c.replyDecision).toMatchObject({ needed: false, by: 'group', group: { jid: GRP } })
+        })
+
         it('guarda os participantes (telefone e @lid, sem dispositivo) e registra só as contagens', async () => {
           const LID = '99887766554433@lid'
           last().groupFetchAllParticipating.mockResolvedValue({

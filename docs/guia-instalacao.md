@@ -107,7 +107,8 @@ Fechar a janela (no X) **não** encerra o Saga: ele continua na bandeja, perto d
 
 Cada mentorado costuma ter o próprio grupo, e é lá que você responde. O Saga agora entende isso sozinho:
 
-- Se a pessoa mandou mensagem no privado e **depois** disso você escreveu num grupo de que ela participa, a conversa sai de **Para responder** (e não ganha o alerta "Esperando").
+- Se a pessoa mandou mensagem no privado e **depois** disso você escreveu num **grupo pequeno** de que ela participa (até 10 pessoas, como o grupo dela com você), a conversa sai de **Para responder** (e não ganha o alerta "Esperando").
+- Em grupos maiores (uma turma, por exemplo), um recado geral **não** conta: só conta se você **marcou a pessoa** (@nome) ou **respondeu a uma mensagem dela** (citando). Enquanto o Saga ainda não sabe quantas pessoas o grupo tem, ele trata como grupo grande.
 - Na lista **Todos**, a conversa aparece com a etiqueta "**respondido em** _nome do grupo_".
 - Ao abrir a conversa, aparece "**Respondido no grupo** _nome do grupo_ **às** _hora_". Clique no nome do grupo para abrir a conversa do grupo.
 - Se ainda precisa responder no privado, clique em **Precisa sim**: a conversa volta para a lista (e o Saga aprende com isso). Se estiver certo, clique em 👍.

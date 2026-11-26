@@ -831,6 +831,12 @@ export class WhatsAppClient extends EventEmitter {
       const lid = n.jid
       n.jid = await this.resolveJid(n.jid)
       if (n.senderJid) n.senderJid = await this.resolveJid(n.senderJid)
+      // menções e citação das minhas mensagens de grupo: guarda o @lid e o telefone (casa com a conversa individual)
+      if (n.targets?.length) {
+        const all = new Set(n.targets)
+        for (const t of n.targets) all.add(await this.resolveJid(t))
+        n.targets = [...all]
+      }
       // num grupo o pushName é de quem mandou (vai na mensagem), nunca o nome do grupo
       const pushName = n.fromMe || n.isGroup ? null : raw.pushName?.trim() || null
       repo.upsertContact({ jid: n.jid, pushName, nameRank: NAME_RANK.push, isGroup: n.isGroup === true })
@@ -969,7 +975,7 @@ export class WhatsAppClient extends EventEmitter {
         }
       }
       count += g.participants.length
-      if (this.deps.repo.setGroupMembers(g.id, jids)) changed = true
+      if (this.deps.repo.setGroupMembers(g.id, jids, g.participants.length)) changed = true
     }
     return { count, changed }
   }

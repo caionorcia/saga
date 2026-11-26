@@ -4,6 +4,7 @@
  */
 import { loadDemo, loadDemoFeedback, loadDemoReplyFeedback, type DemoContact, type DemoFeedback, type DemoReplyFeedback } from '../../../core/demo'
 import type { GroupAnswer, ReplyDecision } from '../../../shared/feedback'
+import { GROUP_ANSWER_MAX_MEMBERS } from '../../../shared/triage'
 import { AI_ALERT_KINDS, alertSeverity, type AlertKind } from '../../../shared/triage'
 import type {
   Alert,
@@ -98,15 +99,21 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     })
   )
   const lastOf = (c: DemoContact) => c.messages[c.messages.length - 1]
-  /** "Respondido no grupo": depois da espera, o mentor escreveu num grupo de que o contato participa (o mais recente) */
+  /**
+   * "Respondido no grupo": depois da espera, o mentor escreveu num grupo pequeno (participantes conhecidos, até
+   * GROUP_ANSWER_MAX_MEMBERS) de que o contato participa, ou mencionou/citou o contato em qualquer grupo (o mais recente)
+   */
   const groupAnswerOf = (c: DemoContact): GroupAnswer | null => {
     const since = c.isGroup ? null : waitingSince(c)
     if (since === null) return null
     let best: GroupAnswer | null = null
     for (const g of demo) {
-      if (!g.isGroup || !(g.members.includes(c.jid) || g.messages.some((m) => m.senderJid === c.jid))) continue
+      if (!g.isGroup) continue
+      const member = g.members.includes(c.jid) || g.messages.some((m) => m.senderJid === c.jid)
+      const small = g.members.length > 0 && g.members.length <= GROUP_ANSWER_MAX_MEMBERS
       for (const m of g.messages) {
-        if (m.fromMe && m.ts > since && (!best || m.ts > best.ts)) best = { jid: g.jid, name: displayName(g), ts: m.ts }
+        if (!m.fromMe || m.ts <= since || (best && m.ts <= best.ts)) continue
+        if ((member && small) || m.targets?.includes(c.jid)) best = { jid: g.jid, name: displayName(g), ts: m.ts }
       }
     }
     return best

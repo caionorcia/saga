@@ -121,6 +121,14 @@ function mentionsMe(c: WAMessageContent, opts: NormalizeOptions): boolean {
   return (ci.mentionedJid ?? []).some((j) => typeof j === 'string' && mine.has(stripDevice(j)))
 }
 
+/** Minha mensagem de grupo: quem ela menciona (@) e o autor da mensagem que ela cita (sem dispositivo, sem repetir). */
+function targetsOf(c: WAMessageContent): string[] {
+  const ci = contextInfoOf(c)
+  if (!ci) return []
+  const raw = [...(ci.mentionedJid ?? []), ci.participant]
+  return [...new Set(raw.filter((j): j is string => typeof j === 'string' && isIndividualJid(j)).map(stripDevice))]
+}
+
 const nonEmpty = (s: string | null | undefined): string | null => (s && s.trim() ? s : null)
 
 type Body = Pick<NormalizedMessage, 'kind' | 'text' | 'durationSec'> & { serialize: boolean }
@@ -177,7 +185,8 @@ export function normalize(msg: WAMessage, opts: NormalizeOptions = {}): Normaliz
         isGroup: true,
         senderJid: fromMe ? null : groupSender(key),
         senderName: fromMe ? null : nonEmpty(msg.pushName?.trim()),
-        mentionsMe: !fromMe && mentionsMe(content, opts)
+        mentionsMe: !fromMe && mentionsMe(content, opts),
+        ...(fromMe ? { targets: targetsOf(content) } : {})
       }
     : {}
 

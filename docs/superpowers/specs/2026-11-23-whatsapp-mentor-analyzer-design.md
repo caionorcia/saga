@@ -215,8 +215,11 @@ Cada mentorado costuma ter o próprio grupo, onde o mentor responde.
   então quem atualiza busca na primeira conexão). Cada participante entra com todas as formas conhecidas (telefone e @lid,
   sem dispositivo; o par @lid→telefone é aprendido quando o participante traz os dois ou pelo mapeamento local). Quem já
   mandou mensagem no grupo (`messages.sender_jid`) também conta. O registro só leva contagens.
-- **Regra:** conversa individual aguardando resposta, e o mentor escreveu num grupo de que o contato participa **depois**
-  da primeira mensagem sem resposta (`waitingSince`) → não está em "Para responder", não conta em `triage.awaiting` e não
+- **Regra:** conversa individual aguardando resposta, e **depois** da primeira mensagem sem resposta (`waitingSince`) o
+  mentor escreveu (a) num grupo de que o contato participa com até `GROUP_ANSWER_MAX_MEMBERS = 10` participantes
+  conhecidos (`group_sizes`, da consulta; sem linha = tamanho desconhecido = grande), ou (b) em qualquer grupo, uma
+  mensagem que menciona (@) o contato ou cita uma mensagem dele (`message_targets(msg_id, target_jid)`: menções e autor
+  citado das mensagens do mentor em grupos, com @lid e telefone) → não está em "Para responder", não conta em `triage.awaiting` e não
   ganha "esperando". `replyDecision = {needed: false, by: 'group', reason: 'Respondido no grupo <nome>', group: {jid,
   name, ts}}` (vale a mensagem mais recente do mentor entre os grupos). Precedência: mentor > grupo > regra de
   agradecimento/IA. Calculada na consulta (não é gravada), então some sozinha quando a espera muda.
@@ -440,7 +443,7 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 ## Dados (esboço)
 
 - `contacts` (jid, nome, escondido, notas, é_grupo)
-- `group_members` (grupo, participante: telefone e @lid) — v0.2.3
+- `group_members` (grupo, participante: telefone e @lid), `group_sizes` (grupo, nº de participantes) e `message_targets` (mensagem do mentor, quem ela menciona ou cita) — v0.2.3
 - `messages` (id, jid, de_mim, timestamp, tipo, texto, caminho_audio,
   transcricao, status_transcricao; em grupos: remetente, nome_remetente,
   menciona_mentor)

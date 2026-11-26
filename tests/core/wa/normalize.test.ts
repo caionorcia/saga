@@ -88,6 +88,17 @@ describe('normalize', () => {
     expect(normalize(make({ extendedTextMessage: { text: 'x', contextInfo: { mentionedJid: ['5547900000000@s.whatsapp.net'] } } }, { remoteJid: '1203@g.us', participant: JID }))!.mentionsMe).toBe(false)
   })
 
+  it('grupo, minha mensagem: targets = quem ela menciona e o autor da mensagem citada (sem dispositivo); nas dos outros, nada', () => {
+    const mine = (message: any) => normalize(make(message, { remoteJid: '1203@g.us', fromMe: true }))!
+    expect(
+      mine({ extendedTextMessage: { text: '@Ana veja', contextInfo: { mentionedJid: ['5547999998888:3@s.whatsapp.net', '777@lid'], participant: '888:2@lid', stanzaId: 'Q' } } }).targets
+    ).toEqual(['5547999998888@s.whatsapp.net', '777@lid', '888@lid'])
+    expect(mine({ conversation: 'bom dia, turma' }).targets).toEqual([])
+    expect(mine({ extendedTextMessage: { text: 'x', contextInfo: { mentionedJid: ['1203@g.us'] } } }).targets).toEqual([])
+    const theirs = normalize(make({ extendedTextMessage: { text: '@x', contextInfo: { mentionedJid: [JID] } } }, { remoteJid: '1203@g.us', participant: JID }))!
+    expect(theirs.targets).toBeUndefined()
+  })
+
   it('protocolMessage REVOKE → null', () => {
     expect(normalize(load('revoke'))).toBeNull()
   })

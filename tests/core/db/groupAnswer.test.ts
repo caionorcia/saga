@@ -8,6 +8,7 @@ import { FakeClock } from '../../../src/core/clock'
 import { confirmNoReply, replyCsvDetail, setNeedsReply } from '../../../src/core/ai/needsReply'
 import { feedbackCsv } from '../../../src/core/ai/alertFeedback'
 import { participantJids } from '../../../src/core/wa/normalize'
+import { GROUP_ANSWER_MAX_MEMBERS } from '../../../src/shared/triage'
 import type { NormalizedMessage } from '../../../src/core/types'
 
 const SCHEMA_DIR = join(import.meta.dirname, '../../../src/core/db')
@@ -91,14 +92,17 @@ describe('"Respondido no grupo": a regra', () => {
     expect(repo.groupAnswer(ANA)).toBeNull()
   })
 
-  it('participante também por ter mandado mensagem no grupo (sem os metadados do grupo)', () => {
+  it('participante também por ter mandado mensagem num grupo pequeno (a lista de participantes ainda sem ele)', () => {
+    repo.setGroupMembers(G_TURMA, [BIA])
     add(G_TURMA, { minutesAgo: 200, senderJid: ANA, senderName: 'Ana' })
     add(ANA, { minutesAgo: 60 })
     add(G_TURMA, { minutesAgo: 20, fromMe: true })
     expect(contact(ANA).replyDecision).toMatchObject({ by: 'group', group: { jid: G_TURMA, name: 'Turma 3' } })
-    // quem só mandou em outro grupo não conta
-    add(BIA, { minutesAgo: 50 })
-    expect(contact(BIA).needsReply).toBe(true)
+    // quem não participa do grupo (nem pela lista nem por ter mandado mensagem) não conta
+    const CAR = '5521977776666@s.whatsapp.net'
+    repo.upsertContact({ jid: CAR, pushName: 'Carla' })
+    add(CAR, { minutesAgo: 50 })
+    expect(contact(CAR).needsReply).toBe(true)
   })
 
   it('vários grupos: vale a resposta mais recente do mentor', () => {
@@ -151,6 +155,67 @@ describe('"Respondido no grupo": a regra', () => {
     // o mentor responde no privado e o contato escreve de novo: espera nova, sem resposta no grupo depois dela
     add(ANA, { minutesAgo: 4, fromMe: true })
     add(ANA, { minutesAgo: 2 })
+    expect(contact(ANA).needsReply).toBe(true)
+  })
+})
+
+describe('grupos grandes: só com @ ou citação', () => {
+  const big = (n: number) => Array.from({ length: n }, (_, i) => `55119000${String(i).padStart(5, '0')}@s.whatsapp.net`)
+
+  it(`grupo pequeno (até ${GROUP_ANSWER_MAX_MEMBERS} participantes): qualquer mensagem do mentor conta`, () => {
+    repo.setGroupMembers(G_TURMA, [ANA, ...big(GROUP_ANSWER_MAX_MEMBERS - 1)])
+    add(ANA, { minutesAgo: 60 })
+    add(G_TURMA, { minutesAgo: 30, fromMe: true, text: 'Bom dia, turma!' })
+    expect(contact(ANA).replyDecision?.by).toBe('group')
+  })
+
+  it('grupo grande: mensagem comum do mentor não conta', () => {
+    repo.setGroupMembers(G_TURMA, [ANA, ...big(GROUP_ANSWER_MAX_MEMBERS)])
+    add(ANA, { minutesAgo: 60 })
+    add(G_TURMA, { minutesAgo: 30, fromMe: true, text: 'Lembrete: aula quinta' })
+    expect(contact(ANA).needsReply).toBe(true)
+    expect(repo.triageCounts().awaiting).toBe(1)
+  })
+
+  it('grupo grande: mensagem do mentor que menciona (@) o contato conta', () => {
+    repo.setGroupMembers(G_TURMA, [ANA, ...big(30)])
+    add(ANA, { minutesAgo: 60 })
+    add(G_TURMA, { minutesAgo: 30, fromMe: true, targets: [ANA] })
+    expect(contact(ANA).replyDecision).toMatchObject({ by: 'group', group: { jid: G_TURMA } })
+    expect(repo.triageCounts().awaiting).toBe(0)
+    // a menção a outra pessoa não conta para a Ana
+    add(BIA, { minutesAgo: 50 })
+    expect(contact(BIA).needsReply).toBe(true)
+  })
+
+  it('grupo grande: mensagem do mentor que cita uma mensagem do contato conta (pelo @lid também)', () => {
+    repo.setGroupMembers(G_TURMA, [ANA, ...big(30)])
+    add(ANA, { minutesAgo: 60 })
+    add(G_TURMA, { minutesAgo: 30, fromMe: true, targets: [ANA_LID, ANA] })
+    expect(contact(ANA).replyDecision?.by).toBe('group')
+  })
+
+  it('tamanho desconhecido (sem os participantes do grupo): só com menção ou citação', () => {
+    add(G_OUTRO, { minutesAgo: 200, senderJid: ANA })
+    add(ANA, { minutesAgo: 60 })
+    add(G_OUTRO, { minutesAgo: 30, fromMe: true })
+    expect(contact(ANA).needsReply).toBe(true)
+    add(G_OUTRO, { minutesAgo: 20, fromMe: true, targets: [ANA] })
+    expect(contact(ANA).replyDecision?.group).toMatchObject({ jid: G_OUTRO, ts: NOW - 20 * MIN })
+  })
+
+  it('menções só são guardadas nas mensagens do mentor', () => {
+    add(G_OUTRO, { minutesAgo: 200, senderJid: BIA, targets: [ANA] })
+    add(ANA, { minutesAgo: 300 })
+    expect(contact(ANA).needsReply).toBe(true)
+  })
+
+  it('setGroupMembers guarda o número de participantes (cada um pode ter duas formas)', () => {
+    expect(repo.setGroupMembers(G_ANA, [ANA, ANA_LID], 1)).toBe(true)
+    expect(repo.setGroupMembers(G_ANA, [ANA, ANA_LID], 1)).toBe(false)
+    expect(repo.setGroupMembers(G_ANA, [ANA, ANA_LID], 15)).toBe(true)
+    add(ANA, { minutesAgo: 60 })
+    add(G_ANA, { minutesAgo: 30, fromMe: true })
     expect(contact(ANA).needsReply).toBe(true)
   })
 })
