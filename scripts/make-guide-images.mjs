@@ -102,6 +102,21 @@ await backup.scrollIntoViewIfNeeded()
 await page.waitForTimeout(300)
 await backup.screenshot({ path: `${OUT}/copia-de-seguranca.png` })
 
+// horário de envio (v0.4.1)
+await page.goto(BASE)
+await page.getByRole('button', { name: 'Configurações' }).click()
+const hours = page.locator('#send-hours')
+await hours.scrollIntoViewIfNeeded()
+await page.waitForTimeout(300)
+await hours.screenshot({ path: `${OUT}/config-horario-envio.png` })
+await page.goto(`${BASE}?hours=outside`)
+await page.locator('.contact-main').first().click()
+await page.getByRole('button', { name: 'Enviar', exact: true }).first().click()
+await page.getByRole('checkbox', { name: /Forçar envio/ }).check()
+await page.getByRole('button', { name: 'Enviar mesmo assim' }).waitFor()
+await page.waitForTimeout(300)
+await page.locator('.send-dialog').screenshot({ path: `${OUT}/enviar-fora-do-horario.png` })
+
 // faixa de estado
 const states = {
   'estado-conectado': {},

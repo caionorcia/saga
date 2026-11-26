@@ -230,6 +230,26 @@ O botão **Enviar** só funciona com o WhatsApp **Conectado**; sem conexão, a c
 
 ![Configurações › Envio direto](img/config-envio-direto.png)
 
+### Horário de envio e "Forçar envio" (versão 0.4.1)
+
+Você escolhe em que dias e horários o Saga pode enviar. O padrão é **de segunda a sexta, das 09:00 às 18:00**; sábado e domingo ficam sem envio.
+
+Para mudar, vá em **Configurações › Envio direto › Horário de envio**. Em cada dia, marque se pode enviar e escolha o horário de início e de fim (de 15 em 15 minutos). Vale o relógio do seu computador. Para enviar a qualquer hora, desmarque **Só enviar nos dias e horários abaixo**.
+
+![Configurações › Horário de envio](img/config-horario-envio.png)
+
+**Fora do horário:**
+
+- No topo aparece **Fora do horário de envio**. Clique nele para abrir o horário nas Configurações.
+- O botão **Enviar** continua no cartão. A confirmação avisa, por exemplo: "Fora do horário de envio (Seg–Sex, 09:00–18:00). Próximo horário: segunda 09:00." O botão de enviar fica desligado.
+- Para enviar mesmo assim, marque **Forçar envio**. O botão vira **Enviar mesmo assim**. Todo o resto continua igual: você confirma, o Saga espera a vez, mostra "digitando…" e respeita os limites.
+
+![Confirmação fora do horário, com Forçar envio](img/enviar-fora-do-horario.png)
+
+Vai responder várias mensagens da mesma pessoa fora do horário? Clique em **Forçar envio** no topo da conversa. Enquanto ele estiver ligado, a confirmação daquela conversa já abre com **Forçar envio** marcado. Ele desliga sozinho depois de 30 minutos ou quando você abre outra conversa. Você continua confirmando cada envio.
+
+Se uma resposta ainda estiver na fila quando o horário acabar, ela **não sai depois**: o cartão mostra **Não enviada — fora do horário de envio. Enviar de novo?**. Para enviar, clique em **Enviar de novo** e marque **Forçar envio**, ou espere o próximo horário.
+
 **Para não arriscar a sua conta (leia com atenção):** enviar por um aparelho vinculado não é um uso oficial do WhatsApp, e mandar muitas mensagens parecidas, rápido, é o que mais faz o WhatsApp limitar contas. Por isso o Saga:
 
 - só envia para quem **mandou mensagem nos últimos 30 dias** (responde, nunca puxa conversa);

@@ -379,6 +379,46 @@ individuais não citar.
   só conteúdo (texto, áudio, mídia, figurinha); chave de idempotência de outra conversa é recusada; o diálogo não envia
   duas vezes com Ctrl+Enter repetido.
 
+### Horário de envio e "Forçar envio" (v0.4.1, a pedido do mentor)
+
+O mentor pediu: "configurar os dias e horários disponíveis pra mensagem, por exemplo de segunda a sexta das 09h às
+18h, mas deixar uma opção na conversa chamada 'forçar envio' pra poder ignorar essa regra".
+
+- **Configurações › Envio direto › Horário de envio:** "Só enviar nos dias e horários abaixo" (ligado por padrão) e uma
+  linha por dia (Seg..Dom): liberado ou não, e um intervalo de início e fim (HH:MM, de 15 em 15 minutos; o fim pode ser
+  24:00). Padrão: Seg–Sex, 09:00–18:00; Sáb e Dom sem envio. Um intervalo por dia. Fim depois do início (senão a
+  tela mostra o erro e não salva; o processo principal e os guardas do IPC recusam também). Vale o fuso do computador
+  (a tela mostra o nome do fuso). Salvo em `settings.sendSchedule` (JSON) e incluído na cópia de segurança (juntar não
+  troca um horário já escolhido no computador; substituir troca).
+- **Regra:** um envio só **executa** dentro do horário, a menos que tenha sido confirmado com "Forçar envio". O início
+  vale, o fim não (09:00 pode, 18:00 não). Horário desligado = pode sempre. A conta usa as partes da data local (dia da
+  semana, hora, minuto) e o construtor de data local para o próximo horário: a troca de horário de verão não quebra.
+  Conferido no `prepareSend` (para a tela avisar), no `sendReply` e no `executeSend` antes do "digitando…" e de novo
+  logo antes de enviar. Um envio que está na fila (ou no "digitando…") quando o horário acaba **expira** ("fora do
+  horário de envio"; o cartão mostra "Não enviada — fora do horário de envio. Enviar de novo?"): nunca espera para sair
+  depois, como na regra de nada automático. A varredura de 15 s também expira os da fila e avisa a barra de status
+  quando o horário abre ou fecha; mudar o horário nas Configurações aplica na hora.
+- **Confirmação fora do horário:** o botão Enviar continua lá. O `prepareSend` sem `forced` devolve a recusa
+  `outside_hours` com `nextAllowedAt`, o resumo ("Seg–Sex, 09:00–18:00"), o próximo horário ("segunda 09:00") e o
+  rascunho (para quem, citação, texto), **sem token**. O diálogo mostra "Fora do horário de envio (Seg–Sex,
+  09:00–18:00). Próximo horário: segunda 09:00.", o botão principal desligado e a caixa **Forçar envio** ("envia agora
+  mesmo assim, fora do horário. As outras regras continuam valendo."). Marcada, o diálogo pede um novo `prepareSend`
+  com `forced: true` e o botão vira "Enviar mesmo assim". Um envio forçado segue todas as outras regras (ritmo, tetos,
+  digitando, lida, citação, contato recente, conexão).
+- **O token prende o `forced`:** o `SendGate` guarda `forced` junto com destino e citação; um token sem `forced` nunca
+  vale fora do horário (nem se o diálogo abriu dentro dele e o horário acabou antes do clique). O `sendReply` não aceita
+  `forced` (os guardas recusam o campo): só o token decide. A tabela `sends` ganha `forced` (schema v15); o
+  `executeSend` só ignora o horário quando a linha é forçada.
+- **"Forçar envio" no cabeçalho da conversa:** botão pequeno (aparece com o envio direto e o horário ligados; dica:
+  "a confirmação desta conversa já abre com Forçar envio marcado; você ainda confirma cada envio; desliga sozinho em 30
+  minutos ou ao fechar a conversa"). Só na memória da janela, nunca salvo, uma conversa de cada vez.
+- **Barra de status:** com o envio direto ligado e fora do horário, um chip discreto "Fora do horário de envio" (a dica
+  traz o resumo e o próximo horário); o clique abre Configurações › Envio direto › Horário de envio. Vem no
+  `AppState.sendHours`.
+- **Registro de diagnóstico:** `send_outside_hours` (confirmação aberta ou recusada fora do horário, envio que expirou
+  por isso, com a etapa) e `send_forced` (envio forçado posto na fila fora do horário); só id do envio/job e a impressão
+  da conversa, nunca texto nem jid.
+
 ### Versão 0.3.1 (a pedido do mentor)
 
 **Foco mais forte.** "A diferença não ficou tão grande": as conversas que não pedem resposta ficam com opacidade 0,28 e
@@ -651,6 +691,10 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
   andamento ou enviado devolve o mesmo envio.
 - Só envia para quem mandou mensagem nos últimos 30 dias (responder, nunca iniciar conversa nem em massa); conferido
   no `prepareSend`, no `sendReply` e de novo na hora do envio.
+- **Horário de envio (v0.4.1):** fora dos dias e horários configurados (padrão Seg–Sex, 09:00–18:00, no fuso do
+  computador) só sai o envio confirmado com "Forçar envio" (preso ao token). Conferido no `prepareSend`, no `sendReply`
+  e no `executeSend` antes do "digitando…" e antes de enviar; o que ainda não saiu quando o horário acaba expira, nunca
+  espera para sair depois.
 
 ### Como testar a trava
 
