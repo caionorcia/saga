@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto'
 import Anthropic from '@anthropic-ai/sdk'
-import type { Clock } from '../clock'
+import { systemClock, type Clock } from '../clock'
 import type { AnalysisRow, MessageRow, Repo } from '../db/repo'
 import { selectExamples } from '../memory/memory'
 import { knowledgeFor, sourcesOf, type KbContext } from '../kb/retrieve'
 import type { RateLimiter } from '../queue/limiter'
 import { BudgetExceededError, type CostTracker } from './budget'
 import { InvalidOutputError, buildPrompt, parseSuggestions } from './prompt'
-import { GroqModels, InvalidKeyError, ModelNotFoundError, isModelGone } from './groqModels'
+import { GroqModels, InvalidKeyError, ModelNotFoundError, ModelUnavailableError, isModelGone } from './groqModels'
+import { createGeminiLlm, createMistralLlm } from './freeProviders'
 
 export interface LlmResult {
   text: string
@@ -15,10 +16,15 @@ export interface LlmResult {
   outputTokens: number
   /** modelo que de fato respondeu (para preço) */
   model?: string
+  /** provedor que de fato respondeu (a corrente de reserva pode trocar a Groq pelo Gemini ou pelo Mistral) */
+  provider?: LlmName
 }
 
+/** Provedores de conversa: os dois escolhíveis (Groq, Claude) e as reservas gratuitas (Gemini, Mistral). */
+export type LlmName = 'groq' | 'claude' | 'gemini' | 'mistral'
+
 export interface LlmProvider {
-  name: 'groq' | 'claude'
+  name: LlmName
   /** `temperature`: só a Groq usa (padrão 0,7); a classificação de alertas pede uma baixa */
   complete(p: { system: string; user: string; temperature?: number; schema?: Record<string, unknown> }): Promise<LlmResult>
 }
@@ -59,7 +65,7 @@ export const SETTING_CLAUDE_MODEL = 'llm.claude.model'
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const DEFAULT_RETRY_AFTER_MS = 60_000
 
-function retryAfterMs(h: string | null | undefined): number {
+export function retryAfterMs(h: string | null | undefined): number {
   const s = h == null ? NaN : Number(h)
   return Number.isFinite(s) && s >= 0 ? Math.ceil(s * 1000) : DEFAULT_RETRY_AFTER_MS
 }
@@ -84,7 +90,9 @@ export interface CreateLlmOpts {
   client?: Anthropic
 }
 
-export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateLlmOpts = {}): LlmProvider {
+export function createLlm(kind: LlmName, apiKey: string, opts: CreateLlmOpts = {}): LlmProvider {
+  if (kind === 'gemini') return createGeminiLlm(apiKey, opts)
+  if (kind === 'mistral') return createMistralLlm(apiKey, opts)
   if (kind === 'groq') {
     const fetchImpl = opts.fetchImpl ?? fetch
     const models = new GroqModels({ apiKey, fetchImpl, repo: opts.repo, clock: opts.clock, diag: opts.diag })
@@ -126,10 +134,18 @@ export function createLlm(kind: 'groq' | 'claude', apiKey: string, opts: CreateL
     }
     return {
       name: 'groq',
-      complete: ({ system, user, temperature }) =>
-        models.withModel('chat', explicit, (model) => call(model, system, user, temperature), undefined, (e) =>
-          e instanceof LlmRateLimitError ? e.retryAfterMs : null
-        )
+      complete: async ({ system, user, temperature }) => {
+        try {
+          return await models.withModel('chat', explicit, (model) => call(model, system, user, temperature), undefined, (e) =>
+            e instanceof LlmRateLimitError ? e.retryAfterMs : null
+          )
+        } catch (e) {
+          // todos os modelos que sobraram estão no limite (cota gratuita esgotada): é um 429, não "modelo aposentado"
+          const until = e instanceof ModelUnavailableError ? models.soonestLimitedUntil() : null
+          if (until !== null) throw new LlmRateLimitError(until - (opts.clock ?? systemClock).now())
+          throw e
+        }
+      }
     }
   }
 
@@ -329,9 +345,10 @@ export async function generateAnalysis(
       } finally {
         limiter.markFinished()
       }
-      cost.add(llm.name, res.inputTokens, res.outputTokens, res.model)
+      const who = res.provider ?? llm.name
+      cost.add(who, res.inputTokens, res.outputTokens, res.model)
       const parsed = parseSuggestions(res.text)
-      repo.saveAnalysis(jid, lastId, llm.name, parsed.summary, parsed.suggestions, {
+      repo.saveAnalysis(jid, lastId, who, parsed.summary, parsed.suggestions, {
         transcriptFp: ctx.transcriptFp,
         pendingAudios: ctx.pendingAudios,
         sources: sourcesOf(knowledge)

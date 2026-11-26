@@ -357,6 +357,41 @@ describe('SagaService', () => {
       expect(llm.calls).toBe(2)
     })
 
+    it('reservas gratuitas: Groq no limite → Gemini (só com chave) → Mistral; provider gravado; mensagem final', async () => {
+      const { LlmRateLimitError } = await import('../../src/core/ai/llm')
+      const made: string[] = []
+      const behave: Record<string, 'ok' | 'limit'> = { groq: 'limit', gemini: 'limit', mistral: 'ok' }
+      llmFactory.mockImplementation((kind: string, key: string) => {
+        made.push(`${kind}:${key}`)
+        return {
+          name: kind,
+          async complete() {
+            if (behave[kind] === 'limit') throw new LlmRateLimitError(60_000)
+            return { text: GOOD, inputTokens: 1, outputTokens: 1, model: `${kind}-m` }
+          }
+        }
+      })
+      settings.save({ groqKey: GROQ_KEY })
+      // sem chave de reserva: a mensagem sugere adicionar uma
+      let r = await service.getAnalysis(JID)
+      expect(r).toMatchObject({ ok: false, code: 'rate_limited' })
+      expect(!r.ok && r.message).toMatch(/adicione uma chave gratuita do Gemini ou do Mistral em Configurações/)
+      expect(made).toEqual([`groq:${GROQ_KEY}`])
+      // só a do Mistral: o Gemini (sem chave) fica de fora
+      settings.save({ mistralKey: 'MKEY' })
+      made.length = 0
+      r = await service.regenerate(JID)
+      expect(r).toMatchObject({ ok: true, analysis: { provider: 'mistral' } })
+      expect(made).toEqual([`mistral:MKEY`, `groq:${GROQ_KEY}`])
+      // as duas no limite: a mensagem diz que as gratuitas estão no limite
+      settings.save({ geminiKey: 'GKEY' })
+      behave.mistral = 'limit'
+      r = await service.regenerate(JID)
+      expect(r).toMatchObject({ ok: false, code: 'rate_limited' })
+      expect(!r.ok && r.message).toMatch(/reserva \(Gemini e Mistral\) também estão no limite/)
+      expect(JSON.stringify(repo.recentEvents(50))).not.toContain('GKEY')
+    })
+
     it('chamadas simultâneas para o mesmo contato geram uma vez só', async () => {
       settings.save({ groqKey: GROQ_KEY })
       const [a, b] = await Promise.all([service.getAnalysis(JID), service.getAnalysis(JID)])
@@ -626,7 +661,7 @@ describe('SagaService', () => {
       const r = await service.saveSettings({ groqKey: GROQ_KEY, claudeKey: 'sk-ant-SEGREDO', openaiKey: 'sk-SEGREDO2' })
       expect(r.ok).toBe(true)
       const s = await service.getSettings()
-      expect(s.keys).toEqual({ groq: true, claude: true, openai: true })
+      expect(s.keys).toEqual({ groq: true, claude: true, openai: true, gemini: false, mistral: false })
       const text = JSON.stringify(s) + JSON.stringify(r) + JSON.stringify(await service.getState())
       for (const k of [GROQ_KEY, 'sk-ant-SEGREDO', 'sk-SEGREDO2']) expect(text).not.toContain(k)
       const events = JSON.stringify(repo.recentEvents(100))

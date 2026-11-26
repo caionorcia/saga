@@ -111,7 +111,7 @@ describe('cópia de segurança', () => {
     const s = t.settings.get()
     expect(s).toMatchObject({ theme: 'dark', provider: 'claude', dailyCapUsd: 2.5, transcriber: 'openai', startWithWindows: false })
     // chaves nunca vão: é preciso digitar de novo
-    expect(s.keys).toEqual({ groq: false, claude: false, openai: false })
+    expect(s.keys).toEqual({ groq: false, claude: false, openai: false, gemini: false, mistral: false })
     expect(t.repo.listMessages(ANA)).toHaveLength(0)
     // o registro só leva contagens
     expect(diag.join('\n')).not.toMatch(/Ana|precifica|Vamos|Preços/)

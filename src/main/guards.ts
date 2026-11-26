@@ -86,7 +86,7 @@ const isStr = (v: unknown): v is string => typeof v === 'string'
 const nonEmpty = (v: unknown): v is string => isStr(v) && v.trim().length > 0
 const isBool = (v: unknown): v is boolean => typeof v === 'boolean'
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
-const KEY_KINDS = new Set(['groq', 'claude', 'openai'])
+const KEY_KINDS = new Set(['groq', 'claude', 'openai', 'gemini', 'mistral'])
 const isId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
 const isAiKind = (v: unknown) => (AI_ALERT_KINDS as readonly unknown[]).includes(v)
 const optText = (v: unknown) => v === undefined || v === null || (isStr(v) && v.length <= REASON_TEXT_MAX)
@@ -110,6 +110,8 @@ const SETTINGS_FIELDS: Record<string, (v: unknown) => boolean> = {
   groqKey: isStr,
   claudeKey: isStr,
   openaiKey: isStr,
+  geminiKey: isStr,
+  mistralKey: isStr,
   provider: (v) => v === 'groq' || v === 'claude',
   transcriber: (v) => v === 'groq' || v === 'openai',
   dailyCapUsd: (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0,

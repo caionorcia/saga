@@ -40,8 +40,9 @@ export class CostTracker {
     return `cost.${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
   }
 
-  add(provider: 'groq' | 'claude', inTok: number, outTok: number, model?: string): void {
-    if (provider === 'groq') return
+  /** Só o Claude é pago; Groq, Gemini e Mistral (planos gratuitos) custam 0. */
+  add(provider: string, inTok: number, outTok: number, model?: string): void {
+    if (provider !== 'claude') return
     const pr = claudePricing(model)
     const usd = (inTok * pr.input + outTok * pr.output) / 1_000_000
     this.addUsd(usd)

@@ -129,6 +129,12 @@ export class GroqModels {
     return Object.fromEntries(Object.entries(all).filter(([, until]) => typeof until === 'number' && until > now))
   }
 
+  /** Instante em que o primeiro modelo no limite volta (null: nenhum no limite). */
+  soonestLimitedUntil(): number | null {
+    const v = Object.values(this.limitedMap())
+    return v.length ? Math.min(...v) : null
+  }
+
   /** O modelo respondeu 429: fica de fora até `retryAfterMs` (mínimo 2 min). Os outros modelos têm cota própria. */
   markLimited(model: string, retryAfterMs: number): void {
     const until = this.clock.now() + Math.max(retryAfterMs, MIN_LIMITED_MS)

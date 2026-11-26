@@ -19,8 +19,11 @@ import {
   generateAnalysis,
   isAnalysisFresh,
   type CreateLlmOpts,
+  type LlmName,
   type LlmProvider
 } from './ai/llm'
+import { FREE_FALLBACKS, ProviderLimits, withFallback } from './ai/fallback'
+import { resetGeminiModelCache } from './ai/freeProviders'
 import { InvalidOutputError } from './ai/prompt'
 import { ModelUnavailableError, resetGroqModelCache } from './ai/groqModels'
 import {
@@ -114,7 +117,7 @@ export interface SagaServiceOpts {
   /** padrão: `new WhatsAppClient(deps)` */
   waClientFactory?: (deps: WhatsAppClientDeps) => WaClientLike
   /** padrão: `createLlm` */
-  llmFactory?: (kind: Provider, apiKey: string, opts: CreateLlmOpts) => LlmProvider
+  llmFactory?: (kind: LlmName, apiKey: string, opts: CreateLlmOpts) => LlmProvider
   /** padrão: `createTranscriber` */
   transcriberFactory?: (kind: 'groq' | 'openai', apiKey: string, opts: CreateTranscriberOpts) => Transcriber
   /** usado por `testKey` (testes) */
@@ -192,6 +195,18 @@ function aiErrorCode(e: unknown): AiErrorCode {
   if (e instanceof NoMessagesError) return 'no_messages'
   if (e instanceof ModelUnavailableError) return 'model_unavailable'
   return 'unknown'
+}
+
+const FALLBACK_LABEL: Record<(typeof FREE_FALLBACKS)[number], string> = { gemini: 'Gemini', mistral: 'Mistral' }
+
+/** O 429 final (depois da troca de modelo da Groq e das reservas gratuitas): o que fazer depende das chaves salvas. */
+export function rateLimitedMessage(provider: Provider, fallbacks: ReadonlyArray<(typeof FREE_FALLBACKS)[number]>): string {
+  const head = provider === 'claude' ? 'O Claude pediu para esperar um pouco (limite de pedidos).' : 'A IA gratuita (Groq) chegou ao limite de uso por agora.'
+  if (fallbacks.length === 0) {
+    return `${head} Ela volta sozinha mais tarde. Para não ficar sem sugestões, adicione uma chave gratuita do Gemini ou do Mistral em Configurações › Chaves de acesso${provider === 'claude' ? '' : ' (ou escolha o Claude)'}.`
+  }
+  const names = fallbacks.map((f) => FALLBACK_LABEL[f]).join(' e ')
+  return `${head} As IAs gratuitas de reserva (${names}) também estão no limite agora; elas voltam sozinhas mais tarde.${provider === 'claude' ? '' : ' Se tiver pressa, escolha o Claude nas Configurações.'}`
 }
 
 const AI_MESSAGES: Record<AiErrorCode, string> = {
@@ -342,7 +357,7 @@ export class SagaService extends EventEmitter {
           // só a IA gratuita em segundo plano: nunca gasta com o Claude, seja qual for o provedor das sugestões
           getLlm: () => {
             const key = this.settings.getKey('groq')
-            return key ? this.llmFactory('groq', key, { repo, clock, diag: (k, d) => this.diag(k, d) }) : null
+            return key ? this.chatLlm('groq', key) : null
           },
           cost: this.cost,
           getCapUsd: () => this.settings.get().dailyCapUsd,
@@ -943,7 +958,7 @@ export class SagaService extends EventEmitter {
   async summarizeSearch(query: string, filters: SearchFilters = {}): Promise<SearchSummaryResult> {
     const s = this.settings.get()
     const provider = s.provider
-    const fail = (code: AiErrorCode): SearchSummaryResult => ({ ok: false, code, message: AI_MESSAGES[code] })
+    const fail = (code: AiErrorCode): SearchSummaryResult => ({ ok: false, code, message: this.aiMessage(code, provider) })
     const { result, ranked } = runSearch(this.repo, query, filters, this.clock.now())
     if (ranked.length === 0) {
       return { ok: false, code: 'no_results', message: result.mode === 'empty' ? 'Escreva o assunto que você procura.' : 'Nenhuma mensagem encontrada para resumir.' }
@@ -953,7 +968,7 @@ export class SagaService extends EventEmitter {
     try {
       const out = await summarizeHits(
         {
-          llm: this.llmFactory(provider, key, { repo: this.repo, clock: this.clock, diag: (k, d) => this.diag(k, d) }),
+          llm: this.chatLlm(provider, key),
           limiter: this.limiters.llm,
           cost: this.cost,
           capUsd: s.dailyCapUsd,
@@ -973,17 +988,40 @@ export class SagaService extends EventEmitter {
     }
   }
 
+  /** Reservas gratuitas com chave salva, na ordem da corrente. */
+  private fallbackKinds(): Array<(typeof FREE_FALLBACKS)[number]> {
+    return FREE_FALLBACKS.filter((k) => this.settings.hasKey(k))
+  }
+
+  /**
+   * A IA de conversa: a principal (`kind`) e, se ela chegar ao limite, o Gemini e o Mistral (só os que têm chave).
+   * Vale também com o Claude como principal: um 429 dele passa às reservas gratuitas.
+   */
+  private chatLlm(kind: Provider, key: string): LlmProvider {
+    const o: CreateLlmOpts = { repo: this.repo, clock: this.clock, diag: (k, d) => this.diag(k, d) }
+    const fallbacks: LlmProvider[] = []
+    for (const f of this.fallbackKinds()) {
+      const fk = this.settings.getKey(f)
+      if (fk) fallbacks.push(this.llmFactory(f, fk, o))
+    }
+    return withFallback(this.llmFactory(kind, key, o), fallbacks, { repo: this.repo, clock: this.clock, diag: (k, d) => this.diag(k, d) })
+  }
+
+  private aiMessage(code: AiErrorCode, provider: Provider): string {
+    return code === 'rate_limited' ? rateLimitedMessage(provider, this.fallbackKinds()) : AI_MESSAGES[code]
+  }
+
   private async doAnalyze(jid: string, force: boolean): Promise<AnalysisResult> {
     const s = this.settings.get()
     const provider = s.provider
-    const fail = (code: AiErrorCode): AnalysisResult => ({ ok: false, code, message: AI_MESSAGES[code], provider })
+    const fail = (code: AiErrorCode): AnalysisResult => ({ ok: false, code, message: this.aiMessage(code, provider), provider })
     const key = this.settings.getKey(provider)
     if (!key) return fail('missing_key')
     try {
       const analysis = await generateAnalysis(
         {
           repo: this.repo,
-          llm: this.llmFactory(provider, key, { repo: this.repo, clock: this.clock, diag: (k, d) => this.diag(k, d) }),
+          llm: this.chatLlm(provider, key),
           limiter: this.limiters.llm,
           cost: this.cost,
           capUsd: s.dailyCapUsd,
@@ -1422,6 +1460,12 @@ export class SagaService extends EventEmitter {
     }
     // chave da Groq ou modelo configurado mudou: a lista de modelos e os "aposentados" valem de novo
     if (patch.groqKey !== undefined || patch.groqModel !== undefined) resetGroqModelCache(this.repo)
+    // reserva gratuita com chave nova (ou removida): volta a valer na hora, sem o "no limite" da chave antiga
+    if (patch.geminiKey !== undefined) {
+      resetGeminiModelCache(this.repo)
+      new ProviderLimits(this.repo, this.clock).clear('gemini')
+    }
+    if (patch.mistralKey !== undefined) new ProviderLimits(this.repo, this.clock).clear('mistral')
     // uma chave nova pode destravar as transcrições pausadas por falta de chave (ou chave recusada)
     // e um teto novo pode destravar as pausadas pelo gasto
     if (patch.groqKey || patch.openaiKey || patch.transcriber || patch.dailyCapUsd !== undefined) this.queue.resumeType('transcribe')

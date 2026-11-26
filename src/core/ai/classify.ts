@@ -163,7 +163,7 @@ export function parseNeedsReply(raw: string): { needsReply: boolean; reason: str
 export interface ClassifyDeps {
   repo: Repo
   clock: Clock
-  /** a IA gratuita (Groq), ou null sem chave da Groq: nunca o Claude */
+  /** a IA gratuita (Groq, com as reservas gratuitas Gemini/Mistral se tiverem chave), ou null sem chave da Groq: nunca o Claude */
   getLlm: () => LlmProvider | null
   cost: CostTracker
   getCapUsd: () => number
@@ -230,7 +230,7 @@ export async function classifyChat(deps: ClassifyDeps, jid: string, signal?: Abo
   try {
     const res = await llm.complete({ ...prompt, temperature: 0.2 })
     signal?.throwIfAborted()
-    deps.cost.add(llm.name, res.inputTokens, res.outputTokens, res.model)
+    deps.cost.add(res.provider ?? llm.name, res.inputTokens, res.outputTokens, res.model)
     text = res.text
     model = res.model ?? null
   } catch (e) {

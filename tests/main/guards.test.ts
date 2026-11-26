@@ -67,7 +67,9 @@ describe('validateIpcArgs', () => {
     ok('testKey', 'groq', 'k')
     ok('testKey', 'claude', 'k')
     ok('testKey', 'openai', 'k')
-    bad('testKey', 'gemini', 'k')
+    ok('testKey', 'gemini', 'k')
+    ok('testKey', 'mistral', 'k')
+    bad('testKey', 'cohere', 'k')
     bad('testKey', 'groq', 123)
     bad('testKey', '__proto__', 'k')
   })
@@ -102,6 +104,10 @@ describe('validateIpcArgs', () => {
 
   it('saveSettings: só campos conhecidos com tipos válidos', () => {
     ok('saveSettings', { provider: 'claude', dailyCapUsd: 2, groqKey: 'k' })
+    ok('saveSettings', { geminiKey: 'k', mistralKey: '' })
+    bad('saveSettings', { geminiKey: 1 })
+    bad('saveSettings', { mistralKey: null })
+    bad('saveSettings', { provider: 'gemini' })
     bad('saveSettings', { provider: 'gpt' })
     ok('saveSettings', { theme: 'system' })
     ok('saveSettings', { theme: 'dark' })

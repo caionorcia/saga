@@ -37,7 +37,7 @@ describe('SettingsStore', () => {
       claudeModel: 'claude-opus-5-5',
       groqModel: DEFAULT_GROQ_MODEL,
       theme: 'system',
-      keys: { groq: false, claude: false, openai: false },
+      keys: { groq: false, claude: false, openai: false, gemini: false, mistral: false },
       // v0.4.0: envio direto ligado, com "digitando…", marcar como lida e citar nos grupos
       directSend: true,
       sendTyping: true,
@@ -93,7 +93,7 @@ describe('SettingsStore', () => {
     const st = new SettingsStore(repo, fakeCipher())
     st.save({ groqKey: `  ${SECRET} `, claudeKey: 'sk-ant-OUTRA' })
     const view = st.get()
-    expect(view.keys).toEqual({ groq: true, claude: true, openai: false })
+    expect(view.keys).toEqual({ groq: true, claude: true, openai: false, gemini: false, mistral: false })
     expect(JSON.stringify(view)).not.toContain(SECRET)
     expect(JSON.stringify(view)).not.toContain('sk-ant-OUTRA')
     const raw = allSettingsText(repo, ['key.groq', 'key.claude'])
@@ -102,6 +102,19 @@ describe('SettingsStore', () => {
     expect(st.getKey('groq')).toBe(SECRET)
     expect(st.getKey('claude')).toBe('sk-ant-OUTRA')
     expect(st.getKey('openai')).toBeNull()
+  })
+
+  it('reservas gratuitas (Gemini, Mistral): chaves cifradas, desligadas até salvar, removíveis', () => {
+    const st = new SettingsStore(repo, fakeCipher())
+    expect(st.get().keys).toMatchObject({ gemini: false, mistral: false })
+    st.save({ geminiKey: ' AIza-SEGREDO ', mistralKey: 'mis-SEGREDO' })
+    expect(st.get().keys).toMatchObject({ gemini: true, mistral: true })
+    expect(allSettingsText(repo, ['key.gemini', 'key.mistral'])).not.toContain('SEGREDO')
+    expect(st.getKey('gemini')).toBe('AIza-SEGREDO')
+    expect(st.getKey('mistral')).toBe('mis-SEGREDO')
+    st.save({ mistralKey: '' })
+    expect(st.get().keys.mistral).toBe(false)
+    expect(() => st.save({ geminiKey: 1 as unknown as string })).toThrow()
   })
 
   it('chave vazia apaga a chave', () => {

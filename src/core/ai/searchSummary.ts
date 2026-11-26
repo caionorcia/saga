@@ -107,10 +107,11 @@ export async function summarizeHits(deps: SummaryDeps, question: string, hits: S
     } finally {
       limiter.markFinished()
     }
-    cost.add(llm.name, res.inputTokens, res.outputTokens, res.model)
+    const who = res.provider ?? llm.name
+    cost.add(who, res.inputTokens, res.outputTokens, res.model)
     try {
       const out = parseSummary(res.text, included)
-      deps.diag?.('search_summary', `provedor=${llm.name} trechos=${prompt.used} conversas=${out.refs.length}`)
+      deps.diag?.('search_summary', `provedor=${who} trechos=${prompt.used} conversas=${out.refs.length}`)
       return { ...out, used: prompt.used }
     } catch (e) {
       if (!(e instanceof InvalidOutputError)) throw e

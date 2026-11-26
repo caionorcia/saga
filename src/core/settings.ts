@@ -2,11 +2,14 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { Repo } from './db/repo'
 import type { SendOptions } from '../shared/send'
 import { DEFAULT_SEND_SCHEDULE, cloneSchedule, isValidSchedule, type SendSchedule } from '../shared/sendHours'
+import { GEMINI_MODELS_URL, MISTRAL_MODELS_URL } from './ai/freeProviders'
 import { DEFAULT_CLAUDE_MODEL, DEFAULT_GROQ_MODEL, SETTING_CLAUDE_MODEL, SETTING_GROQ_MODEL } from './ai/llm'
 
 export type Provider = 'groq' | 'claude'
 export type TranscriberKind = 'groq' | 'openai'
-export type KeyKind = 'groq' | 'claude' | 'openai'
+/** `gemini` e `mistral` (v0.6.2): reservas gratuitas opcionais, só usadas quando a IA principal chega ao limite. */
+export type KeyKind = 'groq' | 'claude' | 'openai' | 'gemini' | 'mistral'
+export const KEY_KINDS: ReadonlyArray<KeyKind> = ['groq', 'claude', 'openai', 'gemini', 'mistral']
 /** Tema: `system` = Automático (segue o Windows), `light` = Claro, `dark` = Escuro. */
 export type ThemePref = 'system' | 'light' | 'dark'
 export const THEME_PREFS: ReadonlyArray<ThemePref> = ['system', 'light', 'dark']
@@ -38,6 +41,8 @@ export interface SettingsPatch {
   groqKey?: string
   claudeKey?: string
   openaiKey?: string
+  geminiKey?: string
+  mistralKey?: string
   provider?: Provider
   transcriber?: TranscriberKind
   dailyCapUsd?: number
@@ -94,10 +99,12 @@ const SEND_FLAGS = ['directSend', 'sendTyping', 'sendMarkRead', 'sendQuoteInGrou
 /** Configurações que vão na cópia de segurança (nada de chaves nem do que só vale neste computador). */
 const BACKUP_FIELDS = ['provider', 'transcriber', 'dailyCapUsd', 'claudeModel', 'groqModel', 'theme', 'sendSchedule'] as const
 
-const KEY_FIELDS: Record<KeyKind, 'groqKey' | 'claudeKey' | 'openaiKey'> = {
+const KEY_FIELDS: Record<KeyKind, 'groqKey' | 'claudeKey' | 'openaiKey' | 'geminiKey' | 'mistralKey'> = {
   groq: 'groqKey',
   claude: 'claudeKey',
-  openai: 'openaiKey'
+  openai: 'openaiKey',
+  gemini: 'geminiKey',
+  mistral: 'mistralKey'
 }
 
 const keySetting = (kind: KeyKind) => `key.${kind}`
@@ -120,7 +127,7 @@ export class SettingsStore {
       claudeModel: this.repo.getSetting(K.claudeModel) || DEFAULT_CLAUDE_MODEL,
       groqModel: this.repo.getSetting(K.groqModel) || DEFAULT_GROQ_MODEL,
       theme: this.theme(),
-      keys: { groq: this.hasKey('groq'), claude: this.hasKey('claude'), openai: this.hasKey('openai') },
+      keys: Object.fromEntries(KEY_KINDS.map((k) => [k, this.hasKey(k)])) as Record<KeyKind, boolean>,
       ...this.sendFlags(),
       sendSchedule: this.sendSchedule()
     }
@@ -266,6 +273,14 @@ export class SettingsStore {
 
 const TEST_TIMEOUT_MS = 15_000
 
+/** Lista de modelos de cada provedor (chave em `Authorization: Bearer`). */
+const TEST_URLS: Record<Exclude<KeyKind, 'claude'>, string> = {
+  groq: 'https://api.groq.com/openai/v1/models',
+  openai: 'https://api.openai.com/v1/models',
+  gemini: GEMINI_MODELS_URL,
+  mistral: MISTRAL_MODELS_URL
+}
+
 /**
  * Validação barata da chave no assistente (lista de modelos). `true` só com resposta 2xx.
  * Nunca lança e nunca registra a chave.
@@ -284,7 +299,7 @@ export async function testKey(
       await client.models.list({ limit: 1 })
       return true
     }
-    const url = kind === 'groq' ? 'https://api.groq.com/openai/v1/models' : 'https://api.openai.com/v1/models'
+    const url = TEST_URLS[kind]
     const res = await fetchImpl(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${k}` },
