@@ -98,10 +98,28 @@ Fechar a janela (no X) **não** encerra o Saga: ele continua na bandeja, perto d
 
 - Nem toda mensagem pede resposta. Quando a pessoa só manda "**obrigado**", "**ok**", "**valeu**", um **emoji** (👍 🙏) ou uma figurinha depois da sua resposta, o Saga tira a conversa de **Para responder** sozinho. A IA gratuita também avisa quando a mensagem é só informativa ou, num grupo, quando a conversa é entre os participantes e não com você. Na dúvida, a conversa fica na lista.
 - Essas conversas continuam em **Todos**, com a etiqueta cinza "**Não precisa responder**". Ao abrir, aparece "O Saga acha que esta conversa não precisa de resposta" e o motivo. Se ele errou, clique em **Precisa sim** e a conversa volta para a lista. Se ele acertou, clique em 👍.
-- O Saga deixou alguém na lista sem precisar? Clique em **Não precisa responder** (no alto da conversa, ou no ícone 💬✓ ao lado do nome, na lista **Para responder**) e escolha o motivo: "Era só agradecimento / ok / emoji", "Já respondi por outro meio (ligação, pessoalmente…)", "Mensagem de grupo que não é comigo", "Conversa encerrada" ou "Outro". A conversa sai da lista e o alerta "Esperando" some.
+- O Saga deixou alguém na lista sem precisar? Clique em **Não precisa responder** (no alto da conversa, ou no ícone 💬✓ ao lado do nome, na lista **Para responder**) e escolha o motivo: "Era só agradecimento / ok / emoji", "Respondi no grupo dele", "Respondi por ligação/pessoalmente", "Mensagem de grupo que não é comigo", "Conversa encerrada" ou "Outro". A conversa sai da lista e o alerta "Esperando" some.
 - Isso vale até a pessoa mandar outra mensagem: aí a conversa volta para a lista e o Saga olha de novo.
 - O alerta **Esperando** e os alertas "marcados por você" agora também têm 👍 e 👎. No Esperando, o 👍 diz "precisa mesmo responder" e o 👎 abre a mesma janela "Por que esta conversa não precisa de resposta?".
 - Tudo isso ensina o Saga. Em **Configurações → Qualidade dos alertas**, a linha **Para responder** mostra quantas conversas você tirou, quantas devolveu e a % de acerto do Saga; essas avaliações também vão na planilha exportada (tipo "para_responder").
+
+### Respondido no grupo do mentorado (versão 0.2.3)
+
+Cada mentorado costuma ter o próprio grupo, e é lá que você responde. O Saga agora entende isso sozinho:
+
+- Se a pessoa mandou mensagem no privado e **depois** disso você escreveu num grupo de que ela participa, a conversa sai de **Para responder** (e não ganha o alerta "Esperando").
+- Na lista **Todos**, a conversa aparece com a etiqueta "**respondido em** _nome do grupo_".
+- Ao abrir a conversa, aparece "**Respondido no grupo** _nome do grupo_ **às** _hora_". Clique no nome do grupo para abrir a conversa do grupo.
+- Se ainda precisa responder no privado, clique em **Precisa sim**: a conversa volta para a lista (e o Saga aprende com isso). Se estiver certo, clique em 👍.
+- O Saga sabe quem está em cada grupo pela lista de participantes (consultada uma vez por dia, só leitura) e por quem já escreveu no grupo. Logo depois de atualizar, a lista de participantes é buscada na primeira conexão.
+
+![Respondido no grupo](img/respondido-no-grupo.png)
+
+### Tema escuro (versão 0.2.3)
+
+Em **Configurações › Tema**, escolha **Automático (do Windows)** (o padrão: segue o modo claro/escuro do Windows), **Claro** ou **Escuro**. Para trocar rápido, use o botão de **sol/lua** na barra de cima, ao lado de **Configurações**. O QR Code continua em fundo branco para o celular conseguir ler.
+
+![Tema escuro](img/tema-escuro.png)
 
 ## 5. O que significa a faixa de cima
 
@@ -140,11 +158,19 @@ Se o passo do QR Code fica em "Preparando o QR Code…":
 
 ## 6. Atualizações
 
-Quando existe uma versão nova, aparece na faixa de cima:
+> **Importante (versão 0.2.3):** nas versões até a 0.2.2 o Saga quase nunca procurava atualizações (só uma vez ao iniciar e depois a cada 6 horas), por isso o aviso não aparecia. **Instale a 0.2.3 manualmente uma última vez** (baixe o `.exe` no link abaixo e instale por cima). A partir dela o aviso aparece sozinho.
+
+O Saga procura uma versão nova **30 segundos depois de abrir**, **a cada hora** (mesmo fechado na bandeja), **sempre que você abre a janela** e quando o computador **volta da suspensão**. Quando existe uma versão nova, aparece na faixa de cima (e também no assistente de configuração, se você estiver nele):
 
 ![Aviso de atualização](img/estado-atualizacao.png)
 
 Clique em **Atualizar**. O Saga baixa a versão nova e a instala **quando você fechar o Saga** (pelo ícone da bandeja › **Sair**). Se quiser instalar na hora, clique em **Reiniciar e atualizar**: o Saga fecha com cuidado, instala a versão nova e abre de novo. Se preferir, baixe o novo `.exe` em <https://github.com/caionorcia/saga/releases/latest> e instale por cima da versão antiga: suas conversas e configurações são mantidas.
+
+Em **Configurações › Atualizações** você vê a versão instalada, quando o Saga procurou pela última vez e o resultado ("você já está na versão mais nova", "nova versão disponível" ou o motivo de não ter conseguido verificar, por exemplo sem internet). O botão **Verificar agora** procura na hora.
+
+![Configurações › Atualizações](img/config-atualizacoes.png)
+
+Se o aviso não aparecer mesmo com uma versão nova publicada, clique em **Configurações › Diagnóstico › Copiar diagnóstico** e mande para o suporte: o registro mostra cada procura (`update_checking`, `update_available`, `update_not_available`, `update_error` com o motivo).
 
 ## 7. Privacidade
 

@@ -1,12 +1,13 @@
 // Tira as imagens do guia (docs/img) das telas do próprio app, usando a pré-visualização com dados de demonstração.
 // Uso: npm run preview:ui (em outro terminal) e NODE_PATH=<onde está o playwright> node scripts/make-guide-images.mjs
+// (CHROME_PATH=<chrome> para usar um navegador já instalado em vez do baixado pelo playwright)
 import { createRequire } from 'node:module'
 
 const { chromium } = createRequire(import.meta.url)('playwright')
 const BASE = 'http://127.0.0.1:5199/'
 const OUT = 'docs/img'
 
-const browser = await chromium.launch()
+const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {})
 const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 2, locale: 'pt-BR' })
 const page = await ctx.newPage()
 const shot = (name, opts = {}) => page.screenshot({ path: `${OUT}/${name}.png`, ...opts })
@@ -42,6 +43,27 @@ await page.getByRole('button', { name: 'Gerar novo QR Code' }).waitFor()
 await page.waitForTimeout(300)
 await shot('estado-vincular-de-novo')
 
+// respondido no grupo do mentorado (v0.2.3)
+await page.goto(BASE)
+await page.locator('.contact-name', { hasText: /^Beatriz Alves$/ }).click()
+await page.getByRole('region', { name: 'Para responder' }).waitFor()
+await page.waitForTimeout(500)
+await shot('respondido-no-grupo')
+
+// tema escuro (v0.2.3)
+await page.goto(`${BASE}?theme=dark`)
+await page.locator('.contact-main').first().click()
+await page.getByRole('button', { name: /Salvar/ }).first().waitFor()
+await page.waitForTimeout(500)
+await shot('tema-escuro')
+
+// configurações › atualizações (v0.2.3)
+await page.goto(BASE)
+await page.getByRole('button', { name: 'Configurações' }).click()
+await page.getByRole('button', { name: 'Verificar agora' }).click()
+await page.getByText(/você já está na versão mais nova/).waitFor()
+await page.getByRole('region', { name: 'Atualizações' }).screenshot({ path: `${OUT}/config-atualizacoes.png` })
+
 // faixa de estado
 const states = {
   'estado-conectado': {},
@@ -49,7 +71,7 @@ const states = {
   'estado-reconectando': { conn: 'waiting_retry' },
   'estado-vincule-novamente': { conn: 'stopped_logged_out' },
   'estado-pouco-espaco': { diskLow: true },
-  'estado-atualizacao': { update: { status: 'available', version: '0.2.0' } }
+  'estado-atualizacao': { update: { status: 'available', version: '0.2.4' } }
 }
 for (const [name, patch] of Object.entries(states)) {
   await page.goto(`${BASE}?state=${encodeURIComponent(JSON.stringify(patch))}`)

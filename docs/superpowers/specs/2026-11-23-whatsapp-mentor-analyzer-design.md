@@ -158,8 +158,8 @@ somente uma conversa veio com positivo e negativo?" (o "esperando" e os alertas 
   mesma mensagem. Registro: `classify … reply=yes|no` (nunca texto).
 - **"esperando":** só nasce para conversa com `needsReply`; se a decisão virar "não precisa", o ativo é resolvido.
 - **Correções do mentor:** "Não precisa responder" no cabeçalho da conversa e, em "Para responder", um ícone em cada
-  linha → diálogo "Por que esta conversa não precisa de resposta?" (Era só agradecimento / ok / emoji; Já respondi por
-  outro meio (ligação, pessoalmente…); Mensagem de grupo que não é comigo; Conversa encerrada; Outro — obrigatório) +
+  linha → diálogo "Por que esta conversa não precisa de resposta?" (Era só agradecimento / ok / emoji; Respondi no grupo
+  dele; Respondi por ligação/pessoalmente (v0.2.3; antes um só "Já respondi por outro meio"); Mensagem de grupo que não é comigo; Conversa encerrada; Outro — obrigatório) +
   texto opcional. Salvar: `user_needs = 0` para a última mensagem, sai da lista, "esperando" resolvido. Quando o Saga
   decidiu, a conversa mostra "O Saga acha que esta conversa não precisa de resposta: <motivo>" com 👍 ("O Saga acertou")
   e "Precisa sim" (devolve). Quando o mentor decidiu: "Você marcou que…" + "Precisa sim".
@@ -180,6 +180,62 @@ somente uma conversa veio com positivo e negativo?" (o "esperando" e os alertas 
 - **API:** `setNeedsReply(jid, needed, reason?)` (motivo obrigatório quando `false`) e `confirmNoReply(jid)`, com
   validação dos argumentos e checagem do remetente como as outras. Registro: `reply_feedback verdict=… reason=…`, sem
   texto nem jid.
+
+### Atualizações que não apareciam (v0.2.3, a pedido do mentor)
+
+Pedido: "O aviso não está aparecendo no app para atualizar para a nova versão" (ele instalava cada versão pelo GitHub).
+
+- **Investigação (descartado com evidência):** o `resources/app-update.yml` existe no instalador publicado (extraído do
+  `Saga-Setup-0.2.2.exe`: `provider: github, owner: caionorcia, repo: saga, releaseType: release`) e é gerado mesmo com
+  `--publish never`; os Releases são públicos, não são rascunho nem pré-lançamento, a tag é `vX.Y.Z`, o `latest.yml` está
+  em cada Release e o `releases/latest` aponta para a mais nova. O app empacotado (Electron 45, ESM) com um servidor
+  imitando o GitHub mostra "Nova versão disponível" no estado da interface; a barra de status desenha o aviso.
+- **Causa:** a procura só acontecia 30 s depois de o app iniciar e depois a cada 6 h. O Saga fica na bandeja (fechar a
+  janela só esconde) e abre com o Windows, então abrir a janela nunca procurava; com versões publicadas a 1–2 h umas das
+  outras e o mentor instalando à mão, a procura quase nunca rodava depois de uma versão nova. Uma falha (ex.: sem internet
+  logo depois de ligar o PC) esperava mais 6 h, e nada disso era visível.
+- **Correção:** estado puro (`updaterState.ts`: aviso + última procura, a partir dos eventos `checking-for-update`,
+  `update-available`, `update-not-available`, `error`, `download-progress`, `update-downloaded`), horários acima, cada
+  evento no registro de diagnóstico (`update_checking`, `update_available`, `update_not_available`, `update_error` com a
+  primeira linha do erro, `update_download_progress` a cada 25%, `update_downloaded`; versão nova, erro e baixada também
+  em "Eventos recentes"). `AppState.updateCheck {enabled, currentVersion, checking, lastCheckAt, lastResult, latestVersion,
+  lastError}`. Configurações › Atualizações: versão instalada, última procura e resultado, "Verificar agora"
+  (`checkForUpdates()`, sem argumentos, só da interface do app; devolve o resultado). O aviso também aparece no assistente
+  (com o progresso do download). CI: o release confere o `app-update.yml` no `win-unpacked` e usa `gh release create --latest`.
+- **Limite:** a correção só chega depois que o mentor instalar a 0.2.3 manualmente uma vez (as versões antigas continuam
+  procurando só a cada 6 h).
+
+### "Respondido no grupo" (v0.2.3, a pedido do mentor)
+
+Pedido: o motivo "Já respondi por outro meio" estava errado: "quer dizer que eu respondi no grupo dele. Isso é o padrão."
+Cada mentorado costuma ter o próprio grupo, onde o mentor responde.
+
+- **Participantes:** `group_members(group_jid, member_jid)` (schema v9), preenchida pela consulta só de leitura
+  `groupFetchAllParticipating` que já rodava pela fila (no máximo 1 vez por dia; chave nova `wa.groupMembersFetchedAt`,
+  então quem atualiza busca na primeira conexão). Cada participante entra com todas as formas conhecidas (telefone e @lid,
+  sem dispositivo; o par @lid→telefone é aprendido quando o participante traz os dois ou pelo mapeamento local). Quem já
+  mandou mensagem no grupo (`messages.sender_jid`) também conta. O registro só leva contagens.
+- **Regra:** conversa individual aguardando resposta, e o mentor escreveu num grupo de que o contato participa **depois**
+  da primeira mensagem sem resposta (`waitingSince`) → não está em "Para responder", não conta em `triage.awaiting` e não
+  ganha "esperando". `replyDecision = {needed: false, by: 'group', reason: 'Respondido no grupo <nome>', group: {jid,
+  name, ts}}` (vale a mensagem mais recente do mentor entre os grupos). Precedência: mentor > grupo > regra de
+  agradecimento/IA. Calculada na consulta (não é gravada), então some sozinha quando a espera muda.
+- **Interface:** conversa: "Respondido no grupo <nome> às HH:MM" (o nome abre o grupo), 👍 (`confirmNoReply`) e "Precisa
+  sim" (`setNeedsReply(jid, true)`, grava `reply_needed` com `app_source = 'group'`, ou seja, o Saga tinha tirado). Lista:
+  etiqueta "respondido em <grupo>".
+- **Motivos:** "Já respondi por outro meio" virou "Respondi no grupo dele" (`respondi_grupo`; as linhas `outro_meio` foram
+  migradas para ele) e "Respondi por ligação/pessoalmente" (`ligacao`). Os dois não viram exemplo para a IA. CSV com os
+  rótulos novos; em `detalhe`, "Saga (grupo): não precisa responder — Respondido no grupo <nome>".
+
+### Tema escuro (v0.2.3, a pedido do mentor)
+
+- Configurações › Tema: Automático (do Windows, padrão) / Claro / Escuro, salvo em `settings.theme` (processo principal).
+  Botão sol/lua na barra de cima ("Usar o tema escuro/claro") inverte o tema que está valendo.
+- CSS: todas as cores são tokens no `:root` com `light-dark()`; `color-scheme: light dark` (Automático segue
+  `prefers-color-scheme`), `<html data-theme="light|dark">` força. O processo principal aplica `nativeTheme.themeSource`
+  (moldura, barras de rolagem e `prefers-color-scheme`), a cor de fundo da janela, e passa o tema ao preload
+  (`--saga-theme=`) para a primeira pintura sair certa. Contraste AA conferido nos dois temas (texto, selos, alertas,
+  balões, avisos, nomes de quem mandou). O QR fica sempre em fundo branco com margem clara.
 
 ## Não-objetivos (v1)
 
@@ -252,7 +308,9 @@ reescrever (backend e frontend separados por API HTTP).
   depois em "Executar assim mesmo", e o guia de instalação mostra isso com
   imagens. Assinatura digital (paga) fica para depois, se incomodar.
 - **Atualizações:** o app avisa quando há versão nova e baixa com um clique
-  (necessário porque o WhatsApp muda e a biblioteca precisa acompanhar).
+  (necessário porque o WhatsApp muda e a biblioteca precisa acompanhar). Desde a v0.2.3: procura 30 s depois de abrir,
+  a cada 1 h (10 min depois de uma falha), ao mostrar/focar a janela e ao voltar da suspensão (se a última procura foi há
+  mais de 20 min) e em "Verificar agora" (Configurações › Atualizações). Ver "Atualizações que não apareciam (v0.2.3)".
 - **Iniciar com o Windows:** opcional, desligado por padrão, em Configurações.
 - **Transcrição (gratuita):** **Groq**, modelo `whisper-large-v3`, no plano
   gratuito (cadastro sem cartão). Limites do plano gratuito, a conferir no
@@ -382,6 +440,7 @@ trabalhar sempre em ritmo lento e cobrir tudo o que acontece no dia a dia
 ## Dados (esboço)
 
 - `contacts` (jid, nome, escondido, notas, é_grupo)
+- `group_members` (grupo, participante: telefone e @lid) — v0.2.3
 - `messages` (id, jid, de_mim, timestamp, tipo, texto, caminho_audio,
   transcricao, status_transcricao; em grupos: remetente, nome_remetente,
   menciona_mentor)
