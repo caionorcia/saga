@@ -7,7 +7,7 @@
  * - Nunca há telefone em claro do lado do Copiloto: só hashes vêm e vão.
  */
 import { DRAFT_ID_RE } from '../../shared/send'
-import { FOLLOWUP_LIMITS, type FollowupStatus } from '../../shared/copiloto'
+import { CONVO_LIMITS, FOLLOWUP_LIMITS, type ConvoGoal, type ConvoType, type FollowupStatus } from '../../shared/copiloto'
 import { chatKey, isRosterHash, phoneVariants, rosterHash } from './identity'
 
 export type FollowupTarget = { kind: 'individual'; phone_hashes: string[] } | { kind: 'group'; chat_key: string }
@@ -27,6 +27,20 @@ export interface PendingFollowup {
   autoSend: boolean
 }
 
+/**
+ * v0.10.0 (contrato v2): um follow-up de conversa (onboarding ou sumido): sem texto pronto; a IA conduz a conversa no
+ * grupo do mentorado rumo ao objetivo (`goal`), e o mentor confirma cada mensagem.
+ */
+export interface PendingConvo {
+  id: string
+  type: ConvoType
+  target: { kind: 'group'; chat_key: string }
+  author: string | null
+  /** epoch ms */
+  createdAt: number
+  goal: ConvoGoal
+}
+
 /** Hashes de telefone por follow-up: as duas formas de cada número (mais que isso é engano do servidor). */
 const MAX_HASHES = 20
 
@@ -42,10 +56,16 @@ function parseTarget(v: unknown): FollowupTarget | null {
   return null
 }
 
-/** Um item da fila; null se fora do contrato (fica de fora, sem quebrar os outros). */
+function parseAuthor(v: unknown): { ok: boolean; author: string | null } {
+  if (v !== null && v !== undefined && typeof v !== 'string') return { ok: false, author: null }
+  return { ok: true, author: typeof v === 'string' && v.trim() ? [...v.trim()].slice(0, FOLLOWUP_LIMITS.authorChars).join('') : null }
+}
+
+/** Um item da fila; null se fora do contrato (fica de fora, sem quebrar os outros). Só o avulso (v1.1 e v2). */
 export function parseFollowup(v: unknown): PendingFollowup | null {
-  const f = v as { id?: unknown; target?: unknown; text?: unknown; author?: unknown; created_at?: unknown; auto_send?: unknown } | null
+  const f = v as { id?: unknown; target?: unknown; text?: unknown; author?: unknown; created_at?: unknown; auto_send?: unknown; type?: unknown } | null
   if (!f || typeof f !== 'object') return null
+  if (f.type !== undefined && f.type !== 'avulso') return null
   // o id vira o id do rascunho da mensagem avulsa: precisa caber no formato dele (o uuid do Copiloto cabe)
   if (typeof f.id !== 'string' || !DRAFT_ID_RE.test(f.id)) return null
   const target = parseTarget(f.target)
@@ -53,36 +73,126 @@ export function parseFollowup(v: unknown): PendingFollowup | null {
   if (typeof f.text !== 'string') return null
   const text = f.text.trim()
   if (!text || [...text].length > FOLLOWUP_LIMITS.textChars) return null
-  if (f.author !== null && f.author !== undefined && typeof f.author !== 'string') return null
-  const author = typeof f.author === 'string' && f.author.trim() ? [...f.author.trim()].slice(0, FOLLOWUP_LIMITS.authorChars).join('') : null
+  const a = parseAuthor(f.author)
+  if (!a.ok) return null
   if (typeof f.created_at !== 'string') return null
   const createdAt = Date.parse(f.created_at)
   if (!Number.isFinite(createdAt)) return null
-  return { id: f.id, target, text, author, createdAt, autoSend: f.auto_send === true }
+  // v2: avulso pode vir sem `auto_send` → false (só `true` liga)
+  return { id: f.id, target, text, author: a.author, createdAt, autoSend: f.auto_send === true }
+}
+
+/** Texto curto de uma linha (pendência, observação), cortado no limite; vazio → null. */
+function oneText(v: unknown, max: number): string | null {
+  if (typeof v !== 'string') return null
+  const t = v.replace(/\s+/g, ' ').trim()
+  return t ? [...t].slice(0, max).join('') : null
+}
+
+/** O link da agenda: só https, sem usuário/senha, até 500 caracteres. */
+export function parseLink(v: unknown): string | null | undefined {
+  if (v === null || v === undefined) return null
+  if (typeof v !== 'string' || v.length > CONVO_LIMITS.linkChars) return undefined
+  try {
+    const u = new URL(v.trim())
+    if (u.protocol !== 'https:' || !u.hostname || u.username || u.password) return undefined
+    return v.trim()
+  } catch {
+    return undefined
+  }
+}
+
+/** O `goal` do onboarding/sumido; null se fora do contrato. Cadência ausente → a padrão do tipo. */
+export function parseGoal(v: unknown, type: ConvoType): ConvoGoal | null {
+  const g = v as { pending_items?: unknown; scheduling_link?: unknown; note?: unknown; cadence_days?: unknown; send_mode?: unknown } | null
+  if (!g || typeof g !== 'object' || Array.isArray(g)) return null
+  let pendingItems: string[] = []
+  if (g.pending_items !== undefined && g.pending_items !== null) {
+    if (!Array.isArray(g.pending_items) || g.pending_items.length > CONVO_LIMITS.itemsMax) return null
+    const items = g.pending_items.map((x) => oneText(x, CONVO_LIMITS.itemChars))
+    if (items.some((x) => x === null)) return null
+    pendingItems = [...new Set(items as string[])]
+  }
+  // sumido: sem pendências (o objetivo é a reunião)
+  if (type === 'sumido') pendingItems = []
+  const link = parseLink(g.scheduling_link)
+  if (link === undefined) return null
+  if (g.note !== undefined && g.note !== null && typeof g.note !== 'string') return null
+  const note = oneText(g.note, CONVO_LIMITS.noteChars)
+  let cadenceDays: number[] = type === 'sumido' ? [...CONVO_LIMITS.sumidoCadence] : [...CONVO_LIMITS.onboardingCadence]
+  if (g.cadence_days !== undefined && g.cadence_days !== null) {
+    const c = g.cadence_days
+    if (!Array.isArray(c) || c.length === 0 || c.length > CONVO_LIMITS.cadenceMax) return null
+    if (!c.every((d, i) => Number.isInteger(d) && d >= 0 && d <= CONVO_LIMITS.cadenceDayMax && (i === 0 || d > (c[i - 1] as number)))) return null
+    cadenceDays = c as number[]
+  }
+  // "auto" é para depois: por enquanto cada mensagem espera a confirmação (o valor fica guardado só para contar)
+  const sendMode = g.send_mode === 'auto' ? 'auto' : 'confirm'
+  return { pendingItems, schedulingLink: link, note, cadenceDays, sendMode }
+}
+
+/** Um onboarding/sumido da fila v2; null se fora do contrato. Sempre no grupo do mentorado. */
+export function parseConvo(v: unknown): PendingConvo | null {
+  const f = v as { id?: unknown; type?: unknown; target?: unknown; text?: unknown; author?: unknown; created_at?: unknown; goal?: unknown } | null
+  if (!f || typeof f !== 'object') return null
+  if (f.type !== 'onboarding' && f.type !== 'sumido') return null
+  if (typeof f.id !== 'string' || !DRAFT_ID_RE.test(f.id)) return null
+  const target = parseTarget(f.target)
+  if (!target || target.kind !== 'group') return null
+  if (f.text !== null && f.text !== undefined && typeof f.text !== 'string') return null
+  const a = parseAuthor(f.author)
+  if (!a.ok) return null
+  if (typeof f.created_at !== 'string') return null
+  const createdAt = Date.parse(f.created_at)
+  if (!Number.isFinite(createdAt)) return null
+  const goal = parseGoal(f.goal, f.type)
+  if (!goal) return null
+  return { id: f.id, type: f.type, target, author: a.author, createdAt, goal }
+}
+
+/** O pedido do `followups_pending`: com `accepts`, o Copiloto responde no formato v2 (onboarding e sumido). */
+export const PENDING_REQUEST = JSON.stringify({ version: 1, action: 'followups_pending', accepts: ['onboarding', 'sumido'] })
+
+/** O que uma resposta do `followups_pending` traz, já conferido. */
+export interface ParsedPending {
+  items: PendingFollowup[]
+  convos: PendingConvo[]
+  invalid: number
+  /** v1.2.1 `cancelled_ids` e v2 `stopped`, juntos e sem repetição */
+  cancelledIds: string[]
+  version: 1 | 2
 }
 
 /**
- * A resposta do `followups_pending`: `{ version: 1, followups: [...] }`. Envelope fora do contrato → null; itens fora
- * do contrato ficam de fora (contados em `invalid`). Ids repetidos na mesma resposta: vale o primeiro.
+ * A resposta do `followups_pending`: `{ version: 1, followups: [...] }` (v1.1: só avulso) ou `{ version: 2, followups,
+ * stopped }`. Envelope fora do contrato → null; itens fora do contrato ficam de fora (contados em `invalid`). Ids
+ * repetidos na mesma resposta: vale o primeiro.
  */
-export function parsePending(body: unknown): { items: PendingFollowup[]; invalid: number; cancelledIds: string[] } | null {
-  const b = body as { version?: unknown; followups?: unknown; cancelled_ids?: unknown } | null
-  if (!b || typeof b !== 'object' || b.version !== 1 || !Array.isArray(b.followups)) return null
+export function parsePending(body: unknown): ParsedPending | null {
+  const b = body as { version?: unknown; followups?: unknown; cancelled_ids?: unknown; stopped?: unknown } | null
+  if (!b || typeof b !== 'object' || (b.version !== 1 && b.version !== 2) || !Array.isArray(b.followups)) return null
+  const v2 = b.version === 2
   const items: PendingFollowup[] = []
+  const convos: PendingConvo[] = []
   const seen = new Set<string>()
   let invalid = 0
   // o servidor manda no máximo 50; mais que isso, o resto vem na próxima busca
   for (const raw of b.followups.slice(0, FOLLOWUP_LIMITS.pendingMax * 2)) {
-    const f = parseFollowup(raw)
+    const type = (raw as { type?: unknown } | null)?.type
+    // v1.1 não tem `type`; na v2, um tipo que não conhecemos fica de fora
+    const isConvo = v2 && (type === 'onboarding' || type === 'sumido')
+    const f = isConvo ? parseConvo(raw) : !v2 || type === 'avulso' || type === undefined ? parseFollowup(raw) : null
     if (!f) {
       invalid++
       continue
     }
     if (seen.has(f.id)) continue
     seen.add(f.id)
-    items.push(f)
+    if (isConvo) convos.push(f as PendingConvo)
+    else items.push(f as PendingFollowup)
   }
-  return { items, invalid, cancelledIds: parseCancelled(b.cancelled_ids) }
+  const cancelledIds = [...new Set([...parseCancelled(b.cancelled_ids), ...(v2 ? parseCancelled(b.stopped) : [])])]
+  return { items, convos, invalid, cancelledIds, version: v2 ? 2 : 1 }
 }
 
 /** v1.2.1: no máximo 200 ids cancelados por resposta. */

@@ -125,6 +125,11 @@ export interface WhatsAppClientDeps {
    * follow-up só sai se a opção e a integração continuam ligadas). Devolve o motivo para não enviar, ou null.
    */
   sendGuard?: (s: SendRow) => string | null
+  /**
+   * v0.10.0: a regra dos 30 dias não vale para este envio (o rascunho de um follow-up de conversa no grupo do
+   * mentorado, grupo de que o mentor participa e com mensagens dele guardadas). Todas as outras travas continuam.
+   */
+  recentContactExempt?: (s: SendRow) => boolean
 }
 
 /** outro envio ainda em andamento: este espera 15 s, sem gastar tentativa (o envio expira se passar de 10 min na fila) */
@@ -1028,6 +1033,18 @@ export class WhatsAppClient extends EventEmitter {
     return this.lidToPn.get(lid) ?? null
   }
 
+  /**
+   * v0.10.0: o mentor está entre os participantes conhecidos do grupo? null = não dá para saber (participantes ainda
+   * não consultados, ou a conta ainda sem identificação). Sem rede.
+   */
+  isSelfInGroup(groupJid: string): boolean | null {
+    const me = this.auth?.state.creds.me as { id?: string; lid?: string } | undefined
+    const own = [me?.id, me?.lid].filter((j): j is string => typeof j === 'string' && j.includes('@')).map(stripDevice)
+    if (own.length === 0 || !this.deps.repo.hasGroupMembership(groupJid)) return null
+    const members = new Set(this.deps.repo.groupMembers(groupJid).map(stripDevice))
+    return own.some((j) => members.has(j))
+  }
+
   /** `@lid` → telefone quando conhecido (mapa do histórico/eventos, depois o armazenamento local do Baileys). */
   private async resolveJid(jid: string): Promise<string> {
     if (!jid.endsWith('@lid')) return jid
@@ -1611,7 +1628,13 @@ export class WhatsAppClient extends EventEmitter {
     if (signal?.aborted) return fail(['queued'], 'tempo esgotado antes de enviar')
     const messages = repo.listMessages(s.jid, 300)
     // responder, nunca iniciar conversa
-    if (!hasRecentContactMessage(messages, clock.now())) return fail(['queued'], 'sem mensagem do contato nos últimos 30 dias')
+    let exempt = false
+    try {
+      exempt = this.deps.recentContactExempt?.(s) === true
+    } catch {
+      exempt = false
+    }
+    if (!exempt && !hasRecentContactMessage(messages, clock.now())) return fail(['queued'], 'sem mensagem do contato nos últimos 30 dias')
     // a citação é a que o mentor viu na confirmação; se ela sumiu, vai sem citação
     // (a mensagem avulsa nunca cita, nem em grupo)
     const quoteRow = s.quotedId && s.kind !== 'avulsa' ? repo.getMessage(s.quotedId) : null

@@ -8,6 +8,7 @@ import { SendRepo } from './sendRepo'
 import { BackupRepo } from './backupRepo'
 import { CopilotoRepo } from './copilotoRepo'
 import { FollowupRepo } from './followupRepo'
+import { ConvoRepo } from './convoRepo'
 import { recentSince } from '../recent'
 import type { GroupAnswer, ReasonCode, ReplyDecision, ReplyDecisionSource, ReplyReasonCode, ReplyVerdict, Verdict } from '../../shared/feedback'
 
@@ -442,6 +443,8 @@ export class Repo {
   readonly copiloto: CopilotoRepo
   /** follow-ups do Copiloto (v0.7.0) */
   readonly followups: FollowupRepo
+  /** follow-ups de conversa: onboarding e sumido (v0.10.0) */
+  readonly convos: ConvoRepo
 
   constructor(
     private readonly db: DatabaseSync,
@@ -452,6 +455,7 @@ export class Repo {
     this.backup = new BackupRepo(db)
     this.copiloto = new CopilotoRepo(db, clock)
     this.followups = new FollowupRepo(db, clock)
+    this.convos = new ConvoRepo(db, clock)
   }
 
   // --- contatos ---
@@ -687,6 +691,11 @@ export class Repo {
   }
 
   /** v0.8.1: já se sabe quem participa deste grupo (alguma consulta trouxe os participantes)? */
+  /** v0.10.0: há alguma mensagem do mentor guardada nesta conversa (de qualquer data)? */
+  hasMentorMessage(jid: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM messages WHERE jid = ? AND from_me = 1 LIMIT 1').get(jid)
+  }
+
   hasGroupMembership(groupJid: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM group_sizes WHERE group_jid = ?').get(groupJid)
   }

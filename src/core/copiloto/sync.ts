@@ -26,13 +26,13 @@ import {
   type CopilotoStatus,
   type CopilotoTestResult
 } from '../../shared/copiloto'
-import { FOLLOWUP_LIMITS, FOLLOWUP_REASON, type FollowupStatus } from '../../shared/copiloto'
+import { CONVO_TEST, FOLLOWUP_LIMITS, FOLLOWUP_REASON, type FollowupStatus } from '../../shared/copiloto'
 import { SEND_ACTIVE } from '../../shared/send'
 import { findSentEcho } from '../send/logic'
 import type { FollowupRow } from '../db/followupRepo'
 import { EventBuilder, serialize } from './events'
-import { parsePending, resolveTarget, shortReason, type FollowupUpdate, type PendingFollowup } from './followups'
-import { generateCode, isRosterHash, messageEventId, phoneOfJid } from './identity'
+import { PENDING_REQUEST, parsePending, resolveTarget, shortReason, type FollowupUpdate, type ParsedPending, type PendingConvo, type PendingFollowup } from './followups'
+import { generateCode, inRoster, isRosterHash, messageEventId, phoneOfJid } from './identity'
 import { mayHaveOlder, runView, localDayStart as localDay } from '../wa/groupHistory'
 import { COPILOTO_SEARCH_LIMITS, parseSearchPending, runCopilotoSearch } from './search'
 
@@ -90,8 +90,20 @@ export const COPILOTO_KEYS = {
   /** v0.8.3: até quando (epoch ms) os follow-ups recebidos ficam para a confirmação, por causa de um histórico importado */
   autoHoldUntil: 'copiloto.autoHoldUntil',
   /** v0.9.0: pesquisas do Copiloto respondidas (JSON `{day, count, lastAt}`: só contagens, nunca o texto procurado) */
-  searchStats: 'copiloto.searchStats'
+  searchStats: 'copiloto.searchStats',
+  /** v0.10.0: "Modo de teste dos follow-ups" ligado até (epoch ms) */
+  followupTestUntil: 'copiloto.followupTestUntil'
 } as const
+
+/** v0.10.0: no modo de teste, a busca de follow-ups roda a cada minuto (a cadência anda de 2 em 2 min). */
+const TEST_POLL_MS = 60_000
+
+/** v0.10.0: quem cuida das conversas de follow-up (onboarding/sumido): o motor do serviço. */
+export interface ConvoHandler {
+  deliver(p: PendingConvo, jid: string | null): 'new' | 'updated' | null
+  stop(id: string, why: 'cancelled' | 'duplicate'): boolean
+  onReportResult(convoId: string, result: string): void
+}
 
 const K = COPILOTO_KEYS
 
@@ -155,9 +167,39 @@ export class CopilotoSync {
   /** pedidos já respondidos (ou cancelados) há pouco: vindo de novo, não são refeitos */
   private searchAnswered = new Map<string, number>()
 
+  private convos: ConvoHandler | null = null
+  private convoReportFailures = 0
+
   constructor(private readonly deps: CopilotoSyncDeps) {
     this.repo = deps.repo
     this.lastSearchPollAt = deps.clock.now()
+  }
+
+  /** v0.10.0: o motor das conversas de follow-up (criado depois, no serviço). */
+  setConvoHandler(h: ConvoHandler): void {
+    this.convos = h
+  }
+
+  /** v0.10.0: "Modo de teste dos follow-ups" ligado agora? (desliga sozinho depois de 2 h) */
+  followupTestOn(): boolean {
+    const until = Number(this.repo.getSetting(K.followupTestUntil) ?? 0) || 0
+    return until > this.deps.clock.now()
+  }
+
+  followupTestUntil(): number | null {
+    const until = Number(this.repo.getSetting(K.followupTestUntil) ?? 0) || 0
+    return until > this.deps.clock.now() ? until : null
+  }
+
+  /**
+   * v0.10.0: o remetente (JID de pessoa, ou @lid com telefone conhecido) é mentorado ou segunda cadeira? Pelo roster
+   * (hashes); sem roster, ninguém é.
+   */
+  isMenteeSender(senderJid: string | null): boolean {
+    if (!senderJid) return false
+    const set = this.rosterSet()
+    const phone = this.phoneOf(senderJid)
+    return !!set && !!phone && inRoster(phone, set)
   }
 
   // --- configurações ---
@@ -259,7 +301,9 @@ export class CopilotoSync {
       groupRepairPending: this.repo.getSetting(K.groupRepairPending) === '1',
       groupHistory: this.groupHistory(),
       historyFetch: runView(this.repo, this.deps.clock.now()),
-      searches: this.searchStats()
+      searches: this.searchStats(),
+      followupTestUntil: this.followupTestUntil(),
+      convosActive: this.repo.convos.activeCount()
     }
   }
 
@@ -347,6 +391,14 @@ export class CopilotoSync {
 
   /** Liga/desliga e o endereço. Ligar exige endereço e código; desligar apaga a fila local. */
   save(patch: CopilotoPatch): CopilotoSaveResult {
+    if (patch.followupTest !== undefined && patch.followupTest !== this.followupTestOn()) {
+      if (patch.followupTest) this.repo.setSetting(K.followupTestUntil, String(this.deps.clock.now() + CONVO_TEST.durationMs))
+      else this.repo.deleteSetting(K.followupTestUntil)
+      this.repo.logEvent('copiloto_test', patch.followupTest ? 'modo de teste dos follow-ups ligado (2 h)' : 'modo de teste dos follow-ups desligado')
+      // a próxima busca já sai no ritmo novo
+      this.followupPollAt = 0
+      this.deps.onFollowups?.()
+    }
     if (patch.autoFollowups !== undefined && patch.autoFollowups !== this.autoFollowups()) {
       if (patch.autoFollowups) {
         this.repo.setSetting(K.autoFollowups, '1')
@@ -387,6 +439,7 @@ export class CopilotoSync {
       this.repo.copiloto.clearAll()
       this.searchOut.clear()
       this.repo.followups.clearAll()
+      this.repo.convos.clearAll()
       this.deps.onFollowups?.()
       this.repo.deleteSetting(K.roster)
       this.repo.deleteSetting(K.lastError)
@@ -500,6 +553,7 @@ export class CopilotoSync {
         this.repo.logEvent('copiloto_roster', `${r.phones.length} telefone(s) de mentorados; ${this.repo.copiloto.chatCount()} conversa(s)`)
         this.repo.copiloto.pruneDone(now - COPILOTO_LIMITS.keepDoneMs)
         this.repo.followups.prune(now - COPILOTO_LIMITS.keepDoneMs)
+        this.repo.convos.prune(now - COPILOTO_LIMITS.keepDoneMs)
       } else if (r.auth) {
         return null
       } else {
@@ -545,7 +599,8 @@ export class CopilotoSync {
     }
     const next = this.repo.copiloto.nextDueAt()
     const nextReport = this.repo.followups.nextReportAt()
-    const nextAt = Math.min(next ?? Infinity, nextReport ?? Infinity, this.followupPollAt, this.searchPollAt, this.nextSearchOutAt())
+    const nextConvo = this.repo.convos.nextReportAt()
+    const nextAt = Math.min(next ?? Infinity, nextReport ?? Infinity, nextConvo ?? Infinity, this.followupPollAt, this.searchPollAt, this.nextSearchOutAt())
     return Math.min(COPILOTO_LIMITS.idleMs, Math.max(nextAt - now, COPILOTO_LIMITS.gapMs))
   }
 
@@ -1003,9 +1058,12 @@ export class CopilotoSync {
   private async followupReports(url: string, code: string, now: number, wait: number): Promise<number | null | undefined> {
     this.reconcileFollowups()
     const reports = this.repo.followups.dueReports(now, FOLLOWUP_LIMITS.updatesMax)
-    if (reports.length === 0) return undefined
+    // v0.10.0: os relatórios das conversas (running, responded, finais) vão num pedido à parte, na ordem
+    const convo = reports.length === 0 ? this.repo.convos.dueReports(now, FOLLOWUP_LIMITS.updatesMax) : []
+    if (reports.length === 0 && convo.length === 0) return undefined
     if (wait > 0) return wait
-    await this.sendFollowupUpdates(url, code, reports)
+    if (reports.length) await this.sendFollowupUpdates(url, code, reports)
+    else await this.sendConvoUpdates(url, code, convo)
     if (this.repo.getSetting(K.authFailed) === '1') return null
     return Math.max(this.nextRequestAt - this.deps.clock.now(), COPILOTO_LIMITS.gapMs)
   }
@@ -1032,7 +1090,7 @@ export class CopilotoSync {
 
   /** `{action: "followups_pending"}`: guarda os novos (dedupe pelo id), já com a conversa local. */
   private async pollFollowups(url: string, code: string): Promise<void> {
-    const r = await this.post(url, code, JSON.stringify({ version: 1, action: 'followups_pending' }))
+    const r = await this.post(url, code, PENDING_REQUEST)
     const now = this.deps.clock.now()
     this.nextRequestAt = now + COPILOTO_LIMITS.gapMs
     if (r.kind === 'http' && r.status === 401) {
@@ -1049,20 +1107,38 @@ export class CopilotoSync {
       return
     }
     this.followupFailures = 0
-    this.followupPollAt = now + FOLLOWUP_LIMITS.pollEveryMs
+    this.followupPollAt = now + (this.followupTestOn() ? TEST_POLL_MS : FOLLOWUP_LIMITS.pollEveryMs)
     this.storePending(parsed)
   }
 
   /** Guarda o que uma resposta do `followups_pending` trouxe: os cancelados saem, os novos entram. */
-  private storePending(parsed: NonNullable<ReturnType<typeof parsePending>>): void {
+  private storePending(parsed: ParsedPending): void {
     const cancelled = this.applyCancelled(parsed.cancelledIds)
     const fresh = parsed.items.filter((f) => !this.repo.followups.has(f.id))
     let added = 0
     let notFound = 0
+    let chatsCache: Array<{ jid: string; isGroup: boolean; lastTs: number | null }> | null = null
+    const chats = () => (chatsCache ??= this.repo.listContacts({ includeHidden: true }).map((c) => ({ jid: c.jid, isGroup: c.isGroup, lastTs: c.lastTs })))
+    // v0.10.0 (contrato v2): onboarding e sumido viram conversas (nova, ou o objetivo atualizado)
+    if (this.convos && parsed.convos.length > 0) {
+      let fresh2 = 0
+      let updated = 0
+      let auto = 0
+      for (const c of parsed.convos) {
+        if (this.repo.followups.has(c.id) || parsed.cancelledIds.includes(c.id)) continue
+        if (c.goal.sendMode === 'auto') auto++
+        const known = this.repo.convos.has(c.id)
+        const r = this.convos.deliver(c, known ? null : resolveTarget(c.target, chats(), (j) => this.phoneOf(j)))
+        if (r === 'new') fresh2++
+        else if (r === 'updated') updated++
+      }
+      // send_mode "auto" é para depois: por enquanto cada mensagem espera a confirmação (só a contagem fica no registro)
+      if (fresh2 || updated || auto) this.diag('copiloto_convos', `recebidas=${parsed.convos.length} novas=${fresh2} atualizadas=${updated} auto_como_confirmacao=${auto}`)
+      if (fresh2 || updated) this.followupsChanged()
+    }
     if (fresh.length > 0) {
-      const chats = this.repo.listContacts({ includeHidden: true }).map((c) => ({ jid: c.jid, isGroup: c.isGroup, lastTs: c.lastTs }))
       for (const f of fresh) {
-        const jid = resolveTarget(f.target, chats, (j) => this.phoneOf(j))
+        const jid = resolveTarget(f.target, chats(), (j) => this.phoneOf(j))
         if (this.storeFollowup(f, jid)) {
           added++
           if (!jid) notFound++
@@ -1082,6 +1158,11 @@ export class CopilotoSync {
   private applyCancelled(ids: ReadonlyArray<string>): number {
     let n = 0
     for (const id of ids) {
+      // v0.10.0: `stopped` de uma conversa de follow-up: para já
+      if (this.repo.convos.has(id)) {
+        if (this.convos?.stop(id, 'cancelled')) n++
+        continue
+      }
       const f = this.repo.followups.get(id)
       if (!f) continue
       if (f.status === 'sending' && f.sendId !== null) {
@@ -1107,7 +1188,7 @@ export class CopilotoSync {
       if (!this.enabled() || !url || !code || this.repo.getSetting(K.authFailed) === '1') return 'unavailable'
       const wait = Math.min(this.nextRequestAt - this.deps.clock.now(), COPILOTO_LIMITS.gapMs)
       if (wait > 0) await new Promise((r) => setTimeout(r, wait))
-      const r = await this.post(url, code, JSON.stringify({ version: 1, action: 'followups_pending' }))
+      const r = await this.post(url, code, PENDING_REQUEST)
       this.nextRequestAt = this.deps.clock.now() + COPILOTO_LIMITS.gapMs
       if (r.kind === 'http' && r.status === 401) {
         this.authFailed('follow-ups')
@@ -1240,5 +1321,59 @@ export class CopilotoSync {
       st
     )
     this.repo.logEvent('copiloto_error', `follow-ups: status=${st} relatórios=${rows.length} tentativa=${this.reportFailures} nova tentativa em ${Math.round(delay / 60_000)} min`)
+  }
+
+  /**
+   * v0.10.0: `{action: "followup_update"}` das conversas (contrato v2). 200: cada item está feito; `cancelled` e
+   * `duplicate` param a conversa (a equipe parou, ou o Copiloto já tem um final); `invalid` não volta. 400: o lote fica
+   * feito como inválido. 429, 5xx, rede: espera crescente (os mesmos itens, na mesma ordem).
+   */
+  private async sendConvoUpdates(url: string, code: string, rows: ReturnType<Repo['convos']['dueReports']>): Promise<void> {
+    const body = JSON.stringify({ version: 1, action: 'followup_update', updates: rows.map((r) => r.payload) })
+    const r = await this.post(url, code, body)
+    const now = this.deps.clock.now()
+    this.nextRequestAt = now + COPILOTO_LIMITS.gapMs
+    if (r.kind === 'http' && r.status === 401) {
+      this.authFailed('follow-ups')
+      return
+    }
+    if (r.kind === 'http' && (r.status === 200 || r.status === 400)) {
+      // vários relatórios da mesma conversa no lote: o Copiloto responde um por item, na ordem
+      const results: Array<{ id: string; status: string }> = []
+      const list = r.status === 200 ? (r.body as { results?: unknown } | null)?.results : null
+      if (Array.isArray(list)) {
+        for (const x of list) {
+          const o = x as { id?: unknown; status?: unknown }
+          if (typeof o?.id === 'string' && typeof o.status === 'string') results.push({ id: o.id, status: o.status.slice(0, 32) })
+        }
+      }
+      const counts = new Map<string, number>()
+      const stop = new Map<string, string>()
+      for (const row of rows) {
+        let res = 'invalid'
+        if (r.status === 200) {
+          const i = results.findIndex((x) => x.id === row.convoId)
+          res = i >= 0 ? results.splice(i, 1)[0].status : 'sem_status'
+        }
+        counts.set(res, (counts.get(res) ?? 0) + 1)
+        this.repo.convos.markReportDone(row.seq, res)
+        if (res === 'cancelled' || res === 'duplicate') stop.set(row.convoId, res)
+      }
+      this.convoReportFailures = 0
+      this.diag('copiloto_convos', `relatorio status=${r.status} itens=${rows.length} ${[...counts].map(([k, n]) => `${k}=${n}`).join(' ')}`)
+      if (r.status === 400) this.repo.logEvent('copiloto_error', `follow-ups de conversa: status=400 relatórios=${rows.length} marcados como inválidos`)
+      for (const [id, res] of stop) this.convos?.onReportResult(id, res)
+      if (stop.size) this.followupsChanged()
+      return
+    }
+    this.convoReportFailures++
+    const delay = this.backoff(this.convoReportFailures)
+    const st = r.kind === 'network' ? 'network' : String(r.status)
+    this.repo.convos.retryReports(
+      rows.map((x) => x.seq),
+      now + delay,
+      st
+    )
+    this.repo.logEvent('copiloto_error', `follow-ups de conversa: status=${st} relatórios=${rows.length} tentativa=${this.convoReportFailures} nova tentativa em ${Math.round(delay / 60_000)} min`)
   }
 }

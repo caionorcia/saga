@@ -57,7 +57,7 @@ describe('follow-ups: leitura da fila do Copiloto', () => {
   })
 
   it('envelope: version 1 e a lista; ids repetidos valem uma vez; inválidos contados', () => {
-    expect(parsePending({ version: 2, followups: [] })).toBeNull()
+    expect(parsePending({ version: 3, followups: [] })).toBeNull()
     expect(parsePending({ version: 1 })).toBeNull()
     expect(parsePending(null)).toBeNull()
     const r = parsePending({ version: 1, followups: [item(F1, individual([ANA_PHONE])), item(F1, individual([ANA_PHONE]), 'outro'), { id: F2 }] })
@@ -189,7 +189,7 @@ describe('follow-ups: busca, relatórios e cancelamento (fila do Copiloto)', () 
   it('ao ligar busca os follow-ups (na mesma fila, com o código) e guarda com a conversa local; sem conversa → "conversa_nao_encontrada"', async () => {
     await run(6)
     expect(of('followups_pending')).toHaveLength(1)
-    expect(of('followups_pending')[0].body).toEqual({ version: 1, action: 'followups_pending' })
+    expect(of('followups_pending')[0].body).toEqual({ version: 1, action: 'followups_pending', accepts: ['onboarding', 'sumido'] })
     expect(fu(F1)).toMatchObject({ jid: ANA, status: 'waiting', text: 'Oi! Como foi a semana?', author: 'Equipe · Fulana' })
     expect(fu(F2)).toMatchObject({ jid: G_ANA, status: 'waiting' })
     expect(fu(F3)).toMatchObject({ jid: null, status: 'failed', reason: 'conversa_nao_encontrada' })

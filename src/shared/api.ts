@@ -20,7 +20,7 @@ import type {
 } from './backup'
 import type { PrepareSendInput, PrepareSendResult, SendAvulsaInput, SendKind, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView } from './send'
 import type { SendHoursInfo, SendSchedule } from './sendHours'
-import type { CopilotoCodeResult, CopilotoPatch, CopilotoRepairResult, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult, FollowupOpenResult, FollowupStatus, FollowupView } from './copiloto'
+import type { CopilotoCodeResult, CopilotoPatch, CopilotoRepairResult, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult, FollowupOpenResult, FollowupStatus, FollowupView, ConvoAction, ConvoActionResult, ConvoView } from './copiloto'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
 export type { ConnState, QueueStats, Provider, TranscriberKind, KeyKind, ContactKind, AlertKind, ThemePref }
@@ -30,7 +30,7 @@ export type { SearchFilters, SearchResult, SearchSummaryResult }
 export type { AutoBackupPatch, BackupExportOptions, BackupExportResult, BackupOpenResult, BackupRestoreMode, BackupRestoreResult, BackupStatus }
 export type { PrepareSendInput, PrepareSendResult, SendAvulsaInput, SendKind, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView }
 export type { SendHoursInfo, SendSchedule }
-export type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult, FollowupOpenResult, FollowupStatus, FollowupView }
+export type { CopilotoCodeResult, CopilotoPatch, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult, FollowupOpenResult, FollowupStatus, FollowupView, ConvoAction, ConvoActionResult, ConvoView }
 export { ALERT_KINDS }
 
 /** Valores aceitos pelo filtro de `listContacts`. */
@@ -111,6 +111,8 @@ export interface AppState {
    * (clique abre Configurações › Envio direto). null/ausente = dentro do horário, sem horário ou envio desligado
    */
   sendHours?: SendHoursInfo | null
+  /** v0.10.0: modo de teste dos follow-ups ligado até (epoch ms): a interface mostra a faixa de aviso */
+  followupTestUntil?: number | null
   /** o início do app falhou (mensagem curta, sem dados sensíveis): mostrar com "Tentar de novo" (`manualReconnect`) */
   startError?: string
 }
@@ -372,6 +374,12 @@ export interface SagaApi {
   followupOpen(id: string): Promise<FollowupOpenResult>
   /** "Recusar": motivo opcional (até 200 caracteres); sem motivo vai `recusado_pelo_mentor` */
   followupDecline(id: string, reason: string | null): Promise<boolean>
+
+  // --- v0.10.0: follow-ups de conversa (onboarding/sumido): a IA escreve, o mentor confirma cada mensagem ---
+  /** as conversas em andamento (e, por algumas horas, as encerradas); avisos em `onFollowupsChanged` */
+  listConvos(): Promise<ConvoView[]>
+  /** um botão do cartão (Enviar, Pular, Encerrar, Reunião marcada, pendência cumprida…) */
+  convoAction(id: string, action: ConvoAction): Promise<ConvoActionResult>
 }
 
 /** Métodos chamados por `ipcRenderer.invoke('saga:<nome>')`. */
@@ -440,7 +448,9 @@ export const INVOKE_METHODS = [
   'copilotoFetchGroupHistory',
   'listFollowups',
   'followupOpen',
-  'followupDecline'
+  'followupDecline',
+  'listConvos',
+  'convoAction'
 ] as const satisfies ReadonlyArray<keyof SagaApi>
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]

@@ -23,7 +23,7 @@ import type {
   SettingsView
 } from '../../../shared/api'
 import { NOT_CONFIRMED_TEXT, SEND_LIMITS, SEND_REFUSAL_TEXT } from '../../../shared/send'
-import { COPILOTO_TEXT, FOLLOWUP_LIMITS, FOLLOWUP_REASON, FOLLOWUP_TEXT, isCopilotoUrl, type CopilotoStatus, type FollowupView } from '../../../shared/copiloto'
+import { COPILOTO_TEXT, CONVO_TEST, FOLLOWUP_LIMITS, FOLLOWUP_REASON, FOLLOWUP_TEXT, isCopilotoUrl, type ConvoView, type CopilotoStatus, type FollowupView } from '../../../shared/copiloto'
 
 export const DEFAULT_STATE: AppState = {
   conn: 'open',
@@ -97,6 +97,11 @@ export interface FakeOptions {
    * "Transcrever") e o Copiloto aparece ligado com pesquisas respondidas hoje; padrão: desligado
    */
   oldHistory?: boolean
+  /**
+   * v0.10.0: um follow-up de sumido no grupo de exemplo: `draft` = tentativa 2 de 4 com o rascunho e os botões;
+   * `needs` = o mentorado respondeu pedindo algo que só o mentor decide ("Precisa de você"); padrão: nenhum
+   */
+  convo?: 'draft' | 'needs'
 }
 
 const EXTRA_SUGGESTION = 'Combinado! Qualquer coisa me avisa por aqui.'
@@ -312,6 +317,48 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       f.auto = copiloto.autoFollowups && copiloto.enabled && autoMarked.has(f.id) && f.status === 'waiting' ? { state: 'scheduled', at: autoAt, wait: null, canCancel: true } : null
     }
   }
+  /** v0.10.0: follow-up de conversa de exemplo (textos fictícios; o link é de exemplo) */
+  const convos: ConvoView[] = []
+  if (opts.convo) {
+    const G = '120363025555555555@g.us'
+    const needs = opts.convo === 'needs'
+    convos.push({
+      id: '9f3a4e5d-6c7b-4a8f-8e9d-1c2d3e4f5a6b',
+      jid: G,
+      type: 'sumido',
+      author: 'Equipe Saga · Marina',
+      createdAt: now - 3 * 86_400_000,
+      status: needs ? 'responded' : 'active',
+      goal: { pendingItems: [], schedulingLink: 'https://example.com/agenda', note: 'Está sem falar com a gente desde o mês passado.', cadenceDays: [0, 2, 5, 10], sendMode: 'confirm' },
+      itemsDone: [],
+      attemptsSent: needs ? 2 : 1,
+      nextAttempt: needs ? 3 : 2,
+      attemptTotal: 4,
+      nextAttemptAt: now + 2 * 86_400_000,
+      lastAttemptAt: now - (needs ? 3 : 48) * 60 * 60_000,
+      repliedAt: needs ? now - 20 * 60_000 : null,
+      draft: needs
+        ? null
+        : {
+            id: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
+            kind: 'attempt',
+            attempt: 2,
+            text: 'Oi! Passando de novo por aqui 🙂 Sei que a rotina aperta. Que tal a gente marcar uma conversa rápida para ver como estão as coisas? Escolhe o melhor horário aqui: https://example.com/agenda',
+            state: 'ready',
+            at: null,
+            sendError: null,
+            forced: false
+          },
+      drafting: false,
+      needsYou: needs ? 'O mentorado pediu para parcelar a próxima mensalidade.' : null,
+      aiError: null,
+      suggestScheduled: false,
+      suggestItems: [],
+      summary: null,
+      reason: null,
+      outsideHours: !!opts.outsideHours
+    })
+  }
   const followupListeners = new Set<() => void>()
   const notifyFollowups = () => {
     followupListeners.forEach((l) => l())
@@ -525,12 +572,15 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     groupRepairPending: false,
     groupHistory: { oldestTs: null, groups: 0, messages: 0, pending: 0 },
     historyFetch: null,
-    searches: { today: 0, lastAt: null }
+    searches: { today: 0, lastAt: null },
+    followupTestUntil: null,
+    convosActive: 0
   }
   if (opts.oldHistory) {
     for (const c of demo) for (const m of c.messages) if (m.kind === 'audio' && m.transcriptStatus === null && m.ts < now - 30 * 86_400_000) onDemand.add(m.id)
     Object.assign(copiloto, { enabled: true, url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook', hasCode: true, rosterSize: 24, rosterAt: now, chats: 5, lastSentAt: now - 60_000, searches: { today: 3, lastAt: now - 12 * 60_000 } })
   }
+  if (opts.convo) Object.assign(copiloto, { enabled: true, url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook', hasCode: true, rosterSize: 24, rosterAt: now, chats: 5, convosActive: 1 })
   if (opts.autoFollowups) Object.assign(copiloto, { enabled: true, url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook', hasCode: true, rosterSize: 24, rosterAt: now, chats: 5, autoFollowups: true })
   applyAuto()
 
@@ -951,6 +1001,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
         Object.assign(copiloto, { enabled: true, rosterSize: 24, rosterAt: now, chats: 5, pending: 37, lastSentAt: now - 60_000 })
       } else if (patch.enabled === false) Object.assign(copiloto, { enabled: false, pending: 0, chats: 0, lastError: null, lastErrorAt: null })
       if (patch.autoFollowups !== undefined) copiloto.autoFollowups = patch.autoFollowups
+      if (patch.followupTest !== undefined) copiloto.followupTestUntil = patch.followupTest ? Date.now() + CONVO_TEST.durationMs : null
       applyAuto()
       notifyFollowups()
       return { ok: true, status: { ...copiloto } }
@@ -973,6 +1024,22 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       copiloto.hasCode = true
       copiloto.authFailed = false
       return { ok: true, code: 'demo-codigo-de-exemplo-nao-e-real-0000000000' }
+    },
+    listConvos: async () => convos.map((c) => ({ ...c, draft: c.draft ? { ...c.draft } : null })),
+    convoAction: async (id, a) => {
+      record('convoAction', [id, a], undefined)
+      const c = convos.find((x) => x.id === id)
+      if (!c) return { ok: false, message: 'Follow-up não encontrado.' }
+      if (a.kind === 'send' && c.draft) Object.assign(c.draft, { text: a.text, state: 'approved', forced: a.forced === true })
+      else if (a.kind === 'cancel_send' && c.draft) c.draft.state = 'ready'
+      else if (a.kind === 'skip') Object.assign(c, { draft: null, nextAttempt: (c.nextAttempt ?? 1) + 1 })
+      else if (a.kind === 'decline') c.status = 'declined'
+      else if (a.kind === 'scheduled') c.status = 'scheduled'
+      else if (a.kind === 'dismiss_needs_you') c.needsYou = null
+      else if (a.kind === 'dismiss_suggestion') Object.assign(c, { suggestScheduled: false, suggestItems: [] })
+      else if (a.kind === 'item') c.itemsDone = a.done ? [...new Set([...c.itemsDone, a.item])] : c.itemsDone.filter((x) => x !== a.item)
+      notifyFollowups()
+      return { ok: true, convo: { ...c } }
     },
     listFollowups: async () => followups.filter((f) => f.status !== 'declined' && f.status !== 'cancelled').map((f) => ({ ...f })),
     followupOpen: async (id) => {
@@ -1058,6 +1125,7 @@ declare global {
  * `?theme=dark|light|system` escolhe o tema salvo e `?hours=outside` põe o relógio do horário de envio fora dele.
  * `?auto=1` (v0.8.0) liga o envio automático dos follow-ups do Copiloto (o da conversa individual aparece agendado).
  * `?old=1` (v0.9.0) põe histórico antigo (com um áudio para "Transcrever") e o Copiloto ligado com pesquisas.
+ * `?convo=draft|needs` (v0.10.0) põe um follow-up de sumido no grupo de exemplo (rascunho da tentativa 2, ou "Precisa de você").
  */
 export async function installFakeSaga(): Promise<void> {
   const params = new URLSearchParams(location.search)
@@ -1075,7 +1143,7 @@ export async function installFakeSaga(): Promise<void> {
   if (patch.conn === 'waiting_retry' && patch.retryAt === undefined) patch.retryAt = Date.now() + 2 * 60_000
   const t = params.get('theme')
   const theme = t === 'light' || t === 'dark' || t === 'system' ? t : undefined
-  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside', followups: params.get('followups') !== '0', autoFollowups: params.get('auto') === '1', oldHistory: params.get('old') === '1' })
+  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside', followups: params.get('followups') !== '0', autoFollowups: params.get('auto') === '1', oldHistory: params.get('old') === '1', ...(params.get('convo') === 'draft' || params.get('convo') === 'needs' ? { convo: params.get('convo') as 'draft' | 'needs' } : {}) })
   window.saga = ctl.api
   window.__sagaFake = ctl
 }

@@ -66,11 +66,19 @@ import {
   type CopilotoRepairResult,
   type CopilotoTestResult,
   type FollowupOpenResult,
-  type FollowupView
+  type FollowupView,
+  CONVO_REASON,
+  type ConvoAction,
+  type ConvoActionResult,
+  type ConvoView
 } from '../shared/copiloto'
 import { followupView, type FollowupRow } from './db/followupRepo'
 import { shortReason } from './copiloto/followups'
 import { FollowupAutoSender } from './copiloto/autoSend'
+import { ConvoEngine, type ConvoDispatch } from './copiloto/convo'
+import { draftConvoMessage, type ConvoPromptInput } from './ai/convoPrompt'
+import { selectExamples } from './memory/memory'
+import { knowledgeFor } from './kb/retrieve'
 import { chatHash, hasRecentContactMessage, pickQuote, sendAddress, textHash } from './send/logic'
 import { verifyUnknownSend } from './send/verify'
 import {
@@ -131,6 +139,8 @@ export interface WaClientLike {
   canFetchHistory?(): boolean
   /** v0.8.3: "Buscar no celular o histórico dos grupos" para estes grupos (pela fila, só leitura) */
   startGroupHistory?(jids: string[], noAnchor: number): unknown
+  /** v0.10.0: o mentor está entre os participantes conhecidos do grupo (null = não se sabe) */
+  isSelfInGroup?(groupJid: string): boolean | null
 }
 
 export interface SagaServiceOpts {
@@ -219,7 +229,16 @@ function toView(m: MessageRow): MessageView {
   }
 }
 
+/** v0.10.0: sem chave da IA principal (o follow-up de conversa mostra "configure a chave"). */
+class MissingKeyError extends Error {
+  constructor() {
+    super('sem chave da IA')
+    this.name = 'MissingKeyError'
+  }
+}
+
 function aiErrorCode(e: unknown): AiErrorCode {
+  if (e instanceof MissingKeyError) return 'missing_key'
   if (e instanceof InvalidKeyError) return 'invalid_key'
   if (e instanceof BudgetExceededError) return 'budget_exceeded'
   if (e instanceof LlmRateLimitError) return 'rate_limited'
@@ -271,6 +290,8 @@ export class SagaService extends EventEmitter {
   readonly copiloto: CopilotoSync
   /** v0.8.0 (contrato v1.2): envio automático dos follow-ups marcados pelo Copiloto, com a opção ligada */
   readonly autoFollowups: FollowupAutoSender
+  /** v0.10.0: follow-ups de conversa (onboarding/sumido) */
+  readonly convos: ConvoEngine
   /** desde quando a conexão está aberta (null = fechada): o envio automático só sai com ela estável */
   private connOpenSince: number | null = null
   /** v0.8.1: quando esta execução começou (a consulta dos grupos feita depois disso vale para o reenvio dos grupos) */
@@ -387,6 +408,30 @@ export class SagaService extends EventEmitter {
       diag: (k, d) => this.diag(k, d),
       changed: () => this.markFollowups()
     })
+
+    this.convos = new ConvoEngine({
+      repo,
+      clock,
+      rng,
+      active: () => this.copiloto.healthy(),
+      testMode: () => this.copiloto.followupTestOn(),
+      schedule: () => this.settings.sendOptions().schedule,
+      isMentee: (j) => this.copiloto.isMenteeSender(j),
+      groupEligible: (jid) => this.convoGroupEligible(jid),
+      ready: () => this.autoReady(),
+      busy: () => this.repo.sends.listByStatus('queued', 'typing', 'sending').length > 0,
+      limiterAt: (now) => this.limiters.wa_send.nextAllowedAt(now),
+      draft: (input) => this.convoDraft(input),
+      aiErrorText: (e) => this.aiMessage(aiErrorCode(e), this.settings.get().provider),
+      dispatch: (c, draftId, text, forced) => this.convoDispatch(c.jid, draftId, text, forced),
+      cancelSend: (id) => this.cancelSendNow(id),
+      diag: (k, d) => this.diag(k, d),
+      changed: () => this.markFollowups(),
+      kick: () => {
+        if (this.copiloto.enabled()) this.copiloto.kick()
+      }
+    })
+    this.copiloto.setConvoHandler(this.convos)
 
     const lim = (name: LimiterName) => new RateLimiter(LIMITS[name], clock, rng, { repo, key: `limiter:${name}` })
     this.limiters = {
@@ -520,7 +565,8 @@ export class SagaService extends EventEmitter {
       ...(opts.fetchWaVersion ? { fetchWaVersion: opts.fetchWaVersion } : {}),
       ...(opts.diag ? { diag: opts.diag } : {}),
       sendOptions: () => this.settings.sendOptions(),
-      sendGuard: (s) => this.autoSendGuard(s)
+      sendGuard: (s) => this.autoSendGuard(s),
+      recentContactExempt: (s) => this.convos.isConvoSend(s.id) && this.convoGroupEligible(s.jid).ok
     })
     this.wa.on('send', (jid: string) => this.markSends(jid))
     this.wa.on('qr', (dataUrl: string) => {
@@ -632,6 +678,7 @@ export class SagaService extends EventEmitter {
         try {
           this.expireStaleSends()
           this.autoTick()
+          this.convoTick()
         } catch {
           // banco fechado
         }
@@ -707,6 +754,7 @@ export class SagaService extends EventEmitter {
       updateCheck: this.updateCheck,
       triage: this.repo.triageCounts(),
       sendHours: s.directSend ? this.outsideHours(s.sendSchedule) : null,
+      followupTestUntil: this.copiloto.followupTestUntil(),
       ...(this.startError ? { startError: this.startError } : {})
     }
   }
@@ -807,6 +855,8 @@ export class SagaService extends EventEmitter {
       }
       // um envio terminou ou chegou follow-up: o próximo envio automático pode sair (sempre um por vez)
       if (sendJids.length > 0 || this.pendingFollowups) this.autoTick()
+      // v0.10.0: mensagem nova no grupo (resposta do mentorado) ou envio que mudou: a conversa de follow-up anda
+      if (sendJids.length > 0 || jids.length > 0) this.convoTick()
       const followups = this.pendingFollowups
       this.pendingFollowups = false
       this.pendingJids.clear()
@@ -1057,7 +1107,8 @@ export class SagaService extends EventEmitter {
    * análise guardada se ela ainda vale, senão `not_needed`. Sem a opção (botão "Gerar sugestões mesmo assim"), gera.
    */
   getAnalysis(jid: string, opts: { onlyIfNeeded?: boolean } = {}): Promise<AnalysisResult> {
-    if (opts.onlyIfNeeded && !this.inflight.has(jid) && !this.needsReplyNow(jid)) {
+    // v0.10.0: grupo com follow-up de conversa andando: o cartão do follow-up cuida (nada de rascunho em dobro)
+    if (opts.onlyIfNeeded && !this.inflight.has(jid) && (!this.needsReplyNow(jid) || this.convos.activeIn(jid))) {
       if (this.cacheFresh(jid)) return Promise.resolve({ ok: true, analysis: this.repo.getAnalysis(jid)! })
       return Promise.resolve({ ok: false, code: 'not_needed', message: AI_MESSAGES.not_needed, provider: this.settings.get().provider })
     }
@@ -1298,13 +1349,14 @@ export class SagaService extends EventEmitter {
   }
 
   /** As regras que valem antes de qualquer envio: envio direto ligado, texto válido, conversa conhecida, contato recente. */
-  private sendRefusal(jid: string, text: string): Exclude<SendRefusal, 'outside_hours'> | null {
+  private sendRefusal(jid: string, text: string, exempt30 = false): Exclude<SendRefusal, 'outside_hours'> | null {
     if (!this.settings.sendOptions().enabled) return 'disabled'
     const t = text.trim()
     if (!t) return 'empty'
     if ([...t].length > SEND_LIMITS.textChars) return 'too_long'
     if (!this.repo.listContacts({ includeHidden: true }).some((c) => c.jid === jid)) return 'unknown_chat'
-    if (!hasRecentContactMessage(this.repo.listMessages(jid, 300), this.clock.now())) return 'no_recent_contact'
+    // v0.10.0: o follow-up de conversa no grupo do mentorado (o mentor participa e já escreveu lá) não inicia conversa
+    if (!exempt30 && !hasRecentContactMessage(this.repo.listMessages(jid, 300), this.clock.now())) return 'no_recent_contact'
     // confirmar sem conexão não adianta: o envio só vale para a conexão em que foi confirmado
     if (this.persistedStop || this.wa.getStatus() !== 'open') return 'offline'
     return null
@@ -1328,12 +1380,12 @@ export class SagaService extends EventEmitter {
     return this.prepareSendNow(input)
   }
 
-  private prepareSendNow(input: PrepareSendInput): PrepareSendResult {
+  private prepareSendNow(input: PrepareSendInput, exempt30 = false): PrepareSendResult {
     const jid = input.jid
     const text = input.text.trim()
     const forced = input.forced === true
     const kind: SendKind = input.kind === 'avulsa' ? 'avulsa' : 'reply'
-    const refusal = this.sendRefusal(jid, text)
+    const refusal = this.sendRefusal(jid, text, exempt30 && kind === 'avulsa')
     if (refusal) return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
     const contact = this.repo.listContacts({ includeHidden: true }).find((c) => c.jid === jid)!
     const options = this.settings.sendOptions()
@@ -1408,7 +1460,7 @@ export class SagaService extends EventEmitter {
    * O corpo do `sendAvulsa`. `auto` (v0.8.0) só vem do envio automático de um follow-up, que fez a confirmação aqui
    * dentro com o mesmo `prepareSend` (token de uso único, nunca "Forçar envio"); fica marcado no envio.
    */
-  private sendAvulsaNow(input: SendAvulsaInput, auto: boolean): SendReplyResult {
+  private sendAvulsaNow(input: SendAvulsaInput, auto: boolean, exempt30 = false): SendReplyResult {
     const jid = input.jid
     const text = input.text.trim()
     if (typeof input.draftId !== 'string' || !DRAFT_ID_RE.test(input.draftId)) {
@@ -1421,7 +1473,7 @@ export class SagaService extends EventEmitter {
       const refused = this.followupSendRefusal(followup, jid, text)
       if (refused) return refused
     }
-    const gate = this.consumeConfirmation(input.token, jid, text, 'avulsa')
+    const gate = this.consumeConfirmation(input.token, jid, text, 'avulsa', exempt30)
     if (!gate.ok) {
       // a regra dos 30 dias barrou: o follow-up volta ao Copiloto como "não dá para enviar"
       if (followup && gate.code === 'no_recent_contact') this.copiloto.finishFollowup(followup.id, 'failed', FOLLOWUP_REASON.outside30)
@@ -1537,6 +1589,93 @@ export class SagaService extends EventEmitter {
     }
   }
 
+  // --- follow-ups de conversa: onboarding e sumido (v0.10.0, contrato v2) ---
+
+  /**
+   * A regra dos 30 dias não vale para o follow-up de conversa SÓ quando o alvo é um grupo de que o mentor participa
+   * (participantes conhecidos com ele, ou ainda não consultados) e com mensagens dele guardadas: escrever no grupo do
+   * mentorado não é "iniciar conversa". Conversa individual nunca entra aqui (a regra continua valendo).
+   */
+  private convoGroupEligible(jid: string): { ok: true } | { ok: false; reason: string } {
+    if (!this.repo.isGroup(jid)) return { ok: false, reason: CONVO_REASON.notGroup }
+    if (this.wa.isSelfInGroup?.(jid) === false) return { ok: false, reason: CONVO_REASON.notMember }
+    if (!this.repo.hasMentorMessage(jid)) return { ok: false, reason: CONVO_REASON.noHistory }
+    return { ok: true }
+  }
+
+  private convoTick(): void {
+    if (this.stopping) return
+    const fail = (e: unknown) => {
+      try {
+        this.repo.logEvent('copiloto_error', `follow-up de conversa: ${e instanceof Error ? e.name : 'Error'}`)
+      } catch {
+        // banco fechado
+      }
+    }
+    try {
+      void this.convos.tick().catch(fail)
+    } catch (e) {
+      fail(e)
+    }
+  }
+
+  /** O rascunho da IA para a conversa (mesma corrente, limitador e teto das sugestões; memória de estilo e base). */
+  private async convoDraft(input: Omit<ConvoPromptInput, 'examples' | 'knowledge' | 'notes'> & { jid: string }) {
+    const s = this.settings.get()
+    const key = this.settings.getKey(s.provider)
+    if (!key) throw new MissingKeyError()
+    const theirs = input.messages.filter((m) => input.speaker(m) === 'mentorado').slice(-5)
+    const textOf = (m: MessageRow) => (m.kind === 'text' ? m.text : m.transcriptStatus === 'done' ? m.transcript : null) ?? ''
+    const contextText = theirs.map(textOf).join('\n')
+    const query = contextText || [...input.goal.pendingItems, input.goal.note ?? ''].join('\n')
+    let knowledge = null
+    try {
+      knowledge = knowledgeFor(this.repo.kb, query)
+    } catch {
+      knowledge = null
+    }
+    const contact = this.repo.listContacts({ includeHidden: true }).find((c) => c.jid === input.jid)
+    try {
+      return await draftConvoMessage(
+        { llm: this.chatLlm(s.provider, key), limiter: this.limiters.llm, cost: this.cost, capUsd: s.dailyCapUsd, clock: this.clock, diag: (k, d) => this.diag(k, d) },
+        { ...input, examples: selectExamples(this.repo, input.jid, contextText), knowledge, notes: contact?.notes ?? null }
+      )
+    } finally {
+      this.markState()
+    }
+  }
+
+  /**
+   * "Enviar" no cartão (a confirmação do mentor): o mesmo caminho da mensagem avulsa, com o id do rascunho; a regra
+   * dos 30 dias só não vale no grupo do mentorado (ver `convoGroupEligible`). O mesmo rascunho nunca sai duas vezes.
+   */
+  private convoDispatch(jid: string, draftId: string, text: string, forced: boolean): ConvoDispatch {
+    for (const id of this.repo.followups.sendIdsOf(draftId, jid)) {
+      const s = this.repo.sends.get(id)!
+      if (s.status === 'sent' || s.status === 'unknown' || SEND_ACTIVE.has(s.status)) return { ok: false, code: 'in_flight', message: SEND_REFUSAL_TEXT.in_flight }
+    }
+    const exempt = this.convoGroupEligible(jid).ok
+    const prep = this.prepareSendNow({ jid, text, kind: 'avulsa', ...(forced ? { forced: true } : {}) }, exempt)
+    if (!prep.ok) return { ok: false, code: prep.code, message: prep.message }
+    const r = this.sendAvulsaNow({ token: prep.preview.token, jid, text: prep.preview.text, draftId }, false, exempt)
+    if (!r.ok) return { ok: false, code: r.code, message: r.message }
+    this.sendDiag('send_followup', this.repo.sends.get(r.send.id)!, 'follow-up de conversa')
+    return { ok: true, sendId: r.send.id }
+  }
+
+  /** As conversas de follow-up (andando e, por algumas horas, as encerradas). */
+  async listConvos(): Promise<ConvoView[]> {
+    this.convoTick()
+    return this.convos.list(FOLLOWUP_LIMITS.recentMs)
+  }
+
+  /** Um botão do cartão. "Enviar" só marca a confirmação: o envio sai na próxima volta, com todas as travas. */
+  async convoAction(id: string, action: ConvoAction): Promise<ConvoActionResult> {
+    const r = this.convos.action(id, action)
+    this.convoTick()
+    return r
+  }
+
   // --- follow-up do Copiloto (v0.7.0) ---
 
   /** Os follow-ups que a interface mostra (esperando, saindo, e por algumas horas os enviados e os sem envio). */
@@ -1584,14 +1723,15 @@ export class SagaService extends EventEmitter {
     token: string,
     jid: string,
     text: string,
-    kind: SendKind
+    kind: SendKind,
+    exempt30 = false
   ): { ok: true; bind: SendBinding; outside: SendHoursInfo | null } | { ok: false; code: SendRefusal | 'not_confirmed'; message: string } {
     const bind = this.sendGate.consume(token, jid, text, kind)
     if (!bind) {
       this.diag('send_refused', `chat=${chatHash(jid)} sem confirmação válida`)
       return { ok: false, code: 'not_confirmed', message: NOT_CONFIRMED_TEXT }
     }
-    const refusal = this.sendRefusal(jid, text)
+    const refusal = this.sendRefusal(jid, text, exempt30)
     if (refusal) {
       this.diag('send_refused', `chat=${chatHash(jid)} ${refusal}`)
       return { ok: false, code: refusal, message: SEND_REFUSAL_TEXT[refusal] }
@@ -1649,6 +1789,10 @@ export class SagaService extends EventEmitter {
 
   /** "Cancelar envio": só enquanto está na fila (depois do "digitando…" não dá mais). `true` se cancelou. */
   async cancelSend(id: number): Promise<boolean> {
+    return this.cancelSendNow(id)
+  }
+
+  private cancelSendNow(id: number): boolean {
     const s = this.repo.sends.get(id)
     if (!s || !this.repo.sends.transition(id, s.attempt, ['queued'], 'canceled')) return false
     this.sendDiag('send_canceled', s)
@@ -1833,6 +1977,7 @@ export class SagaService extends EventEmitter {
 
   async copilotoSave(patch: CopilotoPatch): Promise<CopilotoSaveResult> {
     const r = this.copiloto.save(patch)
+    if (patch.followupTest !== undefined) this.markState()
     // envio automático desligado (ou a integração): o automático que está na fila não sai
     if (!this.autoActive()) this.expireAutoSends('envio automático desligado')
     else this.autoTick()

@@ -139,6 +139,10 @@ export interface CopilotoStatus {
   historyFetch: GroupHistoryFetchView | null
   /** v0.9.0 (contrato v1.3): as pesquisas do Copiloto respondidas (só contagens; nunca o texto procurado) */
   searches: CopilotoSearchStats
+  /** v0.10.0: modo de teste dos follow-ups ligado até (epoch ms); null = desligado */
+  followupTestUntil: number | null
+  /** v0.10.0: conversas de follow-up (onboarding/sumido) em andamento */
+  convosActive: number
 }
 
 /** v0.9.0: quantas pesquisas do Copiloto foram respondidas hoje (dia local) e quando foi a última. */
@@ -166,6 +170,8 @@ export interface CopilotoPatch {
   enabled?: boolean
   /** v0.8.0: "Enviar follow-ups do Copiloto automaticamente" */
   autoFollowups?: boolean
+  /** v0.10.0: "Modo de teste dos follow-ups" (1 dia = 2 min; desliga sozinho em 2 h) */
+  followupTest?: boolean
   /** `''` apaga o endereço */
   url?: string
 }
@@ -286,4 +292,179 @@ export function followupReasonText(reason: string | null): string | null {
   if (reason === FOLLOWUP_REASON.notFound) return 'conversa não encontrada neste computador'
   if (reason === FOLLOWUP_REASON.declined) return 'recusada por você'
   return reason
+}
+
+// --- v0.10.0: follow-ups de conversa (contrato v2: onboarding e sumido) ---
+
+/** Os tipos de follow-up do contrato v2 (`avulso` continua sendo o cartão da v1.1). */
+export type FollowupType = 'avulso' | 'onboarding' | 'sumido'
+/** Os tipos que viram uma conversa conduzida pela IA (o mentor confirma cada mensagem). */
+export type ConvoType = 'onboarding' | 'sumido'
+
+/**
+ * Estado local de uma conversa de follow-up:
+ * - `active`: as tentativas da cadência, esperando a primeira resposta · `responded`: a pessoa respondeu (a IA continua
+ *   rumo ao objetivo);
+ * - finais: `scheduled` (sumido: reunião marcada), `completed` (onboarding: tudo cumprido), `no_reply`, `declined`
+ *   (o mentor encerrou), `failed` (não dá para conduzir: conversa não encontrada, fora do grupo…), `cancelled` (a equipe
+ *   parou no Copiloto: só local, sem relatório).
+ */
+export type ConvoStatus = 'active' | 'responded' | 'scheduled' | 'completed' | 'no_reply' | 'declined' | 'failed' | 'cancelled'
+
+/** Os estados que encerram a conversa. */
+export const CONVO_FINAL: ReadonlySet<ConvoStatus> = new Set(['scheduled', 'completed', 'no_reply', 'declined', 'failed', 'cancelled'])
+
+/** O objetivo que o Copiloto mandou (`goal` do contrato v2), já conferido. */
+export interface ConvoGoal {
+  /** pendências do onboarding (vazio no sumido) */
+  pendingItems: string[]
+  /** o único link que a IA pode mandar (https) */
+  schedulingLink: string | null
+  note: string | null
+  /** dias, contados do começo, em que a IA escreve se a pessoa não respondeu */
+  cadenceDays: number[]
+  /** `auto` é para depois: por enquanto vale como `confirm` */
+  sendMode: 'confirm' | 'auto'
+}
+
+export const CONVO_LIMITS = {
+  /** cadências padrão (o Copiloto manda a dele em `cadence_days`) */
+  sumidoCadence: [0, 2, 5, 10],
+  onboardingCadence: [0, 2, 4, 7, 10, 14, 21, 28],
+  /** sumido: depois da última tentativa, espera esta folga (em dias) antes de `no_reply` */
+  graceDays: 2,
+  /** onboarding: `no_reply` aos 30 dias sem cumprir; sumido que respondeu e não marcou: também aos 30 dias */
+  maxDays: 30,
+  /** mensagens seguidas do mentorado: espera 1 min de silêncio antes de pedir a resposta à IA (uma chamada só) */
+  replyDebounceMs: 60_000,
+  /** resumo do `followup_update` */
+  summaryChars: 500,
+  itemsMax: 20,
+  itemChars: 300,
+  noteChars: 1000,
+  linkChars: 500,
+  cadenceMax: 20,
+  cadenceDayMax: 60,
+  /** o rascunho da IA (o mentor pode editar até o limite da mensagem avulsa) */
+  draftChars: 1500,
+  /** mensagens do grupo que vão para a IA (dos últimos 30 dias) */
+  contextMessages: 60
+} as const
+
+/** Modo de teste dos follow-ups (Configurações › Copiloto da Saga): 1 dia = 2 min, desliga sozinho em 2 h. */
+export const CONVO_TEST = {
+  dayMs: 2 * 60_000,
+  durationMs: 2 * 60 * 60_000
+} as const
+
+/** Motivos curtos (`reason`) das conversas. */
+export const CONVO_REASON = {
+  declined: 'recusado_pelo_mentor',
+  notFound: 'conversa_nao_encontrada',
+  notGroup: 'alvo_nao_e_grupo',
+  notMember: 'mentor_fora_do_grupo',
+  noHistory: 'sem_historico_do_mentor',
+  noSchedule: 'sem_agendamento'
+} as const
+
+/** O rascunho (uma mensagem de cada vez) que espera o mentor, como a interface vê. */
+export interface ConvoDraftView {
+  /** muda a cada rascunho novo (a interface guarda a edição por id) */
+  id: string
+  /** `attempt`: tentativa da cadência · `reply`: resposta a uma mensagem do mentorado */
+  kind: 'attempt' | 'reply'
+  /** a tentativa (1..total) quando `kind === 'attempt'` */
+  attempt: number | null
+  text: string
+  /**
+   * `ready`: esperando "Enviar" · `approved`: o mentor confirmou, sai no horário (`at`) · `sending`: na fila/saindo ·
+   * `unknown`: o WhatsApp não confirmou (nunca reenviado; conferido pela conversa)
+   */
+  state: 'ready' | 'approved' | 'sending' | 'unknown'
+  /** em `approved`: quando sai (horário permitido + 7..25 min); null = assim que possível */
+  at: number | null
+  /** o envio anterior deste rascunho não saiu (o motivo); volta a esperar o "Enviar" */
+  sendError: string | null
+  forced: boolean
+}
+
+/** Uma conversa de follow-up, como a interface vê. */
+export interface ConvoView {
+  id: string
+  jid: string
+  type: ConvoType
+  author: string | null
+  createdAt: number
+  status: ConvoStatus
+  goal: ConvoGoal
+  /** pendências que o mentor confirmou como cumpridas */
+  itemsDone: string[]
+  /** mensagens da cadência que saíram */
+  attemptsSent: number
+  /** a próxima tentativa (1..total), ou null se acabaram */
+  nextAttempt: number | null
+  attemptTotal: number
+  /** quando a próxima tentativa vence (epoch ms) */
+  nextAttemptAt: number | null
+  lastAttemptAt: number | null
+  repliedAt: number | null
+  draft: ConvoDraftView | null
+  /** a IA está escrevendo agora */
+  drafting: boolean
+  /** a pessoa pediu algo que só o mentor decide: sem rascunho, esperando ele */
+  needsYou: string | null
+  /** a IA não conseguiu escrever (sem chave, teto de gasto…): texto curto */
+  aiError: string | null
+  /** sugestões da IA que o mentor confirma (nunca viram estado final sozinhas) */
+  suggestScheduled: boolean
+  suggestItems: string[]
+  summary: string | null
+  reason: string | null
+  /** agora fora do horário de envio (o cartão oferece "Forçar envio") */
+  outsideHours: boolean
+}
+
+/** Ações do cartão. */
+export type ConvoAction =
+  | { kind: 'send'; draftId: string; text: string; forced?: boolean }
+  | { kind: 'skip' }
+  | { kind: 'decline' }
+  | { kind: 'scheduled' }
+  | { kind: 'item'; item: string; done: boolean }
+  | { kind: 'complete' }
+  | { kind: 'dismiss_suggestion' }
+  | { kind: 'dismiss_needs_you' }
+  | { kind: 'retry' }
+  | { kind: 'cancel_send' }
+
+export type ConvoActionResult = { ok: true; convo: ConvoView } | { ok: false; message: string }
+
+/** "Follow-up Sumido — tentativa 2 de 4" */
+export function convoTitle(c: Pick<ConvoView, 'type' | 'draft' | 'attemptTotal' | 'status'>): string {
+  const name = c.type === 'sumido' ? 'Follow-up Sumido' : 'Follow-up Onboarding'
+  if (c.draft?.kind === 'attempt' && c.draft.attempt !== null) return `${name} — tentativa ${c.draft.attempt} de ${c.attemptTotal}`
+  if (c.draft?.kind === 'reply') return `${name} — resposta`
+  return name
+}
+
+/** O texto do estado final para o cartão. */
+export function convoStatusText(s: ConvoStatus): string {
+  switch (s) {
+    case 'scheduled':
+      return 'Reunião marcada ✓'
+    case 'completed':
+      return 'Onboarding concluído ✓'
+    case 'no_reply':
+      return 'Encerrado sem resposta'
+    case 'declined':
+      return 'Encerrado por você'
+    case 'failed':
+      return 'Não foi possível conduzir'
+    case 'cancelled':
+      return 'Parado pela equipe no Copiloto'
+    case 'responded':
+      return 'Respondeu'
+    default:
+      return 'Aguardando resposta'
+  }
 }

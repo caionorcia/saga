@@ -10,7 +10,7 @@ import { SEARCH_KINDS, SEARCH_LIMITS, SEARCH_PERIODS } from '../shared/search'
 import { BACKUP_PASSWORD_MAX, BACKUP_PASSWORD_MIN } from '../shared/backup'
 import { DRAFT_ID_RE, SEND_LIMITS } from '../shared/send'
 import { isValidSchedule } from '../shared/sendHours'
-import { COPILOTO_URL_MAX, FOLLOWUP_LIMITS } from '../shared/copiloto'
+import { CONVO_LIMITS, COPILOTO_URL_MAX, FOLLOWUP_LIMITS, type ConvoAction } from '../shared/copiloto'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -198,11 +198,35 @@ function isSendAvulsa(i: unknown): boolean {
  * Copiloto: só `enabled` e `autoFollowups` (sim/não, v0.8.0) e/ou `url` (texto curto; o formato é conferido no
  * serviço, com mensagem).
  */
+const CONVO_SIMPLE = new Set(['skip', 'decline', 'scheduled', 'complete', 'dismiss_suggestion', 'dismiss_needs_you', 'retry', 'cancel_send'])
+
+/** v0.10.0: um botão do cartão de follow-up de conversa (só os campos do tipo, nos limites). */
+export function isConvoAction(a: unknown): a is ConvoAction {
+  if (!isObj(a) || !isStr(a.kind)) return false
+  const keys = Object.keys(a)
+  if (CONVO_SIMPLE.has(a.kind)) return keys.length === 1
+  if (a.kind === 'send') {
+    return (
+      keys.every((k) => k === 'kind' || k === 'draftId' || k === 'text' || k === 'forced') &&
+      isStr(a.draftId) &&
+      DRAFT_ID_RE.test(a.draftId) &&
+      isSendText(a.text) &&
+      [...(a.text as string)].length <= CONVO_LIMITS.draftChars &&
+      (a.forced === undefined || isBool(a.forced))
+    )
+  }
+  if (a.kind === 'item') {
+    return keys.every((k) => k === 'kind' || k === 'item' || k === 'done') && nonEmpty(a.item) && a.item.length <= CONVO_LIMITS.itemChars && isBool(a.done)
+  }
+  return false
+}
+
 function isCopilotoPatch(p: unknown): boolean {
-  if (!isObj(p) || Object.keys(p).length === 0 || !Object.keys(p).every((k) => k === 'enabled' || k === 'url' || k === 'autoFollowups')) return false
+  if (!isObj(p) || Object.keys(p).length === 0 || !Object.keys(p).every((k) => k === 'enabled' || k === 'url' || k === 'autoFollowups' || k === 'followupTest')) return false
   return (
     (p.enabled === undefined || isBool(p.enabled)) &&
     (p.autoFollowups === undefined || isBool(p.autoFollowups)) &&
+    (p.followupTest === undefined || isBool(p.followupTest)) &&
     (p.url === undefined || (isStr(p.url) && p.url.length <= COPILOTO_URL_MAX))
   )
 }
@@ -299,7 +323,9 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   listFollowups: (a) => a.length === 0,
   followupOpen: (a) => a.length === 1 && isStr(a[0]) && DRAFT_ID_RE.test(a[0]),
   followupDecline: (a) =>
-    a.length === 2 && isStr(a[0]) && DRAFT_ID_RE.test(a[0]) && (a[1] === null || (isStr(a[1]) && a[1].length <= FOLLOWUP_LIMITS.reasonChars * 2))
+    a.length === 2 && isStr(a[0]) && DRAFT_ID_RE.test(a[0]) && (a[1] === null || (isStr(a[1]) && a[1].length <= FOLLOWUP_LIMITS.reasonChars * 2)),
+  listConvos: (a) => a.length === 0,
+  convoAction: (a) => a.length === 2 && isStr(a[0]) && DRAFT_ID_RE.test(a[0]) && isConvoAction(a[1])
 }
 
 /** Lança `InvalidIpcArgsError` se os argumentos vindos da interface não tiverem o formato esperado. */

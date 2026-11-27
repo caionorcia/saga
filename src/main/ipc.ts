@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { SagaService } from '../core/service'
 import { EVENTS, INVOKE_METHODS, invokeChannel, type InvokeMethod, type SagaApi, type UpdateCheck } from '../shared/api'
 import { validateIpcArgs } from './guards'
+import type { ConvoAction } from '../shared/copiloto'
 import { SINGLE_FILE_EXT } from '../core/kb/importer'
 import { backupFileName } from '../core/backup/manager'
 import { BACKUP_ERROR_TEXT, BACKUP_EXT } from '../shared/backup'
@@ -36,6 +37,13 @@ export interface IpcOptions {
 }
 
 /** Liga cada método de `window.saga` ao serviço e repassa os eventos do serviço para a janela. */
+/** Só os campos do tipo (os argumentos já passaram por `isConvoAction`). */
+function sanitizeConvoAction(a: ConvoAction): ConvoAction {
+  if (a.kind === 'send') return { kind: 'send', draftId: String(a.draftId), text: String(a.text), ...(a.forced === true ? { forced: true } : {}) }
+  if (a.kind === 'item') return { kind: 'item', item: String(a.item), done: a.done === true }
+  return { kind: a.kind }
+}
+
 export function registerIpc(service: SagaService, opts: IpcOptions): () => void {
   const h: Handlers = {
     getState: () => service.getState(),
@@ -199,7 +207,8 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
       service.copilotoSave({
         ...(patch.enabled !== undefined ? { enabled: patch.enabled === true } : {}),
         ...(patch.url !== undefined ? { url: String(patch.url) } : {}),
-        ...(patch.autoFollowups !== undefined ? { autoFollowups: patch.autoFollowups === true } : {})
+        ...(patch.autoFollowups !== undefined ? { autoFollowups: patch.autoFollowups === true } : {}),
+        ...(patch.followupTest !== undefined ? { followupTest: patch.followupTest === true } : {})
       }),
     copilotoGenerateCode: () => service.copilotoGenerateCode(),
     copilotoTest: () => service.copilotoTest(),
@@ -207,7 +216,9 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     copilotoFetchGroupHistory: () => service.copilotoFetchGroupHistory(),
     listFollowups: () => service.listFollowups(),
     followupOpen: (id) => service.followupOpen(String(id)),
-    followupDecline: (id, reason) => service.followupDecline(String(id), reason === null ? null : String(reason))
+    followupDecline: (id, reason) => service.followupDecline(String(id), reason === null ? null : String(reason)),
+    listConvos: () => service.listConvos(),
+    convoAction: (id, action) => service.convoAction(String(id), sanitizeConvoAction(action))
   }
 
   for (const m of INVOKE_METHODS) {
