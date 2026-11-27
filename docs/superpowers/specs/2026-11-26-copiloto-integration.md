@@ -284,6 +284,21 @@ consulta dentro do `executeSend`). Sem resposta válida (rede, 5xx) → nada sai
   pediria um evento novo no contrato (não implementado).
 - Nome novo de um grupo: a mensagem mais recente dele vai de novo (mesmo id) com o `chat.name` novo.
 
+# Nota de implementação v0.10.1 (sem mudança no contrato): remetente dos grupos
+
+- Defeito: nos grupos, quem mandou chega como @lid. O SagaZap só sabia o telefone quando a própria mensagem trazia o
+  endereço alternativo (`key.participantAlt`, tirado de `participant_pn` pelo Baileys 7); o histórico não traz, e os pares
+  @lid → telefone ficavam só na memória. O evento ia com `sender.phone` null (nunca o @lid).
+- Agora o telefone de quem mandou fica em cada mensagem (`sender_pn`) e os pares ficam guardados no computador, aprendidos
+  de: chave da mensagem (`participantAlt`/`remoteJidAlt`), `lid-mapping.update`, `lidPnMappings` do histórico, contatos
+  com `id`/`lid`, participantes dos grupos (`phoneNumber`/`lid`) e o armazenamento local do Baileys (`getPNForLID`, sem
+  rede). Vale para eventos, participação nos grupos, resposta nos follow-ups de conversa, "Respondido no grupo" e pesquisa.
+- `sender.phone` continua: telefone do roster ou null. Telefone que aparece depois: a mensagem de grupo vai de novo, com o
+  mesmo id.
+- Reenvio único depois da atualização (e no botão "Reenviar histórico dos grupos"): mensagens de grupo de mentorados dos
+  últimos 30 dias (ou a mais recente) que não são do mentor, mesmos ids. Tela: "Remetentes dos grupos: X mensagens
+  reenviadas; Y ainda sem telefone identificado" (só contagens).
+
 ---
 
 # Adendo v1.3 — Histórico completo só no SagaZap + pesquisa pelo Copiloto (2026-11-27)

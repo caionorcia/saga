@@ -328,6 +328,16 @@ Ao desligar, a fila deste computador é apagada. O que já foi enviado continua 
   grupos (os que apareciam como "Grupo sem nome"). Grupo de que você saiu pode continuar sem nome: dê um nome a ele na
   conversa, se quiser.
 
+#### Quem mandou nos grupos (versão 0.10.1)
+
+- Nos grupos, o WhatsApp às vezes não mostra o número de quem escreveu. Antes, o Copiloto recebia essas mensagens dos
+  mentorados como de "desconhecido". Agora o SagaZap guarda o número de cada pessoa assim que o WhatsApp o mostra em
+  qualquer lugar (na mensagem, nos contatos, nos participantes do grupo) e não esquece ao fechar o app.
+- Depois de atualizar, o SagaZap reenvia uma vez, sozinho, as mensagens dos grupos dos mentorados dos últimos 30 dias.
+  Em **Configurações › Copiloto da Saga** aparece **Remetentes dos grupos: X mensagens reenviadas; Y ainda sem telefone
+  identificado**. O botão **Reenviar histórico dos grupos** faz isso de novo. Nada fica duplicado no Copiloto.
+- "Ainda sem telefone" são pessoas cujo número o WhatsApp ainda não mostrou; quando mostrar, a mensagem vai de novo.
+
 #### Histórico antigo dos grupos (versão 0.8.3)
 
 Se o SagaZap foi vinculado antes da versão 0.1.5, os grupos só têm mensagens daquele dia em diante (o WhatsApp manda o
