@@ -27,8 +27,70 @@ export const COPILOTO_TEXT = {
   encryption: 'A criptografia do Windows não está disponível. O código não foi salvo.',
   network: 'Sem conexão com o Copiloto. Tente de novo.',
   server: 'O Copiloto não respondeu direito. Tente de novo mais tarde.',
-  repairOff: 'Ligue o envio para o Copiloto antes de reenviar o histórico dos grupos.'
+  repairOff: 'Ligue o envio para o Copiloto antes de reenviar o histórico dos grupos.',
+  historyOff: 'Ligue o envio para o Copiloto antes de buscar o histórico dos grupos.',
+  historyNoRoster: 'A lista de mentorados ainda não chegou do Copiloto. Clique em "Testar conexão" e tente de novo.',
+  historyUnavailable: 'Esta versão do WhatsApp não permite buscar o histórico no celular.'
 } as const
+
+/** dd/mm (hora local) */
+function dayMonth(ts: number): string {
+  const d = new Date(ts)
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/**
+ * v0.8.3: o histórico dos grupos dos mentorados no Copiloto (só contagens, nunca nomes): a mensagem mais antiga já aceita
+ * pelo Copiloto, em quantos grupos e quantas mensagens; e quantas ainda estão na fila.
+ */
+export interface CopilotoGroupHistory {
+  /** epoch ms da mensagem de grupo mais antiga já aceita pelo Copiloto (null = nenhuma ainda) */
+  oldestTs: number | null
+  groups: number
+  messages: number
+  /** mensagens de grupo ainda na fila deste computador */
+  pending: number
+}
+
+export function groupHistoryLine(h: CopilotoGroupHistory): string {
+  const queued = h.pending > 0 ? ` (${h.pending} na fila)` : ''
+  if (h.oldestTs === null || h.messages === 0) return `Histórico dos grupos: nenhuma mensagem de grupo enviada ao Copiloto ainda${queued}`
+  return `Histórico dos grupos: mensagem mais antiga em ${dayMonth(h.oldestTs)}; ${h.groups} grupo(s), ${h.messages} mensagem(ns) enviadas ao Copiloto${queued}`
+}
+
+/**
+ * v0.8.3: "Buscar no celular o histórico dos grupos" (pedidos ao celular, um a cada 20 s, no máximo 60 por dia).
+ * - `running`: pedindo (ou esperando o ritmo, a conexão ou o dia seguinte, quando `capped`);
+ * - `waiting_phone`: o celular não respondeu três vezes seguidas (desligado ou sem internet): para até clicar de novo;
+ * - `done`: todos os grupos chegaram a 30 dias atrás (ou o celular não tinha mais).
+ */
+export interface GroupHistoryFetchView {
+  state: 'running' | 'waiting_phone' | 'done'
+  startedAt: number
+  finishedAt: number | null
+  /** grupos de mentorados com mensagem guardada aqui (dá para pedir as anteriores) */
+  groups: number
+  /** desses, quantos já terminaram */
+  done: number
+  requests: number
+  /** mensagens novas guardadas com as respostas do celular */
+  received: number
+  /** grupos de mentorados sem nenhuma mensagem aqui: sem ponto de partida, só reconectando o aparelho */
+  noAnchor: number
+  /** o limite do dia (60 pedidos) acabou: continua amanhã */
+  capped: boolean
+}
+
+export function historyFetchLine(v: GroupHistoryFetchView): string {
+  const progress = `${v.done} de ${v.groups} grupo(s) concluído(s) · ${v.requests} pedido(s) ao celular · ${v.received} mensagem(ns) nova(s)`
+  if (v.state === 'done') return `Busca no celular concluída: ${progress}`
+  if (v.state === 'waiting_phone') return `Busca no celular parada: o celular não respondeu. Deixe o celular ligado e com internet e clique de novo. ${progress}`
+  return `Buscando no celular: ${progress}${v.capped ? ' · limite de pedidos de hoje atingido, continua amanhã' : ''}`
+}
+
+export function noAnchorLine(n: number): string {
+  return `${n} grupo(s) precisam reconectar o aparelho para trazer o histórico`
+}
 
 /** v0.8.1: o último "Reenviar histórico dos grupos" (só contagens). */
 export interface CopilotoGroupRepair {
@@ -70,6 +132,10 @@ export interface CopilotoStatus {
   /** v0.8.1: o último reenvio do histórico dos grupos (null = ainda não rodou) e se há um pedido esperando o roster */
   groupRepair: CopilotoGroupRepair | null
   groupRepairPending: boolean
+  /** v0.8.3: o histórico dos grupos dos mentorados que já está no Copiloto */
+  groupHistory: CopilotoGroupHistory
+  /** v0.8.3: a última "Buscar no celular o histórico dos grupos" (null = nunca) */
+  historyFetch: GroupHistoryFetchView | null
 }
 
 /** v0.8.1: "Reenviar histórico dos grupos". */

@@ -2,7 +2,7 @@ import type { Clock } from '../clock'
 import type { Repo, JobRow } from '../db/repo'
 import type { RateLimiter } from './limiter'
 
-export type JobType = 'download_audio' | 'transcribe' | 'fetch_profile' | 'classify' | 'send_message'
+export type JobType = 'download_audio' | 'transcribe' | 'fetch_profile' | 'classify' | 'send_message' | 'fetch_history'
 /** `signal` é abortado quando o job estoura o prazo do tipo (o resultado atrasado é descartado). */
 export type Handler = (payload: any, signal?: AbortSignal) => Promise<void>
 export type TickResult = 'ran' | 'idle' | 'paused' | 'waiting'
@@ -44,7 +44,9 @@ export const DEFAULT_JOB_TIMEOUTS_MS: Record<JobType, number> = {
   classify: 90_000,
   // "digitando…" (até 8,5 s) + o envio + marcar como lida. Folgado de propósito: estourar o prazo NÃO dá o envio como
   // desconhecido enquanto o pedido ao WhatsApp ainda está em andamento (o serviço espera ele terminar)
-  send_message: 180_000
+  send_message: 180_000,
+  /** v0.8.3: um pedido de histórico ao celular (a resposta chega depois, como evento) */
+  fetch_history: 60_000
 }
 
 /**

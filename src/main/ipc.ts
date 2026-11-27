@@ -202,6 +202,7 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     copilotoGenerateCode: () => service.copilotoGenerateCode(),
     copilotoTest: () => service.copilotoTest(),
     copilotoRepairGroups: () => service.copilotoRepairGroups(),
+    copilotoFetchGroupHistory: () => service.copilotoFetchGroupHistory(),
     listFollowups: () => service.listFollowups(),
     followupOpen: (id) => service.followupOpen(String(id)),
     followupDecline: (id, reason) => service.followupDecline(String(id), reason === null ? null : String(reason))

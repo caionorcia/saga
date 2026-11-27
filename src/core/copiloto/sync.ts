@@ -17,6 +17,7 @@ import {
   COPILOTO_TEXT,
   isCopilotoUrl,
   type CopilotoCodeResult,
+  type CopilotoGroupHistory,
   type CopilotoGroupRepair,
   type CopilotoRepairResult,
   type CopilotoPatch,
@@ -30,7 +31,8 @@ import { findSentEcho } from '../send/logic'
 import type { FollowupRow } from '../db/followupRepo'
 import { EventBuilder, serialize } from './events'
 import { parsePending, resolveTarget, shortReason, type FollowupUpdate, type PendingFollowup } from './followups'
-import { generateCode, isRosterHash, phoneOfJid } from './identity'
+import { generateCode, isRosterHash, messageEventId, phoneOfJid } from './identity'
+import { historyTarget, reachedTarget, runView } from '../wa/groupHistory'
 
 export const COPILOTO_LIMITS = {
   batchEvents: 100,
@@ -51,7 +53,12 @@ export const COPILOTO_LIMITS = {
   /** enviado sem o eco ter chegado: espera ele até este tempo para o `sent_at`; depois vale a hora do envio */
   echoWaitMs: 2 * 60_000,
   /** v0.8.1: grupos ainda sem carga são conferidos de novo contra o roster neste intervalo (e logo que a participação muda) */
-  regroupEveryMs: 10 * 60_000
+  regroupEveryMs: 10 * 60_000,
+  /**
+   * v0.8.3: depois de um histórico importado (aparelho vinculado de novo por QR, ou a busca no celular), os follow-ups que
+   * chegarem até este tempo depois ficam para a confirmação do mentor (nada sai sozinho por causa do histórico antigo)
+   */
+  historyHoldMs: 24 * 60 * 60_000
 } as const
 
 const DAY = 24 * 60 * 60_000
@@ -77,7 +84,9 @@ export const COPILOTO_KEYS = {
   /** o botão "Reenviar histórico dos grupos" pediu um reenvio que ainda espera o roster ('1') */
   groupRepairPending: 'copiloto.groupRepairPending',
   /** o resultado do último reenvio (JSON `{at, groups, messages, empty}`: só contagens) */
-  groupRepairResult: 'copiloto.groupRepairResult'
+  groupRepairResult: 'copiloto.groupRepairResult',
+  /** v0.8.3: até quando (epoch ms) os follow-ups recebidos ficam para a confirmação, por causa de um histórico importado */
+  autoHoldUntil: 'copiloto.autoHoldUntil'
 } as const
 
 const K = COPILOTO_KEYS
@@ -145,10 +154,27 @@ export class CopilotoSync {
     return this.repo.getSetting(K.autoFollowups) === '1'
   }
 
-  /** Quando a opção foi ligada (epoch ms); só os recebidos a partir daí saem sozinhos. */
+  /**
+   * Quando a opção foi ligada (epoch ms); só os recebidos a partir daí saem sozinhos. v0.8.3: depois de um histórico
+   * importado, só os recebidos depois de `autoHoldUntil` (os de antes, mesmo marcados como automáticos, viram cartão).
+   */
   autoFollowupsAt(): number {
     const v = Number(this.repo.getSetting(K.autoFollowupsAt) ?? NaN)
-    return Number.isFinite(v) ? v : Infinity
+    const hold = Number(this.repo.getSetting(K.autoHoldUntil) ?? NaN)
+    return Math.max(Number.isFinite(v) ? v : Infinity, Number.isFinite(hold) ? hold : -Infinity)
+  }
+
+  /**
+   * v0.8.3: um histórico foi importado (vínculo novo por QR ou busca no celular): os follow-ups recebidos até
+   * `historyHoldMs` daqui ficam para a confirmação do mentor. Só estende, nunca encurta.
+   */
+  holdAutoFollowups(): void {
+    const until = this.deps.clock.now() + COPILOTO_LIMITS.historyHoldMs
+    const cur = Number(this.repo.getSetting(K.autoHoldUntil) ?? 0) || 0
+    if (until <= cur) return
+    this.repo.setSetting(K.autoHoldUntil, String(until))
+    if (cur < this.deps.clock.now()) this.repo.logEvent('copiloto_auto', 'histórico importado: os follow-ups das próximas 24 h ficam para a sua confirmação')
+    this.deps.onFollowups?.()
   }
 
   /** A integração está ligada, configurada e o Copiloto não recusou o código (401). */
@@ -213,8 +239,57 @@ export class CopilotoSync {
       chats: this.repo.copiloto.chatCount(),
       autoFollowups: this.autoFollowups(),
       groupRepair: this.groupRepairResult(),
-      groupRepairPending: this.repo.getSetting(K.groupRepairPending) === '1'
+      groupRepairPending: this.repo.getSetting(K.groupRepairPending) === '1',
+      groupHistory: this.groupHistory(),
+      historyFetch: runView(this.repo, this.deps.clock.now())
     }
+  }
+
+  private oldestCache: { key: string; ts: number | null } | null = null
+
+  /** v0.8.3: o histórico dos grupos já aceito pelo Copiloto (só contagens; a mais antiga recalculada só quando muda). */
+  private groupHistory(): CopilotoGroupHistory {
+    const c = this.repo.copiloto.groupMessageCounts()
+    const key = `${c.messages}:${c.groups}`
+    if (this.oldestCache?.key !== key) this.oldestCache = { key, ts: c.messages > 0 ? this.oldestSentGroupMessage() : null }
+    return { oldestTs: this.oldestCache.ts, ...c }
+  }
+
+  private oldestSentGroupMessage(): number | null {
+    let oldest: number | null = null
+    for (const [jid, ids] of this.repo.copiloto.doneGroupMessageIds()) {
+      for (const m of this.repo.copiloto.messageIdsAsc(jid)) {
+        if (oldest !== null && m.ts >= oldest) break
+        if (ids.has(messageEventId(jid, m.id))) {
+          oldest = m.ts
+          break
+        }
+      }
+    }
+    return oldest
+  }
+
+  /**
+   * v0.8.3: os grupos de mentorados para a busca no celular: os que têm mensagem guardada e ainda não chegam a 30 dias
+   * atrás, e quantos não têm mensagem nenhuma aqui (sem ponto de partida). null sem a lista de mentorados.
+   */
+  historyCandidates(): { jids: string[]; noAnchor: number } | null {
+    const set = this.rosterSet()
+    if (!set) return null
+    const b = this.builder(set)
+    const target = historyTarget(this.repo, this.deps.clock.now())
+    const jids: string[] = []
+    let noAnchor = 0
+    for (const jid of this.repo.copiloto.groupJids()) {
+      if (!b.chat(jid)) {
+        if (!this.repo.copiloto.chat(jid) && b.groupPhones(jid).length > 0) noAnchor++
+        continue
+      }
+      const oldest = this.repo.oldestMessage(jid)
+      if (!oldest) noAnchor++
+      else if (!reachedTarget(oldest.ts, target)) jids.push(jid)
+    }
+    return { jids, noAnchor }
   }
 
   private groupRepairResult(): GroupRepairResult | null {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { CopilotoStatus } from '../../../shared/copiloto'
-import { COPILOTO_TEXT, groupRepairLine, isCopilotoUrl } from '../../../shared/copiloto'
+import { COPILOTO_TEXT, groupHistoryLine, groupRepairLine, historyFetchLine, isCopilotoUrl, noAnchorLine } from '../../../shared/copiloto'
 import { formatDay, formatTime } from '../format'
 import { Group, Info } from './SettingsParts'
 
@@ -104,6 +104,24 @@ export function CopilotoSection() {
       setBusy(false)
     }
   }
+
+  // v0.8.3: pede ao celular, aos poucos, o histórico dos grupos dos mentorados (só leitura)
+  const fetchHistory = async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const r = await window.saga.copilotoFetchGroupHistory()
+      if (r.ok) {
+        setSt(r.status)
+        setMsg({ text: 'Busca no celular começou. Deixe o celular ligado e com internet ✓', bad: false })
+      } else setMsg({ text: r.message, bad: true })
+    } catch {
+      setMsg({ text: 'Não foi possível começar a busca. Tente de novo.', bad: true })
+    } finally {
+      setBusy(false)
+    }
+  }
+  const fetching = st.historyFetch?.state === 'running'
 
   const urlDirty = url.trim() !== (st.url ?? '')
   const urlBad = url.trim() !== '' && !isCopilotoUrl(url.trim())
@@ -213,11 +231,24 @@ export function CopilotoSection() {
               Reenviar histórico dos grupos
             </button>
           )}
+          {st.enabled && (
+            <button type="button" className="btn" disabled={busy || fetching} onClick={() => void fetchHistory()}>
+              Buscar no celular o histórico dos grupos
+            </button>
+          )}
         </div>
         {st.enabled && (
           <Info summary="O que faz o reenvio?">
             Põe de novo na fila os últimos 30 dias dos grupos dos mentorados e pede os nomes dos grupos ao WhatsApp. Nada é
             duplicado no Copiloto.
+          </Info>
+        )}
+        {st.enabled && (
+          <Info summary="E a busca no celular?">
+            Para os grupos que já têm alguma mensagem aqui, o SagaZap pede ao seu celular as mensagens anteriores, até 30
+            dias atrás: um pedido a cada 20 segundos, no máximo 60 por dia, só com o WhatsApp conectado. O celular precisa
+            estar ligado e com internet. Nada é enviado a ninguém. Grupos sem nenhuma mensagem aqui só recebem o histórico
+            vinculando o aparelho de novo (veja o guia).
           </Info>
         )}
         <p className={`s-msg ${msg?.bad ? 'field-error small' : 'ok-text small'}`} role="status" aria-live="polite">
@@ -226,6 +257,20 @@ export function CopilotoSection() {
         {st.authFailed && <p className="field-error small">{COPILOTO_TEXT.invalidCode}. Gere outro código ou confira o secret no Copiloto.</p>}
         {st.enabled && (
           <p className="status-line" data-testid="copiloto-status">
+            <span data-testid="copiloto-group-history">{groupHistoryLine(st.groupHistory)}</span>
+            <br />
+            {st.historyFetch && (
+              <>
+                <span data-testid="copiloto-history-fetch">{historyFetchLine(st.historyFetch)}</span>
+                <br />
+                {st.historyFetch.noAnchor > 0 && (
+                  <>
+                    <span data-testid="copiloto-history-no-anchor">{noAnchorLine(st.historyFetch.noAnchor)}</span>
+                    <br />
+                  </>
+                )}
+              </>
+            )}
             {st.groupRepair && (
               <>
                 <span data-testid="copiloto-group-repair">{groupRepairLine(st.groupRepair)}</span>

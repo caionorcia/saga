@@ -1065,6 +1065,12 @@ export class Repo {
     return typeof r?.t === 'number' ? r.t : null
   }
 
+  /** v0.8.3: a mensagem mais antiga guardada da conversa (o ponto de partida do pedido de histórico ao celular), ou null. */
+  oldestMessage(jid: string): { id: string; fromMe: boolean; ts: number; waKeyJson: string | null } | null {
+    const r = this.db.prepare('SELECT id, from_me, ts, wa_key_json FROM messages WHERE jid = ? ORDER BY ts ASC, rowid ASC LIMIT 1').get(jid) as Row | undefined
+    return r ? { id: r.id, fromMe: r.from_me === 1, ts: r.ts, waKeyJson: r.wa_key_json ?? null } : null
+  }
+
   getMessage(id: string): MessageRow | null {
     const r = this.db
       .prepare(`SELECT m.*, ${SENDER_COLS} FROM messages m LEFT JOIN contacts sc ON sc.jid = m.sender_jid WHERE m.id = ?`)

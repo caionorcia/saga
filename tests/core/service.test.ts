@@ -144,7 +144,7 @@ describe('SagaService', () => {
   })
 
   describe('start()', () => {
-    it('recoverAfterCrash, aquecimento em todos os 6 limitadores, cliente e fila; nenhuma chamada de IA', async () => {
+    it('recoverAfterCrash, aquecimento em todos os 7 limitadores, cliente e fila; nenhuma chamada de IA', async () => {
       const order: string[] = []
       const recover = vi.spyOn(JobQueue.prototype, 'recoverAfterCrash').mockImplementation(function () {
         order.push('recover')
@@ -162,9 +162,9 @@ describe('SagaService', () => {
       settings.save({ groqKey: GROQ_KEY })
       await service.start()
       expect(recover).toHaveBeenCalledTimes(1)
-      expect(warm).toHaveBeenCalledTimes(6)
+      expect(warm).toHaveBeenCalledTimes(7)
       expect(qstart).toHaveBeenCalledTimes(1)
-      expect(order).toEqual(['recover', 'warmup', 'warmup', 'warmup', 'warmup', 'warmup', 'warmup', 'wa.start', 'queue.start'])
+      expect(order).toEqual(['recover', 'warmup', 'warmup', 'warmup', 'warmup', 'warmup', 'warmup', 'warmup', 'wa.start', 'queue.start'])
       expect(llmFactory).not.toHaveBeenCalled()
       expect(llm.calls).toBe(0)
     })
@@ -189,7 +189,7 @@ describe('SagaService', () => {
         lim.record()
         expect(repo.getSetting(`limiter:${name}`), name).not.toBeNull()
       }
-      expect(Object.keys(service.limiters).sort()).toEqual(['classify', 'groq_audio', 'llm', 'wa_media', 'wa_profile', 'wa_send'])
+      expect(Object.keys(service.limiters).sort()).toEqual(['classify', 'groq_audio', 'llm', 'wa_history', 'wa_media', 'wa_profile', 'wa_send'])
     })
   })
 

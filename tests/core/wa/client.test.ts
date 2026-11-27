@@ -14,6 +14,7 @@ import { sendJobKey } from '../../../src/core/db/sendRepo'
 import { chatHash, pickQuote, sendAddress } from '../../../src/core/send/logic'
 import { verifyUnknownSend } from '../../../src/core/send/verify'
 import { isGroupJid } from '../../../src/core/wa/normalize'
+import { runView } from '../../../src/core/wa/groupHistory'
 import { DEFAULT_SEND_OPTIONS, typingMs, type SendOptions } from '../../../src/shared/send'
 
 const DAY = 86_400_000
@@ -66,6 +67,8 @@ class FakeSocket {
   groupFetchAllParticipating = vi.fn(async () => ({}) as Record<string, { id: string; subject?: string }>)
   /** leitura (IQ): um grupo só (v0.8.1) */
   groupMetadata = vi.fn(async (_jid: string) => null as null | { id: string; subject?: string; participants?: unknown[] })
+  /** v0.8.3: pedido de histórico ao próprio celular (só pelo job `fetch_history`) */
+  fetchMessageHistory = vi.fn(async (_count: number, _key: any, _ts: number) => 'PDO')
   spies: Record<string, ReturnType<typeof vi.fn>> = {}
   constructor(public config: any) {
     for (const name of FORBIDDEN) {
@@ -135,6 +138,8 @@ describe('WhatsAppClient', () => {
   let diagLines: Array<[string, string]>
   /** o bloco "envio direto" libera os métodos do caminho de envio (só eles) */
   let allowSendPath: boolean
+  /** v0.8.3: só os testes da busca no celular podem ver o pedido de histórico */
+  let allowHistory: boolean
   let sendOpts: SendOptions
 
   const last = () => sockets[sockets.length - 1]
@@ -161,7 +166,8 @@ describe('WhatsAppClient', () => {
       download_audio: new RateLimiter(LIMITS.wa_media, clock, () => 0),
       transcribe: new RateLimiter(LIMITS.groq_audio, clock, () => 0),
       fetch_profile: new RateLimiter(LIMITS.wa_profile, clock, () => 0),
-      send_message: new RateLimiter(LIMITS.wa_send, clock, () => 0)
+      send_message: new RateLimiter(LIMITS.wa_send, clock, () => 0),
+      fetch_history: new RateLimiter(LIMITS.wa_history, clock, () => 0)
     }
     queue = new JobQueue(repo, clock, limiters)
     sockets = []
@@ -175,6 +181,7 @@ describe('WhatsAppClient', () => {
     fetchVersion = vi.fn(async () => ({ version: [2, 3000, waRevision] as [number, number, number], isLatest: true }))
     diagLines = []
     allowSendPath = false
+    allowHistory = false
     sendOpts = { ...DEFAULT_SEND_OPTIONS }
     client = new WhatsAppClient({
       sendOptions: () => sendOpts,
@@ -221,6 +228,7 @@ describe('WhatsAppClient', () => {
         if (allowSendPath && (SEND_PATH as readonly string[]).includes(name)) continue
         expect(s.spies[name], name).not.toHaveBeenCalled()
       }
+      if (!allowHistory) expect(s.fetchMessageHistory, 'fetchMessageHistory').not.toHaveBeenCalled()
     }
     if (allowSendPath) {
       // cada sendMessage corresponde a um envio confirmado que saiu da fila (nunca dois para o mesmo envio)
@@ -1202,6 +1210,218 @@ describe('WhatsAppClient', () => {
       await client.whenIdle()
       await advance(3_600_000)
       expect(sockets).toHaveLength(1)
+    })
+  })
+
+  describe('v0.8.3: vincular de novo e histórico dos grupos', () => {
+    const ON_DEMAND = 6
+
+    it('vincular de novo (removido no celular → QR → histórico): só auth apagada, nada duplicado nem baixado de novo, grupos antigos entram, nada escrito', async () => {
+      repo.setSetting('wa.groupMembersFetchedAt', String(NOW))
+      await emit('connection.update', { connection: 'open' })
+      await emit('messaging-history.set', {
+        chats: [],
+        contacts: [],
+        messages: [
+          wamsg({ id: 'i1', ts: NOW - 10 * DAY, text: 'oi' }),
+          wamsg({ id: 'au1', ts: NOW - 5 * DAY, audio: 12 }),
+          wamsg({ id: 'g-new', jid: GRP, participant: JID2, ts: NOW - 2 * DAY })
+        ]
+      })
+      // o áudio já foi transcrito; memória, configurações e fila do Copiloto existem
+      repo.setTranscript('au1', 'transcrição pronta', 'done')
+      repo.setSetting('copiloto.enabled', '1')
+      repo.setSetting('settings.theme', 'dark')
+      repo.copiloto.upsert('sz1:m:x', GRP, '{}', 'h')
+      const jobsBefore = repo.listJobs('pending').length + repo.listJobs('done').length
+      const seen: string[] = []
+      client.on('message', (m: { id: string }) => seen.push(m.id))
+      const history: unknown[] = []
+      client.on('history', (h: unknown) => history.push(h))
+      const paired = vi.fn()
+      client.on('paired', paired)
+
+      // o mentor remove o aparelho no celular
+      await close(401)
+      expect(statuses.at(-1)).toBe('stopped_logged_out')
+      expect(existsSync(join(tmp, 'auth', 'creds.json'))).toBe(false)
+      // nada além da sessão foi apagado
+      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['i1', 'au1'])
+      expect(repo.getMessage('au1')?.transcriptStatus).toBe('done')
+      expect(repo.getSetting('settings.theme')).toBe('dark')
+      expect(repo.copiloto.pendingCount()).toBe(1)
+
+      // "Reconectar": QR novo, o mentor escaneia, o histórico chega de novo (com os grupos antigos agora)
+      await client.manualReconnect()
+      await emit('connection.update', { qr: '2@abc,def' })
+      await emit('connection.update', { connection: 'open' })
+      expect(paired).toHaveBeenCalledTimes(1)
+      // os grupos (nomes e participantes) são consultados de novo, pela fila
+      expect(repo.listJobs('pending').some((j) => j.key === 'wa:group_subjects')).toBe(true)
+      await emit('messaging-history.set', {
+        chats: [],
+        contacts: [],
+        messages: [
+          wamsg({ id: 'i1', ts: NOW - 10 * DAY, text: 'oi' }),
+          wamsg({ id: 'au1', ts: NOW - 5 * DAY, audio: 12 }),
+          wamsg({ id: 'g-new', jid: GRP, participant: JID2, ts: NOW - 2 * DAY }),
+          wamsg({ id: 'g-old1', jid: GRP, participant: JID2, ts: NOW - 20 * DAY }),
+          wamsg({ id: 'g-old2', jid: GRP, fromMe: true, participant: OWN, ts: NOW - 29 * DAY }),
+          wamsg({ id: 'g-too-old', jid: GRP, participant: JID2, ts: NOW - 33 * DAY })
+        ]
+      })
+      // só as novas: ids iguais não entram de novo, o áudio transcrito não volta para a fila
+      expect(seen).toEqual(['g-old1', 'g-old2'])
+      expect(history).toEqual([{ inserted: 2, onDemand: false }])
+      expect(repo.listMessages(GRP).map((m) => m.id)).toEqual(['g-old2', 'g-old1', 'g-new'])
+      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['i1', 'au1'])
+      expect(repo.getMessage('au1')).toMatchObject({ transcriptStatus: 'done', transcript: 'transcrição pronta' })
+      const jobs = [...repo.listJobs('pending'), ...repo.listJobs('done')]
+      expect(jobs.filter((j) => j.type === 'download_audio')).toHaveLength(1)
+      expect(jobs.length).toBe(jobsBefore) // a consulta dos grupos é o mesmo job (volta para a fila)
+      expect(jobs.some((j) => j.type === 'send_message')).toBe(false)
+      expect(repo.getSetting('settings.theme')).toBe('dark')
+    })
+
+    it('reconectar sem QR (queda comum): não conta como vínculo novo', async () => {
+      const paired = vi.fn()
+      client.on('paired', paired)
+      await emit('connection.update', { connection: 'open' })
+      await close(428)
+      await advance(10_000)
+      await emit('connection.update', { connection: 'open' })
+      expect(paired).not.toHaveBeenCalled()
+    })
+
+    describe('busca no celular (fetchMessageHistory)', () => {
+      const run = () => JSON.parse(repo.getSetting('wa.groupHistoryRun') ?? 'null')
+      const calls = () => last().fetchMessageHistory.mock.calls
+
+      beforeEach(async () => {
+        allowHistory = true
+        repo.setSetting('wa.groupMembersFetchedAt', String(NOW))
+        await emit('connection.update', { connection: 'open' })
+        await emit('messages.upsert', {
+          type: 'notify',
+          messages: [
+            wamsg({ id: 'g1', jid: GRP, participant: JID2, ts: NOW - 2 * DAY }),
+            wamsg({ id: 'g2', jid: GRP, participant: JID2, ts: NOW - DAY }),
+            wamsg({ id: 'h1', jid: GRP2, fromMe: true, participant: OWN, ts: NOW - 3 * DAY }),
+            wamsg({ id: 'now', ts: NOW - 1000 })
+          ]
+        })
+        // os grupos sem nome pedem a consulta dos grupos: ela roda primeiro (a fila só tem o histórico depois)
+        last().groupFetchAllParticipating.mockResolvedValue({ [GRP]: { id: GRP, subject: 'Turma A' }, [GRP2]: { id: GRP2, subject: 'Turma B' } })
+        await queue.tick()
+        expect(last().groupFetchAllParticipating).toHaveBeenCalledTimes(1)
+      })
+
+      it('só com a conexão estável; um pedido por vez de 50 antes da mais antiga; a resposta entra pela ingestão (30 dias) até completar', async () => {
+        const history: Array<{ inserted: number; onDemand: boolean }> = []
+        client.on('history', (h: { inserted: number; onDemand: boolean }) => history.push(h))
+        const view = client.startGroupHistory([GRP, GRP2], 1)
+        expect(view).toMatchObject({ state: 'running', groups: 2, done: 0, noAnchor: 1 })
+        // aberta há menos de 1 min: nada
+        await queue.tick()
+        expect(calls()).toHaveLength(0)
+        await advance(61_000)
+        expect(await queue.tick()).toBe('ran')
+        expect(calls()).toEqual([[50, { remoteJid: GRP, id: 'g1', fromMe: false, participant: JID2 }, NOW - 2 * DAY]])
+        // esperando a resposta: nenhum outro pedido
+        await advance(30_000)
+        await queue.tick()
+        expect(calls()).toHaveLength(1)
+        await emit('messaging-history.set', {
+          syncType: ON_DEMAND,
+          chats: [],
+          contacts: [],
+          messages: [wamsg({ id: 'o1', jid: GRP, participant: JID2, ts: NOW - 10 * DAY }), wamsg({ id: 'o2', jid: GRP, participant: '999@lid', ts: NOW - 12 * DAY })]
+        })
+        expect(repo.listMessages(GRP).map((m) => m.id)).toEqual(['o2', 'o1', 'g1', 'g2'])
+        expect(history).toEqual([{ inserted: 2, onDemand: true }])
+        expect(run()).toMatchObject({ received: 2, pending: null })
+        await queue.tick()
+        expect(calls()).toHaveLength(2)
+        expect(calls()[1]).toEqual([50, { remoteJid: GRP, id: 'o2', fromMe: false, participant: '999@lid' }, NOW - 12 * DAY])
+        // chegou antes dos 30 dias: o que passa da janela não entra e o grupo está completo
+        await emit('messaging-history.set', {
+          syncType: ON_DEMAND,
+          chats: [],
+          contacts: [],
+          messages: [wamsg({ id: 'o3', jid: GRP, participant: JID2, ts: NOW - 25 * DAY }), wamsg({ id: 'o4', jid: GRP, participant: JID2, ts: NOW - 31 * DAY })]
+        })
+        expect(repo.getMessage('o3')).not.toBeNull()
+        expect(repo.getMessage('o4')).toBeNull()
+        // ritmo: 20 s entre pedidos
+        await advance(5_000)
+        await queue.tick()
+        expect(calls()).toHaveLength(2)
+        await advance(20_000)
+        await queue.tick()
+        expect(calls()[2]).toEqual([50, { remoteJid: GRP2, id: 'h1', fromMe: true }, NOW - 3 * DAY])
+        // o celular não tem mais nada antes desta: grupo concluído
+        await emit('messaging-history.set', { syncType: ON_DEMAND, chats: [], contacts: [], messages: [] })
+        await advance(30_000)
+        await queue.tick()
+        expect(calls()).toHaveLength(3)
+        expect(runView(repo, clock.now())).toMatchObject({ state: 'done', groups: 2, done: 2, requests: 3, received: 3, noAnchor: 1 })
+        // clicar de novo depois de concluída: busca nova (só os grupos que ainda faltam)
+        expect(client.startGroupHistory([], 1)).toMatchObject({ state: 'done', groups: 0 })
+        expect(repo.listJobs('failed')).toHaveLength(0)
+      })
+
+      it('celular sem resposta: quieto; três perdidos seguidos param a busca (sem job com falha)', async () => {
+        client.startGroupHistory([GRP, GRP2], 0)
+        await advance(61_000)
+        for (let i = 0; i < 3; i++) {
+          await queue.tick()
+          await advance(61_000)
+        }
+        await queue.tick()
+        expect(calls().map((c) => c[1].id)).toEqual(['g1', 'g1', 'h1'])
+        expect(run()).toMatchObject({ state: 'waiting_phone', pending: null })
+        expect(run().groups[GRP].s).toBe('gave_up')
+        await advance(10 * 60_000)
+        await queue.tick()
+        expect(calls()).toHaveLength(3)
+        expect(repo.listJobs('failed')).toHaveLength(0)
+      })
+
+      it('limite de 60 pedidos por dia, gravado no banco: o resto fica para o dia seguinte', async () => {
+        const today = new Date(NOW)
+        const dayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+        repo.setSetting('wa.groupHistoryLog', JSON.stringify(Array.from({ length: 60 }, (_, i) => Math.max(dayStart, NOW - 3_600_000) + i)))
+        client.startGroupHistory([GRP], 0)
+        await advance(61_000)
+        await queue.tick()
+        expect(calls()).toHaveLength(0)
+        expect(client.startGroupHistory([GRP], 0)).toMatchObject({ state: 'running', capped: true })
+        const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).getTime()
+        await advance(tomorrow - clock.now() + 1000)
+        // a conexão continua aberta: no dia seguinte, sozinho
+        await queue.tick()
+        expect(calls()).toHaveLength(1)
+      })
+
+      it('a busca em andamento continua ao reconectar, mesmo se o job tiver parado', async () => {
+        client.startGroupHistory([GRP], 0)
+        const job = repo.listJobs('pending').find((j) => j.type === 'fetch_history')!
+        repo.markJobDone(job.id)
+        await close(428)
+        await advance(10_000)
+        await emit('connection.update', { connection: 'open' })
+        await advance(61_000)
+        await queue.tick()
+        expect(calls()).toHaveLength(1)
+      })
+
+      it('sem conexão aberta: nenhum pedido', async () => {
+        client.startGroupHistory([GRP], 0)
+        await close(428)
+        await advance(5 * 60_000)
+        await queue.tick()
+        expect(calls()).toHaveLength(0)
+      })
     })
   })
 

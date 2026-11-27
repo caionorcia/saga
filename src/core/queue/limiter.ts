@@ -12,7 +12,7 @@ export interface LimitConfig {
   minBilledSec?: number
 }
 
-export type LimiterName = 'wa_media' | 'wa_profile' | 'groq_audio' | 'llm' | 'classify' | 'wa_send'
+export type LimiterName = 'wa_media' | 'wa_profile' | 'groq_audio' | 'llm' | 'classify' | 'wa_send' | 'wa_history'
 
 export const LIMITS: Record<LimiterName, LimitConfig> = {
   wa_media: { minGapMs: 4000, maxGapMs: 12000, perHour: 300, perDay: 2000 },
@@ -32,7 +32,12 @@ export const LIMITS: Record<LimiterName, LimitConfig> = {
    * envio direto (v0.4.0): uma mensagem a cada 30–90 s (sorteio; o dobro no aquecimento), no máximo 40 por hora e 200 por
    * dia. O primeiro envio sai na hora se os tetos permitem.
    */
-  wa_send: { minGapMs: 30_000, maxGapMs: 90_000, perHour: 40, perDay: 200 }
+  wa_send: { minGapMs: 30_000, maxGapMs: 90_000, perHour: 40, perDay: 200 },
+  /**
+   * v0.8.3: pedidos de histórico dos grupos ao celular: um a cada 20–30 s, no máximo 60 por hora e por dia (além do
+   * limite gravado de 60 por dia local da busca, `src/core/wa/groupHistory.ts`)
+   */
+  wa_history: { minGapMs: 20_000, maxGapMs: 30_000, perHour: 60, perDay: 60 }
 }
 
 const HOUR = 3_600_000

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { COPILOTO_KEYS, COPILOTO_LIMITS, CopilotoSync } from '../../../src/core/copiloto/sync'
 import { chatKey, messageEventId, replyStateEventId, summaryEventId } from '../../../src/core/copiloto/identity'
-import { groupRepairLine } from '../../../src/shared/copiloto'
+import { groupHistoryLine, groupRepairLine } from '../../../src/shared/copiloto'
 import { ANA, ANA_PHONE, BIA, BIA_PHONE, CAIO, CAIO_LID, CAIO_PHONE, G_ANA, G_BIA, ROSTER_PHONES, WEBHOOK, fakeCipher, rosterOf, setup } from './helpers'
 
 /**
@@ -247,5 +247,70 @@ describe('v0.8.1: reenvio do histórico dos grupos (uma vez depois da atualizaç
     await drain()
     expect(sync.status().groupRepair).toBeNull()
     expect(groupMsgs(G_ANA)).toHaveLength(1)
+  })
+})
+
+describe('v0.8.3: histórico antigo dos grupos chegando depois (vincular de novo ou busca no celular)', () => {
+  it('as mensagens antigas que chegam vão ao Copiloto pela captura de sempre, com os mesmos ids; nada duplica; o status conta', async () => {
+    ctx.repo.upsertContact({ jid: G_ANA, isGroup: true, pushName: 'Turma de exemplo', nameRank: 2 })
+    ctx.repo.setGroupMembers(G_ANA, [ANA, BIA])
+    const recent = ctx.add(G_ANA, { senderJid: ANA, text: 'desde o dia 25', minutesAgo: 2 * 24 * 60 })
+    await enable()
+    await drain()
+    expect(groupMsgs(G_ANA).map((e: any) => e.id)).toEqual([messageEventId(G_ANA, recent.id)])
+    expect(sync.status().groupHistory).toEqual({ oldestTs: recent.ts, groups: 1, messages: 1, pending: 0 })
+    calls = []
+    // o vínculo novo (ou a resposta do celular) grava as anteriores
+    const old1 = ctx.add(G_ANA, { senderJid: BIA, text: 'antiga', minutesAgo: 20 * 24 * 60 })
+    const old2 = ctx.add(G_ANA, { fromMe: true, text: 'mais antiga', minutesAgo: 29 * 24 * 60 })
+    expect(sync.status().groupHistory.pending).toBe(0) // ainda só anotadas
+    await drain()
+    expect(groupMsgs(G_ANA).map((e: any) => e.id).sort()).toEqual([messageEventId(G_ANA, old1.id), messageEventId(G_ANA, old2.id)].sort())
+    const st = sync.status()
+    expect(st.groupHistory).toEqual({ oldestTs: old2.ts, groups: 1, messages: 3, pending: 0 })
+    expect(groupHistoryLine(st.groupHistory)).toMatch(/^Histórico dos grupos: mensagem mais antiga em \d\d\/\d\d; 1 grupo\(s\), 3 mensagem\(ns\) enviadas ao Copiloto$/)
+    // o reenvio depois usa os mesmos ids (o servidor faz upsert; aqui, uma linha por id)
+    const r = sync.repairGroupsNow(new Set(roster))
+    expect(r).toMatchObject({ groups: 1, messages: 3 })
+    const ids = outbox().due(Number.MAX_SAFE_INTEGER, 1000).filter((x) => x.eventId.startsWith('sz1:m:')).map((x) => x.eventId)
+    expect(ids.sort()).toEqual([recent, old1, old2].map((m) => messageEventId(G_ANA, m.id)).sort())
+    for (const c of calls) expect(c.raw).not.toContain(BIA_PHONE)
+  })
+
+  it('candidatos da busca no celular: grupos de mentorados com mensagem e sem os 30 dias; sem mensagem nenhuma só contam', async () => {
+    expect(sync.historyCandidates()).toBeNull() // sem roster
+    ctx.add(ANA, { text: 'oi', minutesAgo: 1 })
+    ctx.repo.setGroupMembers(G_ANA, [ANA])
+    ctx.add(G_ANA, { fromMe: true, minutesAgo: 2 * 24 * 60 })
+    // completo: já tem mensagem de 30 dias atrás
+    const G_FULL = '120363000000000003@g.us'
+    ctx.repo.setGroupMembers(G_FULL, [ANA])
+    ctx.add(G_FULL, { fromMe: true, minutesAgo: 30 * 24 * 60 - 10 })
+    // de mentorado, sem nenhuma mensagem aqui
+    ctx.repo.setGroupMembers('120363000000000009@g.us', [CAIO])
+    // não é de mentorado
+    ctx.repo.setGroupMembers(G_BIA, [BIA])
+    ctx.add(G_BIA, { senderJid: BIA, minutesAgo: 60 })
+    await enable()
+    await drain()
+    expect(sync.historyCandidates()).toEqual({ jids: [G_ANA], noAnchor: 1 })
+  })
+
+  it('histórico importado segura o envio automático: só os follow-ups recebidos depois de 24 h saem sozinhos', async () => {
+    await enable()
+    expect(sync.save({ autoFollowups: true }).ok).toBe(true)
+    const on = sync.autoFollowupsAt()
+    expect(on).toBe(ctx.clock.now())
+    sync.holdAutoFollowups()
+    expect(sync.autoFollowupsAt()).toBe(ctx.clock.now() + COPILOTO_LIMITS.historyHoldMs)
+    // só estende
+    ctx.clock.advance(60_000)
+    sync.holdAutoFollowups()
+    expect(sync.autoFollowupsAt()).toBe(ctx.clock.now() + COPILOTO_LIMITS.historyHoldMs)
+    // desligar e ligar a opção não encurta a espera
+    sync.save({ autoFollowups: false })
+    sync.save({ autoFollowups: true })
+    expect(sync.autoFollowupsAt()).toBe(ctx.clock.now() + COPILOTO_LIMITS.historyHoldMs)
+    expect(ctx.repo.recentEvents(20).filter((e) => e.kind === 'copiloto_auto' && /histórico importado/.test(e.detail))).toHaveLength(1)
   })
 })

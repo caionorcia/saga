@@ -336,6 +336,11 @@ export interface SagaApi {
   copilotoTest(): Promise<CopilotoTestResult>
   /** v0.8.1: "Reenviar histórico dos grupos": pede os nomes dos grupos de novo e põe o histórico dos grupos na fila */
   copilotoRepairGroups(): Promise<CopilotoRepairResult>
+  /**
+   * v0.8.3: "Buscar no celular o histórico dos grupos": pede ao celular, aos poucos (um pedido a cada 20 s, no máximo 60
+   * por dia), as mensagens anteriores dos grupos dos mentorados, até 30 dias atrás. Só leitura
+   */
+  copilotoFetchGroupHistory(): Promise<CopilotoRepairResult>
 
   // --- follow-up do Copiloto (v0.7.0): a equipe escreve, o mentor confirma cada envio ---
   /** os follow-ups esperando o mentor ou saindo (e, por algumas horas, os enviados e os que não dão para enviar) */
@@ -410,6 +415,7 @@ export const INVOKE_METHODS = [
   'copilotoGenerateCode',
   'copilotoTest',
   'copilotoRepairGroups',
+  'copilotoFetchGroupHistory',
   'listFollowups',
   'followupOpen',
   'followupDecline'

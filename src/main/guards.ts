@@ -291,6 +291,7 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   copilotoGenerateCode: (a) => a.length === 0,
   copilotoTest: (a) => a.length === 0,
   copilotoRepairGroups: (a) => a.length === 0,
+  copilotoFetchGroupHistory: (a) => a.length === 0,
   listFollowups: (a) => a.length === 0,
   followupOpen: (a) => a.length === 1 && isStr(a[0]) && DRAFT_ID_RE.test(a[0]),
   followupDecline: (a) =>

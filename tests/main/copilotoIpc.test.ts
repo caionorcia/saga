@@ -22,7 +22,7 @@ describe('IPC do Copiloto: argumentos', () => {
   const bad = (m: any, ...a: unknown[]) => expect(() => validateIpcArgs(m, a)).toThrow(/argumentos inválidos/)
 
   it('status, gerar código e testar não levam argumentos', () => {
-    for (const m of ['copilotoStatus', 'copilotoGenerateCode', 'copilotoTest', 'copilotoRepairGroups']) {
+    for (const m of ['copilotoStatus', 'copilotoGenerateCode', 'copilotoTest', 'copilotoRepairGroups', 'copilotoFetchGroupHistory']) {
       ok(m)
       bad(m, 'x')
     }
@@ -52,6 +52,7 @@ describe('IPC do Copiloto: ligação com o serviço', () => {
       copilotoGenerateCode: vi.fn(async () => ({ ok: true, code: 'c' })),
       copilotoTest: vi.fn(async () => ({ ok: true, phones: 2, chats: 1 })),
       copilotoRepairGroups: vi.fn(async () => ({ ok: true, status: { enabled: true } })),
+      copilotoFetchGroupHistory: vi.fn(async () => ({ ok: true, status: { enabled: true } })),
       onState: vi.fn(() => () => {}),
       onContactsChanged: vi.fn(() => () => {}),
       on: vi.fn(),
@@ -78,5 +79,7 @@ describe('IPC do Copiloto: ligação com o serviço', () => {
     expect(await call('copilotoTest', APP)).toEqual({ ok: true, phones: 2, chats: 1 })
     expect(await call('copilotoRepairGroups', APP)).toEqual({ ok: true, status: { enabled: true } })
     await expect(call('copilotoRepairGroups', 'https://evil.example/')).rejects.toThrow(/origem não confiável/)
+    expect(await call('copilotoFetchGroupHistory', APP)).toEqual({ ok: true, status: { enabled: true } })
+    await expect(call('copilotoFetchGroupHistory', 'https://evil.example/')).rejects.toThrow(/origem não confiável/)
   })
 })

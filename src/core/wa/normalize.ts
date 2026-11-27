@@ -59,7 +59,7 @@ function contactJid(key: WAMessage['key'], opts: NormalizeOptions): string | nul
 }
 
 /** messageTimestamp (segundos; number, string ou Long) → epoch em ms. */
-function toMs(ts: unknown): number | null {
+export function toMs(ts: unknown): number | null {
   let s: number
   if (typeof ts === 'number') s = ts
   else if (typeof ts === 'string') s = Number(ts)

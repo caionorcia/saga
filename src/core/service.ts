@@ -53,6 +53,7 @@ import { SendConflictError, sendJobKey, type SendRow } from './db/sendRepo'
 import { SendGate, type SendBinding } from './send/gate'
 import { CopilotoSync } from './copiloto/sync'
 import {
+  COPILOTO_TEXT,
   FOLLOWUP_AUTO,
   FOLLOWUP_LIMITS,
   FOLLOWUP_REASON,
@@ -106,7 +107,7 @@ const UNHIDDEN_KEY = 'migration.unhidden_jids'
 
 /** O que o serviço usa do cliente do WhatsApp (o real ou um falso nos testes / modo SAGA_FAKE_WA). */
 export interface WaClientLike {
-  on(event: 'qr' | 'status' | 'message' | 'disk' | 'contacts' | 'send' | 'membership', listener: (arg: any) => void): unknown
+  on(event: 'qr' | 'status' | 'message' | 'disk' | 'contacts' | 'send' | 'membership' | 'paired' | 'history', listener: (arg: any) => void): unknown
   start(): Promise<void>
   stop(): Promise<void>
   manualReconnect(): Promise<void>
@@ -124,6 +125,10 @@ export interface WaClientLike {
   pnForLid?(lid: string): string | null
   /** v0.8.1: pede a consulta dos grupos (nomes e participantes) de novo, pela fila */
   refreshGroupSubjects?(): void
+  /** v0.8.3: o WhatsApp desta versão aceita o pedido de histórico ao celular */
+  canFetchHistory?(): boolean
+  /** v0.8.3: "Buscar no celular o histórico dos grupos" para estes grupos (pela fila, só leitura) */
+  startGroupHistory?(jids: string[], noAnchor: number): unknown
 }
 
 export interface SagaServiceOpts {
@@ -381,14 +386,16 @@ export class SagaService extends EventEmitter {
       groq_audio: lim('groq_audio'),
       llm: lim('llm'),
       classify: lim('classify'),
-      wa_send: lim('wa_send')
+      wa_send: lim('wa_send'),
+      wa_history: lim('wa_history')
     }
     const byType: Record<JobType, RateLimiter> = {
       download_audio: this.limiters.wa_media,
       transcribe: this.limiters.groq_audio,
       fetch_profile: this.limiters.wa_profile,
       classify: this.limiters.classify,
-      send_message: this.limiters.wa_send
+      send_message: this.limiters.wa_send,
+      fetch_history: this.limiters.wa_history
     }
     this.queue = new JobQueue(repo, clock, byType, { diag: (k, d) => this.diag(k, d) })
 
@@ -429,6 +436,16 @@ export class SagaService extends EventEmitter {
         try {
           repo.markJobDone(job.id)
           this.sendJobFailed(job.payload)
+        } catch {
+          // banco fechado
+        }
+        this.markState()
+        return
+      }
+      if (job.type === 'fetch_history') {
+        // v0.8.3: a busca do histórico nunca vira "áudios com falha"; o estado da busca está gravado (clicar de novo retoma)
+        try {
+          repo.markJobDone(job.id)
         } catch {
           // banco fechado
         }
@@ -512,6 +529,10 @@ export class SagaService extends EventEmitter {
     this.wa.on('disk', () => this.markState())
     // v0.8.1: participantes de grupo ou um @lid com telefone novo: o Copiloto confere de novo os grupos
     this.wa.on('membership', () => this.copiloto.membershipChanged())
+    // v0.8.3: aparelho vinculado de novo (QR) ou histórico pedido ao celular: o histórico antigo vai ao Copiloto, e os
+    // follow-ups que ele gerar nas próximas 24 h ficam para a confirmação do mentor (nenhum envio automático por isso)
+    this.wa.on('paired', () => this.copiloto.holdAutoFollowups())
+    this.wa.on('history', () => this.copiloto.holdAutoFollowups())
     this.wa.on('contacts', () => {
       this.pendingContacts = true
       this.scheduleEmit()
@@ -1778,6 +1799,24 @@ export class SagaService extends EventEmitter {
       // sem conexão: os nomes vêm na próxima consulta
     }
     return this.copiloto.repairGroups()
+  }
+
+  /**
+   * v0.8.3: "Buscar no celular o histórico dos grupos": os grupos de mentorados com mensagem guardada aqui e sem os 30
+   * dias completos. O cliente pede ao celular pela fila, aos poucos; o que chegar entra pela ingestão normal e vai ao
+   * Copiloto pela captura de sempre (mesmos ids).
+   */
+  async copilotoFetchGroupHistory(): Promise<CopilotoRepairResult> {
+    if (!this.copiloto.enabled()) return { ok: false, message: COPILOTO_TEXT.historyOff }
+    if (!this.wa.startGroupHistory) return { ok: false, message: COPILOTO_TEXT.historyUnavailable }
+    const c = this.copiloto.historyCandidates()
+    if (!c) {
+      this.copiloto.kick()
+      return { ok: false, message: COPILOTO_TEXT.historyNoRoster }
+    }
+    this.wa.startGroupHistory(c.jids, c.noAnchor)
+    this.markState()
+    return { ok: true, status: this.copiloto.status() }
   }
 
   /**

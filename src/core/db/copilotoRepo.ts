@@ -228,6 +228,40 @@ export class CopilotoRepo {
     ).map((r) => r.jid as string)
   }
 
+  /**
+   * v0.8.3: as mensagens de grupo na fila de saída: aceitas pelo Copiloto (`done`, com quantos grupos) e ainda pendentes.
+   * Só contagens (a impressão dos aceitos fica 45 dias).
+   */
+  groupMessageCounts(): { groups: number; messages: number; pending: number } {
+    const r = this.db
+      .prepare(
+        `SELECT COUNT(DISTINCT CASE WHEN status = 'done' THEN jid END) AS g,
+                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS m,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS p
+           FROM copiloto_outbox WHERE jid LIKE '%@g.us' AND event_id LIKE 'sz1:m:%'`
+      )
+      .get() as Row
+    return { groups: r.g ?? 0, messages: r.m ?? 0, pending: r.p ?? 0 }
+  }
+
+  /** v0.8.3: os grupos com mensagem aceita pelo Copiloto e os ids (de evento) dessas mensagens. */
+  doneGroupMessageIds(): Map<string, Set<string>> {
+    const out = new Map<string, Set<string>>()
+    for (const r of this.db
+      .prepare("SELECT jid, event_id FROM copiloto_outbox WHERE status = 'done' AND jid LIKE '%@g.us' AND event_id LIKE 'sz1:m:%'")
+      .all() as Row[]) {
+      let set = out.get(r.jid)
+      if (!set) out.set(r.jid, (set = new Set()))
+      set.add(r.event_id)
+    }
+    return out
+  }
+
+  /** As mensagens de uma conversa (id e horário), da mais antiga para a mais nova. */
+  messageIdsAsc(jid: string): Array<{ id: string; ts: number }> {
+    return (this.db.prepare('SELECT id, ts FROM messages WHERE jid = ? ORDER BY ts, rowid').all(jid) as Row[]).map((r) => ({ id: r.id, ts: r.ts }))
+  }
+
   chatCount(): number {
     return (this.db.prepare('SELECT COUNT(*) AS n FROM copiloto_chats').get() as Row).n
   }

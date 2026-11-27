@@ -196,7 +196,8 @@ const EVENT_LABELS: Record<string, string> = {
   wa_stopped_logged_out: 'WhatsApp desvinculado do celular',
   wa_stopped_restricted: 'Conta restrita pelo WhatsApp',
   wa_stopped_outdated: 'Versão do app desatualizada',
-  wa_stopped_replaced: 'WhatsApp conectado em outro lugar'
+  wa_stopped_replaced: 'WhatsApp conectado em outro lugar',
+  wa_history: 'Histórico dos grupos pedido ao celular'
 }
 
 export const eventLabel = (kind: string): string => EVENT_LABELS[kind] ?? 'Evento interno'

@@ -299,6 +299,47 @@ describe('follow-up com envio automático no serviço (v0.8.0, contrato v1.2)', 
     expect(repo.followups.get(FU)!.status).toBe('sent')
   })
 
+  it('v0.8.3: vincular de novo (removido no celular → QR → histórico) não envia nada sozinho: os follow-ups viram cartão por 24 h', async () => {
+    await startOpen()
+    await withFollowups([item(FU, '5547999998888', true, 'Oi! Como foi a semana?')])
+    expect((await view(FU))?.auto).toMatchObject({ state: 'scheduled' })
+    // antes de 1 min de conexão estável o mentor remove o aparelho no celular
+    const err = Object.assign(new Error('Connection Failure'), { output: { statusCode: 401 } })
+    await emit('connection.update', { connection: 'close', lastDisconnect: { error: err } })
+    expect((await service.getState()).conn).toBe('stopped_logged_out')
+    await service.manualReconnect()
+    await emit('connection.update', { qr: '2@abc,def' })
+    await emit('connection.update', { connection: 'open' })
+    await emit('messaging-history.set', {
+      chats: [],
+      contacts: [],
+      messages: [wamsg({ id: 'a1', ts: NOW - 3_600_000, text: 'Quanto custa a mentoria?' }), wamsg({ id: 'velha', ts: NOW - 20 * DAY, text: 'mensagem antiga' })]
+    })
+    await drain(5 * MIN)
+    expect(sentCount()).toBe(0)
+    expect(writes()).toBe(0)
+    expect((await view(FU))).toMatchObject({ status: 'waiting', auto: null })
+    expect(repo.sends.listForJid(JID)).toHaveLength(0)
+    // um follow-up automático que chega agora também espera o mentor
+    pending = [item(FU_OLD, '5547999998888', true, 'Faz tempo! Tudo bem?')]
+    ;(service.copiloto as any).followupPollAt = 0
+    await report()
+    await drain(5 * MIN)
+    expect((await view(FU_OLD))).toMatchObject({ status: 'waiting', auto: null })
+    expect(sentCount()).toBe(0)
+  })
+
+  it('v0.8.3: "Buscar no celular o histórico dos grupos": desligado recusa; sem grupos de mentorados conclui sem pedir nada', async () => {
+    await startOpen()
+    expect(await service.copilotoFetchGroupHistory()).toMatchObject({ ok: false })
+    await withFollowups([], { auto: false })
+    const r = await service.copilotoFetchGroupHistory()
+    expect(r.ok && r.status.historyFetch).toMatchObject({ state: 'done', groups: 0, requests: 0, noAnchor: 0 })
+    expect(r.ok && r.status.groupHistory).toEqual({ oldestTs: null, groups: 0, messages: 0, pending: 0 })
+    await drain(2 * MIN)
+    expect(writes()).toBe(0)
+  })
+
   it('auto_send=false ou a opção desligada: o cartão de sempre (nada sai sozinho)', async () => {
     await startOpen()
     await withFollowups([item(FU, '5547999998888', false, 'Oi! Como foi a semana?'), item(FU_OLD, '5511988887777', true, 'Faz tempo! Tudo bem?')], { auto: false })

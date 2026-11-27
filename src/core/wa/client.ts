@@ -23,9 +23,23 @@ import type { RateLimiter } from '../queue/limiter'
 import { DeferJobError, type JobQueue } from '../queue/queue'
 import type { NormalizedMessage } from '../types'
 import { useAtomicAuthState, type AtomicAuthState } from './authState'
-import { isGroupJid, normalize, participantJids, stripDevice, toPhoneJid, type ParticipantLike } from './normalize'
+import { isGroupJid, normalize, participantJids, stripDevice, toMs, toPhoneJid, type ParticipantLike } from './normalize'
 import { ReconnectPolicy, classifyDisconnect } from './reconnect'
 import { WaVersionResolver, formatWaVersion, type WaVersionFetcher } from './version'
+import {
+  GROUP_HISTORY_LIMITS,
+  historyTarget,
+  loadRun,
+  newRun,
+  nextRequestAt,
+  oldestAnchor,
+  reachedTarget,
+  recordRequest,
+  runView,
+  saveRun,
+  type HistoryAnchor
+} from './groupHistory'
+import type { GroupHistoryFetchView } from '../../shared/copiloto'
 import { chatHash, errCode, findSentEcho, hasRecentContactMessage, newMessageId, quotedMessage, unreadKeys, type WaKey } from '../send/logic'
 import { verifyUnknownSend } from '../send/verify'
 import { CONN_LOST_REASON, DEFAULT_SEND_OPTIONS, PAUSED_REASON, SEND_LIMITS, typingMs, type SendOptions } from '../../shared/send'
@@ -57,6 +71,12 @@ export interface WaSocket {
   groupFetchAllParticipating?(): Promise<Record<string, { id?: string; subject?: string | null; participants?: ParticipantLike[] | null }>>
   /** v0.8.1, só leitura (uma consulta IQ): um grupo só (assunto e participantes). Sempre pela fila, no máximo uma vez por grupo. */
   groupMetadata?(jid: string): Promise<{ id?: string; subject?: string | null; participants?: ParticipantLike[] | null } | null | undefined>
+  /**
+   * v0.8.3, só o job `fetch_history` (pela fila, no máximo um a cada 20 s e 60 por dia): pede ao PRÓPRIO celular as
+   * mensagens anteriores de um grupo (o mesmo pedido do WhatsApp Web ao rolar a conversa para cima). Vai só para o
+   * aparelho do mentor, nunca para um contato ou grupo; a resposta chega como `messaging-history.set` (ON_DEMAND).
+   */
+  fetchMessageHistory?(count: number, oldestMsgKey: { remoteJid: string; id: string; fromMe: boolean; participant?: string }, oldestMsgTimestamp: number): Promise<string>
   /** só `executeSend`: "digitando…" na conversa, "parou" e, no fim, de volta a indisponível */
   sendPresenceUpdate?(type: 'composing' | 'paused' | 'unavailable', toJid?: string): Promise<void>
   /** só `executeSend`: a resposta confirmada pelo mentor */
@@ -159,6 +179,14 @@ const GROUPS_FETCH_EVERY_MS = DAY
 const GROUPS_JOB_KEY = 'wa:group_subjects'
 /** sem conexão aberta quando o job roda: tenta de novo daqui a 1 min, sem gastar tentativa */
 const GROUPS_DEFER_MS = 60_000
+/** v0.8.3: o job único da busca do histórico dos grupos no celular */
+const HISTORY_JOB_KEY = 'wa:group_history'
+/** atrás das consultas de grupos e dos envios; a fila escolhe pela prioridade, cada tipo no seu ritmo */
+const HISTORY_JOB_PRIORITY = 5
+/** `HistorySyncType.ON_DEMAND` do protocolo (resposta a um `fetchMessageHistory`) */
+const ON_DEMAND_SYNC = 6
+/** o pedido ao celular nunca prende a fila: sem retorno em 15 s, segue (a resposta, se vier, chega como evento) */
+const HISTORY_SEND_TIMEOUT_MS = 15_000
 /** com a conexão aberta, mede o disco de novo a cada 10 min */
 const DISK_CHECK_MS = 10 * 60_000
 
@@ -243,6 +271,8 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
  * `send_message` (uma resposta confirmada pelo mentor), que mostra "digitando…", envia, marca como lidas as mensagens
  * daquela conversa e volta a indisponível. Fora dele nunca envia mensagens, recibos de leitura nem presença; nunca pede
  * reenvio de mídia.
+ * v0.8.3: o pedido de histórico de um grupo ao PRÓPRIO celular (`fetchMessageHistory`, job `fetch_history`, a pedido do
+ * mentor e no ritmo da busca) não é mensagem a ninguém: é o mesmo pedido do WhatsApp Web ao rolar a conversa para cima.
  *
  * Eventos: `'qr'(dataUrl)`, `'status'(ConnState)`, `'message'(NormalizedMessage)`,
  * `'disk'(low: boolean)` (só quando muda), `'contacts'()` (nomes de contatos mudaram), `'send'(jid)` (um envio mudou de estado).
@@ -281,6 +311,10 @@ export class WhatsAppClient extends EventEmitter {
   private socketProgressed = false
   /** já abriu alguma vez nesta execução */
   private everOpened = false
+  /** v0.8.3: quando a conexão atual abriu (epoch ms), ou null fora de `open` */
+  private openedAt: number | null = null
+  /** v0.8.3: este socket mostrou um QR (vínculo novo): ao abrir, o aparelho foi vinculado agora */
+  private qrThisSocket = false
   private pausedByConnection = false
   /** menos de 1 GB livre: downloads pausados até a próxima medição com espaço */
   private diskLow = false
@@ -315,6 +349,8 @@ export class WhatsAppClient extends EventEmitter {
     deps.queue.register('fetch_profile', (p) => this.fetchProfile(p))
     // um envio ainda em andamento (mesmo depois do prazo do job) segura o próximo: nunca dois ao mesmo tempo
     deps.queue.register('send_message', (p, signal) => this.executeSend(p, signal), { ready: () => this.inFlight.size === 0 })
+    // v0.8.3: só roda quando um pedido pode sair (conexão estável, ritmo, limite do dia, sem pedido esperando resposta)
+    deps.queue.register('fetch_history', () => this.fetchHistoryStep(), { ready: () => this.historyReady() })
     this.rng = deps.rng ?? Math.random
     // downloads, consultas e envios ao WhatsApp só com a conexão aberta
     deps.queue.pauseType('download_audio')
@@ -426,6 +462,7 @@ export class WhatsAppClient extends EventEmitter {
   private setStatus(s: ConnState): void {
     // downloads de mídia só com a conexão aberta (a volta é em onOpen, depois de checar o disco)
     if (s !== 'open') {
+      this.openedAt = null
       this.deps.queue.pauseType('download_audio')
       this.deps.queue.pauseType('fetch_profile')
       this.deps.queue.pauseType('send_message')
@@ -537,6 +574,7 @@ export class WhatsAppClient extends EventEmitter {
   private async openSocket(gen: number): Promise<void> {
     this.setStatus('connecting')
     this.qrLogged = false
+    this.qrThisSocket = false
     this.socketProgressed = false
     await this.auth?.close()
     const auth = await this.authStateFactory(this.deps.authDir, this.deps.backupDir)
@@ -573,14 +611,18 @@ export class WhatsAppClient extends EventEmitter {
     on('lid-mapping.update', (m: LIDMapping) => this.addLidMappings([m]))
     on(
       'messaging-history.set',
-      async (h: { messages: WAMessage[]; contacts?: Contact[]; chats?: ChatLike[]; lidPnMappings?: LIDMapping[] }) => {
+      async (h: { messages: WAMessage[]; contacts?: Contact[]; chats?: ChatLike[]; lidPnMappings?: LIDMapping[]; syncType?: number | null }) => {
         this.addLidMappings(h.lidPnMappings ?? [])
         await this.learnContacts('history', h.contacts ?? [])
         await this.learnChats('history', h.chats ?? [])
-        return this.ingest(h.messages ?? [])
+        const onDemand = h.syncType === ON_DEMAND_SYNC
+        const r = await this.ingest(h.messages ?? [])
+        if (onDemand) this.onDemandHistory(h.messages ?? [], r.byJid)
+        // v0.8.3: histórico de um vínculo novo (QR) ou pedido ao celular: o serviço segura o envio automático dos follow-ups
+        if (r.inserted > 0 && (onDemand || this.qrThisSocket)) this.emit('history', { inserted: r.inserted, onDemand })
       }
     )
-    on('messages.upsert', (u: { messages: WAMessage[] }) => this.ingest(u.messages ?? []))
+    on('messages.upsert', async (u: { messages: WAMessage[] }) => void (await this.ingest(u.messages ?? [])))
     on('contacts.upsert', (cs: Contact[]) => this.learnContacts('contacts.upsert', cs ?? []))
     on('contacts.update', (cs: Partial<Contact>[]) => this.learnContacts('contacts.update', cs ?? []))
     on('chats.upsert', (cs: ChatLike[]) => this.learnChats('chats.upsert', cs ?? []))
@@ -598,6 +640,7 @@ export class WhatsAppClient extends EventEmitter {
     if (u.connection) this.diag('wa_connection_update', u.connection)
     if (u.qr) {
       this.socketProgressed = true
+      this.qrThisSocket = true
       this.rememberBrowser()
       // nunca o conteúdo do QR: só que ele chegou
       if (!this.qrLogged) {
@@ -633,6 +676,7 @@ export class WhatsAppClient extends EventEmitter {
       this.pausedByConnection = false
       this.deps.queue.resume()
     }
+    this.openedAt = this.deps.clock.now()
     this.setStatus('open')
     this.deps.queue.resumeType('fetch_profile')
     this.deps.queue.resumeType('send_message')
@@ -644,7 +688,21 @@ export class WhatsAppClient extends EventEmitter {
     // grava as credenciais atuais antes de copiar: o backup sempre reflete uma sessão que abriu
     await this.auth?.saveCreds()
     await this.auth?.backup()
-    this.scheduleGroupSubjects()
+    if (this.qrThisSocket) {
+      // v0.8.3: aparelho vinculado agora (primeira vez ou de novo): o histórico vai chegar. Os grupos (nomes e
+      // participantes) são consultados de novo pela fila, uma vez, e o serviço segura o envio automático dos follow-ups
+      this.diag('wa_paired', 'aparelho vinculado por QR nesta conexão')
+      this.emit('paired')
+      this.requestGroupSubjects(true)
+    } else this.scheduleGroupSubjects()
+    // v0.8.3: uma busca no celular em andamento (o app reiniciou, o job parou) continua, no ritmo dela
+    try {
+      if (loadRun(this.deps.repo)?.state === 'running') {
+        this.deps.queue.requeue('fetch_history', HISTORY_JOB_KEY, { kind: 'group_history' }, HISTORY_JOB_PRIORITY, { revive: true })
+      }
+    } catch {
+      // nunca atrapalha a conexão
+    }
   }
 
   /**
@@ -1001,7 +1059,8 @@ export class WhatsAppClient extends EventEmitter {
     return Number.isFinite(newest) ? Math.min(newest, bound) : this.deps.clock.now()
   }
 
-  private async ingest(messages: WAMessage[]): Promise<void> {
+  /** Grava as mensagens novas (as já guardadas, pela id, ficam como estão). Devolve quantas entraram, por conversa. */
+  private async ingest(messages: WAMessage[]): Promise<{ inserted: number; byJid: Map<string, number> }> {
     const { repo, queue } = this.deps
     const me = this.auth?.state.creds.me as { id?: string; lid?: string } | undefined
     const opts = { ownJid: me?.id, ownLid: me?.lid }
@@ -1011,6 +1070,8 @@ export class WhatsAppClient extends EventEmitter {
     // janela de 30 dias pelo horário das mensagens do WhatsApp, nunca pelo relógio do PC
     const cutoff = this.waNow(batchMax) - HISTORY_WINDOW_MS
     const audios: NormalizedMessage[] = []
+    let inserted = 0
+    const byJid = new Map<string, number>()
     for (const { raw, n } of normalized) {
       if (!n || n.ts < cutoff) continue
       const lid = n.jid
@@ -1041,6 +1102,8 @@ export class WhatsAppClient extends EventEmitter {
       }
       if (n.isGroup) this.checkGroup(n.jid, n.ts)
       if (!repo.insertMessage(n)) continue
+      inserted++
+      byJid.set(n.jid, (byJid.get(n.jid) ?? 0) + 1)
       this.emit('message', n)
       if (n.kind === 'audio') audios.push(n)
     }
@@ -1050,6 +1113,7 @@ export class WhatsAppClient extends EventEmitter {
       if (repo.isHidden(a.jid)) continue
       queue.enqueue('download_audio', a.id, { id: a.id, ts: a.ts }, this.priorityFor(a))
     }
+    return { inserted, byJid }
   }
 
   /**
@@ -1175,6 +1239,154 @@ export class WhatsAppClient extends EventEmitter {
     this.diag('wa_groups', `consulta de um grupo: ${members.count} participantes`)
     if (members.changed) this.emit('membership')
     if (named || members.changed) this.emit('contacts')
+  }
+
+  // --- v0.8.3: histórico dos grupos pedido ao celular ---
+
+  /** O WhatsApp desta versão aceita o pedido de histórico ao celular (com a conexão aberta). */
+  canFetchHistory(): boolean {
+    return typeof this.sock?.fetchMessageHistory === 'function'
+  }
+
+  /**
+   * "Buscar no celular o histórico dos grupos": grava a busca para estes grupos (todos com mensagem guardada aqui) e põe
+   * o job na fila. Uma busca em andamento continua (não recomeça). `noAnchor`: grupos sem mensagem nenhuma (só contados).
+   */
+  startGroupHistory(jids: string[], noAnchor: number): GroupHistoryFetchView | null {
+    const { repo, clock, queue } = this.deps
+    const now = clock.now()
+    const cur = loadRun(repo)
+    if (cur?.state === 'running') {
+      cur.noAnchor = noAnchor
+      saveRun(repo, cur)
+    } else {
+      const run = newRun(now, historyTarget(repo, now), jids, noAnchor)
+      saveRun(repo, run)
+      // só contagens: nunca os grupos
+      this.diag('wa_history', `busca no celular: ${run.order.length} grupo(s); ${noAnchor} sem mensagem aqui`)
+    }
+    if (loadRun(repo)?.state === 'running') queue.requeue('fetch_history', HISTORY_JOB_KEY, { kind: 'group_history' }, HISTORY_JOB_PRIORITY, { revive: true })
+    return runView(repo, now)
+  }
+
+  /** A busca pode dar um passo agora? (sem gastar vaga do limitador nem tentativa enquanto não pode) */
+  private historyReady(): boolean {
+    if (this.status !== 'open' || this.openedAt === null || !this.canFetchHistory()) return false
+    const { repo, clock } = this.deps
+    const now = clock.now()
+    if (now - this.openedAt < GROUP_HISTORY_LIMITS.stableMs) return false
+    const run = loadRun(repo)
+    if (!run || run.state !== 'running') return true
+    if (run.pending && now - run.pending.at < GROUP_HISTORY_LIMITS.responseWaitMs) return false
+    return nextRequestAt(repo, now) <= now
+  }
+
+  /**
+   * Um passo da busca: o pedido anterior sem resposta conta como perdido; depois, no máximo UM pedido de 50 mensagens
+   * antes da mais antiga conhecida do próximo grupo. Só leitura: o celular responde com mensagens que já existem.
+   */
+  private async fetchHistoryStep(): Promise<void> {
+    const { repo, clock } = this.deps
+    const sock = this.sock
+    if (!sock?.fetchMessageHistory || this.status !== 'open') throw new DeferJobError('sem conexão aberta para pedir o histórico', GROUPS_DEFER_MS)
+    const run = loadRun(repo)
+    if (!run || run.state !== 'running') return
+    const now = clock.now()
+    const L = GROUP_HISTORY_LIMITS
+    if (run.pending) {
+      const waited = now - run.pending.at
+      if (waited < L.responseWaitMs) throw new DeferJobError('esperando a resposta do celular', L.responseWaitMs - waited)
+      const g = run.groups[run.pending.jid]
+      if (g) {
+        g.misses++
+        if (g.misses >= L.maxGroupMisses) g.s = 'gave_up'
+      }
+      run.pending = null
+      run.misses++
+      this.diag('wa_history', `o celular não respondeu (${run.misses} seguida(s))`)
+      if (run.misses >= L.maxMisses) {
+        run.state = 'waiting_phone'
+        saveRun(repo, run)
+        repo.logEvent('wa_history', 'busca do histórico parada: o celular não respondeu')
+        return
+      }
+    }
+    const wait = nextRequestAt(repo, now) - now
+    if (wait > 0) {
+      saveRun(repo, run)
+      throw new DeferJobError('ritmo dos pedidos de histórico', wait)
+    }
+    for (const jid of run.order) {
+      const g = run.groups[jid]
+      if (!g || g.s !== 'pending') continue
+      const anchor: HistoryAnchor | null = g.anchor ?? oldestAnchor(repo, jid)
+      if (!anchor || reachedTarget(anchor.ts, run.target)) {
+        g.s = 'done'
+        continue
+      }
+      g.anchor = anchor
+      run.pending = { jid, anchorId: anchor.id, at: now }
+      run.requests++
+      // gravado antes de sair: um pedido que trava ainda conta no ritmo e no limite do dia
+      recordRequest(repo, now)
+      saveRun(repo, run)
+      this.diag('wa_history', `pedido ${run.requests}: ${L.batch} mensagens anteriores de um grupo`)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const key = { remoteJid: jid, id: anchor.id, fromMe: anchor.fromMe, ...(anchor.participant ? { participant: anchor.participant } : {}) }
+        // horário em milissegundos (`oldestMsgTimestampMs` do protocolo)
+        await Promise.race([
+          sock.fetchMessageHistory(L.batch, key, anchor.ts),
+          new Promise((_, rej) => {
+            timer = setTimeout(() => rej(new Error('sem retorno')), HISTORY_SEND_TIMEOUT_MS)
+          })
+        ])
+      } catch (e) {
+        // quieto: sem resposta em 60 s o pedido conta como perdido
+        this.diag('wa_history', `pedido não confirmado: ${e instanceof Error ? e.name : 'erro'}`)
+      } finally {
+        clearTimeout(timer)
+      }
+      // o próximo passo espera a resposta (ou o prazo dela) e o ritmo
+      throw new DeferJobError('próximo pedido de histórico', L.gapMs)
+    }
+    run.state = 'done'
+    run.finishedAt = now
+    saveRun(repo, run)
+    repo.logEvent('wa_history', `busca do histórico concluída: ${run.requests} pedido(s), ${run.received} mensagem(ns) nova(s)`)
+  }
+
+  /** A resposta do celular (ON_DEMAND) para o pedido que espera: anota o progresso do grupo e libera o próximo pedido. */
+  private onDemandHistory(messages: WAMessage[], insertedByJid: Map<string, number>): void {
+    const { repo, queue } = this.deps
+    const run = loadRun(repo)
+    if (!run || run.state !== 'running' || !run.pending) return
+    const jid = run.pending.jid
+    const mine = messages.filter((m) => m?.key?.remoteJid === jid && typeof m.key.id === 'string')
+    // resposta de outra conversa: o pedido deste grupo continua esperando
+    if (mine.length === 0 && messages.length > 0) return
+    run.pending = null
+    run.misses = 0
+    const g = run.groups[jid]
+    if (g) {
+      g.misses = 0
+      run.received += insertedByJid.get(jid) ?? 0
+      let oldest: HistoryAnchor | null = null
+      for (const m of mine) {
+        const ts = toMs(m.messageTimestamp)
+        if (ts === null) continue
+        if (!oldest || ts < oldest.ts) {
+          const participant = typeof m.key.participant === 'string' ? m.key.participant : undefined
+          oldest = { id: m.key.id as string, fromMe: m.key.fromMe === true, ts, ...(participant ? { participant } : {}) }
+        }
+      }
+      // nada antes da mais antiga: o celular não tem mais; chegou aos 30 dias: completo
+      if (!oldest || (g.anchor && oldest.ts >= g.anchor.ts) || reachedTarget(oldest.ts, run.target)) g.s = 'done'
+      else g.anchor = oldest
+    }
+    saveRun(repo, run)
+    this.diag('wa_history', `resposta do celular: ${mine.length} mensagem(ns), ${insertedByJid.get(jid) ?? 0} nova(s)`)
+    queue.poke()
   }
 
   private groupMetaLog(): { at: number[]; groups: Record<string, number> } {
