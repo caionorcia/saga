@@ -26,7 +26,7 @@ function SlotPicker({ slot, groups, onPick }: { slot: MembershipSlotView; groups
         {slot.label}
       </label>
       <div className="mgroup-pick">
-        <input type="search" placeholder="Procurar grupo…" aria-label={`Procurar grupo para ${slot.label}`} value={q} onChange={(e) => setQ(e.target.value)} />
+        <input type="search" placeholder="Procurar…" aria-label={`Procurar grupo para ${slot.label}`} value={q} onChange={(e) => setQ(e.target.value)} />
         <select id={id} value={slot.jid ?? ''} onChange={(e) => onPick(e.target.value || null)}>
           <option value="">Não conferir</option>
           {shown.map((g) => (
