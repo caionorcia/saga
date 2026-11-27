@@ -283,3 +283,61 @@ consulta dentro do `executeSend`). Sem resposta válida (rede, 5xx) → nada sai
 - Grupos de mentorados sem nenhuma mensagem neste computador só são contados na tela. Informar a existência deles
   pediria um evento novo no contrato (não implementado).
 - Nome novo de um grupo: a mensagem mais recente dele vai de novo (mesmo id) com o `chat.name` novo.
+
+---
+
+# Adendo v1.3 — Histórico completo só no SagaZap + pesquisa pelo Copiloto (2026-11-27)
+
+Aprovado pelo mentor:
+- O SagaZap guarda **todo** o histórico que o celular mandar (sem a janela de 30 dias na gravação local).
+- O Copiloto continua recebendo **só os últimos 30 dias** (eventos v1 inalterados; a janela de 30 dias passa a valer só
+  para o envio ao Copiloto e para a IA). Mensagens mais antigas **nunca** vão como evento `message`.
+- Áudios com mais de 30 dias não são baixados nem transcritos automaticamente; no SagaZap aparecem como "🎤 áudio" com
+  "Transcrever" sob pedido.
+- O Copiloto pesquisa o histórico completo de um mentorado **pedindo ao SagaZap** (fila puxada pelo SagaZap).
+
+Mesma URL, mesmo `Authorization: Bearer`, corpo `{version: 1, ...}`.
+
+## `{action: "search_pending"}` → 200
+```ts
+{ version: 1, searches: Array<{
+  id: string,                         // uuid do Copiloto
+  target: { phone_hashes: string[],   // sha256hex("sagazap-v1:"+telefone), as duas formas do 9º dígito,
+                                      //   de mentorados.telefone e whatsapp_segunda_cadeira
+            chat_keys: string[] },    // grupos/conversas desse mentorado já conhecidos do Copiloto (pode ser [])
+  query: string,                      // 1..200 caracteres
+  from: string | null,                // ISO com fuso (inclusivo) ou null
+  to: string | null,                  // ISO com fuso (inclusivo) ou null
+  created_at: string
+}>, cancelled_ids: string[] }
+```
+- Devolve no máximo 10, mais antigos primeiro, só pedidos com menos de 10 min (mais velhos viram `expired` no
+  servidor) e ainda sem resultado; marca `delivered_at`. Qualquer chamada autenticada do SagaZap atualiza o
+  "último contato" (`last_seen_at`) que o Copiloto mostra.
+- O SagaZap consulta a cada **60 s** enquanto a integração estiver ligada (fila de 1 requisição por vez; não toca no
+  WhatsApp).
+
+## Escopo da busca no SagaZap
+Conversas do mentorado: a(s) individual(is) cujo telefone bate com `phone_hashes`, os grupos em que algum participante
+bate com `phone_hashes`, e as conversas de `chat_keys`. Busca no texto e nas transcrições (sem acento/maiúscula),
+dentro de `from..to`. Só leitura; não toca no WhatsApp.
+
+## `{action: "search_result", id, status, results, total_found, truncated}` → 200 `{status: 'stored'|'expired'|'invalid'}`
+```ts
+status: 'done' | 'error'
+results: Array<{                      // no máximo 50, mais recentes primeiro
+  chat: { key: string, kind: 'individual' | 'group', name: string | null },
+  sent_at: string,                    // ISO com fuso
+  from_mentor: boolean,
+  sender: 'mentor' | 'mentorado' | 'outro',
+  sender_name: string | null,         // nome exibido; nunca telefone
+  message_type: 'text' | 'audio' | 'image' | 'document' | 'other',
+  is_transcription: boolean,
+  excerpt: string                     // ≤ 400 caracteres em volta do termo
+}>
+total_found: number                   // total de mensagens encontradas
+truncated: boolean
+error: string | null                  // curto, quando status = 'error'
+```
+- O Copiloto guarda os resultados por **24 h** e depois apaga.
+- Nada de mídia; nunca telefone de quem não é mentorado.
