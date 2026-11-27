@@ -36,7 +36,10 @@ import {
   reachedTarget,
   recordRequest,
   runView,
+  HISTORY_TS_UNIT,
   saveRun,
+  savedTsUnit,
+  tsForUnit,
   type HistoryAnchor
 } from './groupHistory'
 import type { GroupHistoryFetchView } from '../../shared/copiloto'
@@ -1297,13 +1300,21 @@ export class WhatsAppClient extends EventEmitter {
       const waited = now - run.pending.at
       if (waited < L.responseWaitMs) throw new DeferJobError('esperando a resposta do celular', L.responseWaitMs - waited)
       const g = run.groups[run.pending.jid]
-      if (g) {
-        g.misses++
-        if (g.misses >= L.maxGroupMisses) g.s = 'gave_up'
-      }
+      const triedMs = savedTsUnit(repo) === null && (run.pending.unit ?? 'ms') === 'ms'
       run.pending = null
-      run.misses++
-      this.diag('wa_history', `o celular não respondeu (${run.misses} seguida(s))`)
+      if (triedMs && g) {
+        // unidade ainda não conhecida: o mesmo ponto vai de novo em segundos (só depois das duas conta como perdido)
+        g.nextUnit = 's'
+        this.diag('wa_history', 'sem resposta em milissegundos: o próximo pedido vai em segundos')
+      } else {
+        if (g) {
+          delete g.nextUnit
+          g.misses++
+          if (g.misses >= L.maxGroupMisses) g.s = 'gave_up'
+        }
+        run.misses++
+        this.diag('wa_history', `o celular não respondeu (${run.misses} seguida(s))`)
+      }
       if (run.misses >= L.maxMisses) {
         run.state = 'waiting_phone'
         saveRun(repo, run)
@@ -1325,7 +1336,8 @@ export class WhatsAppClient extends EventEmitter {
         continue
       }
       g.anchor = anchor
-      run.pending = { jid, anchorId: anchor.id, at: now }
+      const unit = savedTsUnit(repo) ?? g.nextUnit ?? 'ms'
+      run.pending = { jid, anchorId: anchor.id, at: now, unit }
       run.requests++
       // gravado antes de sair: um pedido que trava ainda conta no ritmo e no limite do dia
       recordRequest(repo, now)
@@ -1334,9 +1346,9 @@ export class WhatsAppClient extends EventEmitter {
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         const key = { remoteJid: jid, id: anchor.id, fromMe: anchor.fromMe, ...(anchor.participant ? { participant: anchor.participant } : {}) }
-        // horário em milissegundos (`oldestMsgTimestampMs` do protocolo)
+        // horário na unidade gravada (ou a que está sendo testada: milissegundos primeiro, depois segundos)
         await Promise.race([
-          sock.fetchMessageHistory(L.batch, key, anchor.ts),
+          sock.fetchMessageHistory(L.batch, key, tsForUnit(anchor.ts, unit)),
           new Promise((_, rej) => {
             timer = setTimeout(() => rej(new Error('sem retorno')), HISTORY_SEND_TIMEOUT_MS)
           })
@@ -1362,6 +1374,7 @@ export class WhatsAppClient extends EventEmitter {
     const run = loadRun(repo)
     if (!run || run.state !== 'running' || !run.pending) return
     const jid = run.pending.jid
+    const unit = run.pending.unit
     const mine = messages.filter((m) => m?.key?.remoteJid === jid && typeof m.key.id === 'string')
     // resposta de outra conversa: o pedido deste grupo continua esperando
     if (mine.length === 0 && messages.length > 0) return
@@ -1370,6 +1383,12 @@ export class WhatsAppClient extends EventEmitter {
     const g = run.groups[jid]
     if (g) {
       g.misses = 0
+      delete g.nextUnit
+      // a primeira unidade que trouxe resposta fica gravada
+      if (unit && savedTsUnit(repo) === null) {
+        repo.setSetting(HISTORY_TS_UNIT, unit)
+        this.diag('wa_history', `unidade do horário do pedido: ${unit === 'ms' ? 'milissegundos' : 'segundos'}`)
+      }
       run.received += insertedByJid.get(jid) ?? 0
       let oldest: HistoryAnchor | null = null
       for (const m of mine) {

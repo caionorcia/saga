@@ -1340,6 +1340,8 @@ describe('WhatsAppClient', () => {
         expect(repo.listMessages(GRP).map((m) => m.id)).toEqual(['o2', 'o1', 'g1', 'g2'])
         expect(history).toEqual([{ inserted: 2, onDemand: true }])
         expect(run()).toMatchObject({ received: 2, pending: null })
+        // a primeira resposta veio com o horário em milissegundos: fica gravado
+        expect(repo.getSetting('wa.historyTsUnit')).toBe('ms')
         await queue.tick()
         expect(calls()).toHaveLength(2)
         expect(calls()[1]).toEqual([50, { remoteJid: GRP, id: 'o2', fromMe: false, participant: '999@lid' }, NOW - 12 * DAY])
@@ -1370,21 +1372,51 @@ describe('WhatsAppClient', () => {
         expect(repo.listJobs('failed')).toHaveLength(0)
       })
 
-      it('celular sem resposta: quieto; três perdidos seguidos param a busca (sem job com falha)', async () => {
+      it('celular sem resposta: quieto; cada ponto vai em ms e depois em s; três perdidos (depois das duas unidades) param a busca', async () => {
         client.startGroupHistory([GRP, GRP2], 0)
         await advance(61_000)
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < 6; i++) {
           await queue.tick()
           await advance(61_000)
         }
         await queue.tick()
-        expect(calls().map((c) => c[1].id)).toEqual(['g1', 'g1', 'h1'])
+        expect(calls().map((c) => [c[1].id, c[2]])).toEqual([
+          ['g1', NOW - 2 * DAY],
+          ['g1', Math.floor((NOW - 2 * DAY) / 1000)],
+          ['g1', NOW - 2 * DAY],
+          ['g1', Math.floor((NOW - 2 * DAY) / 1000)],
+          ['h1', NOW - 3 * DAY],
+          ['h1', Math.floor((NOW - 3 * DAY) / 1000)]
+        ])
+        expect(repo.getSetting('wa.historyTsUnit')).toBeNull()
         expect(run()).toMatchObject({ state: 'waiting_phone', pending: null })
         expect(run().groups[GRP].s).toBe('gave_up')
         await advance(10 * 60_000)
         await queue.tick()
-        expect(calls()).toHaveLength(3)
+        expect(calls()).toHaveLength(6)
         expect(repo.listJobs('failed')).toHaveLength(0)
+      })
+
+      it('unidade do horário: sem resposta em ms, o mesmo ponto em segundos; a que responde fica gravada e vale daí em diante (conta no ritmo)', async () => {
+        client.startGroupHistory([GRP], 0)
+        await advance(61_000)
+        await queue.tick()
+        expect(calls()[0][2]).toBe(NOW - 2 * DAY)
+        await advance(61_000)
+        await queue.tick()
+        expect(calls()[1]).toEqual([50, { remoteJid: GRP, id: 'g1', fromMe: false, participant: JID2 }, Math.floor((NOW - 2 * DAY) / 1000)])
+        expect(run()).toMatchObject({ misses: 0, requests: 2 })
+        expect(JSON.parse(repo.getSetting('wa.groupHistoryLog')!)).toHaveLength(2)
+        await emit('messaging-history.set', { syncType: ON_DEMAND, chats: [], contacts: [], messages: [wamsg({ id: 'o1', jid: GRP, participant: JID2, ts: NOW - 10 * DAY })] })
+        expect(repo.getSetting('wa.historyTsUnit')).toBe('s')
+        await advance(21_000)
+        await queue.tick()
+        expect(calls()[2][2]).toBe(Math.floor((NOW - 10 * DAY) / 1000))
+        // gravada: sem resposta agora conta como perdido na hora e o próximo continua em segundos
+        await advance(61_000)
+        await queue.tick()
+        expect(calls()[3][2]).toBe(Math.floor((NOW - 10 * DAY) / 1000))
+        expect(run().misses).toBe(1)
       })
 
       it('limite de 60 pedidos por dia, gravado no banco: o resto fica para o dia seguinte', async () => {

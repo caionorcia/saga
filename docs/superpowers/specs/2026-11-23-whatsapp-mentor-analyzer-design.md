@@ -672,8 +672,11 @@ Relato: no Copiloto, a mensagem de grupo mais antiga era de 25/11, e as individu
   partida: só contados ("N grupo(s) precisam reconectar o aparelho"). Registro: só contagens.
 - **Linha de status:** "Histórico dos grupos: mensagem mais antiga em DD/MM; X grupo(s), Y mensagem(ns) enviadas ao
   Copiloto" (eventos `sz1:m:` de grupos aceitos na fila de saída; a mais antiga pela id do evento), e a linha da busca.
-- **Conferir no aparelho real:** a unidade do horário do pedido (ms, como o nome do campo do protocolo) e se o celular
-  atende pedidos de grupos antigos.
+- **Unidade do horário do pedido:** o campo do protocolo é `oldestMsgTimestampMs`, mas o exemplo do Baileys passa
+  segundos. Começa em milissegundos; sem resposta, o mesmo ponto vai de novo em segundos (`Math.floor(ts/1000)`); a
+  primeira unidade que trouxer resposta fica em `wa.historyTsUnit` e vale daí em diante. As duas tentativas contam no
+  ritmo e no limite do dia; enquanto a unidade não é conhecida, um ponto só conta como perdido depois das duas.
+- **Conferir no aparelho real:** se o celular atende pedidos de grupos antigos.
 
 ### Versão 0.3.1 (a pedido do mentor)
 

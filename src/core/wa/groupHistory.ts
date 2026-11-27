@@ -39,6 +39,21 @@ export const GROUP_HISTORY_RUN = 'wa.groupHistoryRun'
 /** quando cada pedido saiu (epoch ms; só os de hoje e o último) */
 export const GROUP_HISTORY_LOG = 'wa.groupHistoryLog'
 
+/**
+ * A unidade do horário do pedido: o protocolo chama o campo de `oldestMsgTimestampMs`, mas o exemplo do Baileys passa
+ * segundos. Começa em milissegundos; sem resposta, o mesmo ponto vai de novo em segundos; a primeira unidade que trouxer
+ * resposta fica gravada e vale daí em diante.
+ */
+export type HistoryTsUnit = 'ms' | 's'
+export const HISTORY_TS_UNIT = 'wa.historyTsUnit'
+
+export function savedTsUnit(repo: Repo): HistoryTsUnit | null {
+  const v = repo.getSetting(HISTORY_TS_UNIT)
+  return v === 'ms' || v === 's' ? v : null
+}
+
+export const tsForUnit = (ts: number, unit: HistoryTsUnit): number => (unit === 's' ? Math.floor(ts / 1000) : ts)
+
 /** A mensagem a partir da qual o celular manda as anteriores (a mais antiga conhecida do grupo). */
 export interface HistoryAnchor {
   id: string
@@ -52,6 +67,8 @@ export interface GroupHistoryGroup {
   s: 'pending' | 'done' | 'gave_up'
   anchor?: HistoryAnchor
   misses: number
+  /** a unidade ainda não é conhecida e o pedido em milissegundos ficou sem resposta: o próximo deste ponto vai em segundos */
+  nextUnit?: HistoryTsUnit
 }
 
 export interface GroupHistoryRun {
@@ -66,7 +83,7 @@ export interface GroupHistoryRun {
   requests: number
   received: number
   /** o pedido que espera resposta */
-  pending: { jid: string; anchorId: string; at: number } | null
+  pending: { jid: string; anchorId: string; at: number; unit?: HistoryTsUnit } | null
   /** pedidos seguidos sem resposta */
   misses: number
 }
