@@ -64,6 +64,12 @@ export function App() {
           {alert}
         </div>
       )}
+      {state.followupTestUntil != null && state.followupTestUntil > Date.now() && (
+        <p className="convo-test-banner" role="status">
+          Modo de teste dos follow-ups ligado: 1 dia da cadência = 2 minutos (só nos follow-ups recebidos agora). Desliga
+          sozinho às {new Date(state.followupTestUntil).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.
+        </p>
+      )}
       <RelinkPanel state={state} />
       {/* a tela de conversas continua montada (escondida) para não perder rascunhos nem a posição */}
       <Main

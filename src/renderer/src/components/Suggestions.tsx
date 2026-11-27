@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AiErrorCode, Analysis, KbSource, MessageView, SendView } from '../../../shared/api'
 import { KbSources } from './KbSources'
 import { SendDialog, SendStatus } from './SendDialog'
-import { FollowupSection, followupByline } from './Followups'
+import { FollowupSection, followupByline, useConvos } from './Followups'
 import type { FollowupView } from '../../../shared/copiloto'
-import { FOLLOWUP_LIMITS } from '../../../shared/copiloto'
+import { CONVO_FINAL, FOLLOWUP_LIMITS } from '../../../shared/copiloto'
 
 type View =
   | { kind: 'loading' }
@@ -106,6 +106,9 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
   const onSkippedRef = useRef(onSkipped)
   onSkippedRef.current = onSkipped
   const seq = useRef(0)
+  /** v0.10.0: um follow-up de conversa cuida deste grupo (o cartão dele fica no topo; nada é gerado em dobro) */
+  const convos = useConvos()
+  const convoActive = (convos ?? []).some((c) => c.jid === jid && !CONVO_FINAL.has(c.status))
 
   const apply = useCallback(
     (run: () => Promise<Awaited<ReturnType<typeof window.saga.getAnalysis>>>, silent: boolean) => {
@@ -261,8 +264,17 @@ export function Suggestions({ jid, onAnalysis, drafts: draftsProp, onOpenSetting
       <>
         {followups}
         <div className="sug-state sug-not-needed" role="status">
-          <p>Esta conversa não precisa de resposta agora.</p>
-          <p className="muted small">O SagaZap só escreve sugestões quando você pede, para não gastar à toa.</p>
+          {convoActive ? (
+            <>
+              <p>O follow-up do Copiloto está cuidando deste grupo (cartão acima).</p>
+              <p className="muted small">As sugestões normais só são geradas se você pedir, para não escrever em dobro.</p>
+            </>
+          ) : (
+            <>
+              <p>Esta conversa não precisa de resposta agora.</p>
+              <p className="muted small">O SagaZap só escreve sugestões quando você pede, para não gastar à toa.</p>
+            </>
+          )}
           <button type="button" className="btn btn-primary" disabled={busy} onClick={loadAnyway}>
             Gerar sugestões mesmo assim
           </button>

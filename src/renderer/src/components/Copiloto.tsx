@@ -40,7 +40,7 @@ export function CopilotoSection() {
 
   if (!st) return null
 
-  const save = async (patch: { enabled?: boolean; url?: string; autoFollowups?: boolean }) => {
+  const save = async (patch: { enabled?: boolean; url?: string; autoFollowups?: boolean; followupTest?: boolean }) => {
     setMsg(null)
     try {
       const r = await window.saga.copilotoSave(patch)
@@ -153,6 +153,18 @@ export function CopilotoSection() {
           Os follow-ups que o Copiloto marcar como automáticos saem sem a tela de confirmação, só no horário de envio e com
           as travas de sempre (30 dias, ritmo, até 30 por dia); os outros continuam esperando você.
         </p>
+        <label className="check">
+          <input type="checkbox" checked={st.followupTestUntil !== null} onChange={(e) => void save({ followupTest: e.target.checked })} />
+          Modo de teste dos follow-ups: cadência acelerada (1 dia = 2 minutos)
+        </label>
+        <p className="help check-help">
+          Para testar com um mentorado de teste. Vale para os follow-ups de onboarding e sumido recebidos com o modo ligado,
+          desliga sozinho em 2 horas e mostra uma faixa de aviso. O horário de envio continua valendo (a não ser que você
+          marque "Forçar envio" no cartão), e cada mensagem continua esperando o seu "Enviar".
+          {st.followupTestUntil !== null &&
+            ` Ligado até ${new Date(st.followupTestUntil).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.`}
+        </p>
+        {st.convosActive > 0 && <p className="help">Follow-ups de conversa em andamento: {st.convosActive}</p>}
       </section>
 
       <section className="s-card" aria-labelledby="copiloto-conn-title">

@@ -672,3 +672,25 @@ select { font: inherit; color: inherit; width: 100%; border: 1px solid var(--bor
 .fu-open .sug-avulsa { margin-top: 0; }
 .fu-composer textarea { width: 100%; }
 .fu-auto { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; border-left: 4px solid var(--accent); background: var(--accent-soft); color: var(--text); }
+
+/* v0.10.0: follow-up de conversa (onboarding/sumido) */
+.convo-card { max-height: none; }
+.convo-card .sug-label { font-weight: 700; }
+.convo-tag { font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 99px; background: var(--warn-bg); color: var(--warn-text); border: 1px solid var(--note-border); white-space: nowrap; }
+.convo-goal { margin: 6px 0 8px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.convo-goal li { display: flex; gap: 6px; align-items: flex-start; overflow-wrap: anywhere; }
+.convo-goal label { display: flex; gap: 6px; align-items: flex-start; cursor: pointer; }
+.convo-goal .done { color: var(--muted); text-decoration: line-through; }
+.convo-link { overflow-wrap: anywhere; }
+.convo-draft textarea { width: 100%; }
+.convo-draft-label { margin: 6px 0 4px; font-weight: 600; }
+.convo-needs { margin: 8px 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--note-border); background: var(--warn-bg); color: var(--warn-text); }
+.convo-needs strong { display: block; margin-bottom: 2px; }
+.convo-suggest { margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: var(--accent-soft); }
+.convo-suggest p { margin: 0 0 6px; }
+.convo-suggest .sug-actions { margin-top: 4px; justify-content: flex-start; flex-wrap: wrap; }
+.convo-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; justify-content: flex-end; }
+.convo-footer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); justify-content: flex-start; }
+.convo-force { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.convo-state { margin: 6px 0 0; }
+.convo-test-banner { margin: 0; padding: 6px 12px; background: var(--warn-bg); color: var(--warn-text); border-bottom: 1px solid var(--note-border); font-size: 13px; font-weight: 600; text-align: center; }
