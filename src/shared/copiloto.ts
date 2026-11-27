@@ -325,16 +325,24 @@ export interface ConvoGoal {
   cadenceDays: number[]
   /** `auto` é para depois: por enquanto vale como `confirm` */
   sendMode: 'confirm' | 'auto'
+  /** v2.1: instruções do dono do Copiloto (tom, conduta) para a IA; nunca valem mais que as regras fixas */
+  guidelines: string | null
+  /** v2.1: o dia (contado do começo) em que encerra sem resposta/sem cumprir; null = no último dia da cadência */
+  endDay: number | null
+  /** v2.1: a reunião que a IA deve marcar (o `schedulingLink` é o link dela) */
+  meeting: { name: string; mentor: string | null } | null
+  /** v2.1: todas as reuniões, cada uma com o seu link (https) */
+  meetings: Array<{ name: string; mentor: string | null; link: string }>
+}
+
+/** Os únicos links que a IA pode mandar: o da agenda e os das reuniões que vieram com o follow-up. */
+export function allowedLinks(g: Pick<ConvoGoal, 'schedulingLink' | 'meetings'>): string[] {
+  return [...new Set([g.schedulingLink, ...g.meetings.map((m) => m.link)].filter((x): x is string => !!x))]
 }
 
 export const CONVO_LIMITS = {
-  /** cadências padrão (o Copiloto manda a dele em `cadence_days`) */
-  sumidoCadence: [0, 2, 5, 10],
-  onboardingCadence: [0, 2, 4, 7, 10, 14, 21, 28],
-  /** sumido: depois da última tentativa, espera esta folga (em dias) antes de `no_reply` */
+  /** sem `end_day`: encerra no último dia da cadência + esta folga (em dias), para uma resposta a caminho */
   graceDays: 2,
-  /** onboarding: `no_reply` aos 30 dias sem cumprir; sumido que respondeu e não marcou: também aos 30 dias */
-  maxDays: 30,
   /** mensagens seguidas do mentorado: espera 1 min de silêncio antes de pedir a resposta à IA (uma chamada só) */
   replyDebounceMs: 60_000,
   /** resumo do `followup_update` */
@@ -343,8 +351,12 @@ export const CONVO_LIMITS = {
   itemChars: 300,
   noteChars: 1000,
   linkChars: 500,
-  cadenceMax: 20,
-  cadenceDayMax: 60,
+  /** v2.1: a cadência é a que vier (só conferida): até 30 dias de contato, cada um até o dia 365 */
+  cadenceMax: 30,
+  cadenceDayMax: 365,
+  guidelinesChars: 4000,
+  meetingsMax: 20,
+  nameChars: 120,
   /** o rascunho da IA (o mentor pode editar até o limite da mensagem avulsa) */
   draftChars: 1500,
   /** mensagens do grupo que vão para a IA (dos últimos 30 dias) */
@@ -364,7 +376,8 @@ export const CONVO_REASON = {
   notGroup: 'alvo_nao_e_grupo',
   notMember: 'mentor_fora_do_grupo',
   noHistory: 'sem_historico_do_mentor',
-  noSchedule: 'sem_agendamento'
+  noSchedule: 'sem_agendamento',
+  linkNotAllowed: 'link_nao_permitido'
 } as const
 
 /** O rascunho (uma mensagem de cada vez) que espera o mentor, como a interface vê. */

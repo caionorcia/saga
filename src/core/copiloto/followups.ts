@@ -102,9 +102,9 @@ export function parseLink(v: unknown): string | null | undefined {
   }
 }
 
-/** O `goal` do onboarding/sumido; null se fora do contrato. Cadência ausente → a padrão do tipo. */
+/** O `goal` do onboarding/sumido; null se fora do contrato (a cadência é obrigatória e vale como veio). */
 export function parseGoal(v: unknown, type: ConvoType): ConvoGoal | null {
-  const g = v as { pending_items?: unknown; scheduling_link?: unknown; note?: unknown; cadence_days?: unknown; send_mode?: unknown } | null
+  const g = v as { pending_items?: unknown; scheduling_link?: unknown; note?: unknown; cadence_days?: unknown; send_mode?: unknown; guidelines?: unknown; end_day?: unknown; meeting?: unknown; meetings?: unknown } | null
   if (!g || typeof g !== 'object' || Array.isArray(g)) return null
   let pendingItems: string[] = []
   if (g.pending_items !== undefined && g.pending_items !== null) {
@@ -119,16 +119,45 @@ export function parseGoal(v: unknown, type: ConvoType): ConvoGoal | null {
   if (link === undefined) return null
   if (g.note !== undefined && g.note !== null && typeof g.note !== 'string') return null
   const note = oneText(g.note, CONVO_LIMITS.noteChars)
-  let cadenceDays: number[] = type === 'sumido' ? [...CONVO_LIMITS.sumidoCadence] : [...CONVO_LIMITS.onboardingCadence]
-  if (g.cadence_days !== undefined && g.cadence_days !== null) {
-    const c = g.cadence_days
-    if (!Array.isArray(c) || c.length === 0 || c.length > CONVO_LIMITS.cadenceMax) return null
-    if (!c.every((d, i) => Number.isInteger(d) && d >= 0 && d <= CONVO_LIMITS.cadenceDayMax && (i === 0 || d > (c[i - 1] as number)))) return null
-    cadenceDays = c as number[]
-  }
+  // v2.1: a cadência é exatamente a que vier (sem padrão): crescente, sem repetir, inteiros de 0 a 365, até 30
+  const c = g.cadence_days
+  if (!Array.isArray(c) || c.length === 0 || c.length > CONVO_LIMITS.cadenceMax) return null
+  if (!c.every((d, i) => Number.isInteger(d) && d >= 0 && d <= CONVO_LIMITS.cadenceDayMax && (i === 0 || d > (c[i - 1] as number)))) return null
+  const cadenceDays = c as number[]
   // "auto" é para depois: por enquanto cada mensagem espera a confirmação (o valor fica guardado só para contar)
   const sendMode = g.send_mode === 'auto' ? 'auto' : 'confirm'
-  return { pendingItems, schedulingLink: link, note, cadenceDays, sendMode }
+  // v2.1: diretrizes do dono (texto livre, até 4000 caracteres), dia de encerrar, reunião a marcar e reuniões com link
+  if (g.guidelines !== undefined && g.guidelines !== null && typeof g.guidelines !== 'string') return null
+  const gl = typeof g.guidelines === 'string' ? g.guidelines.trim() : ''
+  const guidelines = gl ? [...gl].slice(0, CONVO_LIMITS.guidelinesChars).join('') : null
+  let endDay: number | null = null
+  if (g.end_day !== undefined && g.end_day !== null) {
+    if (!Number.isInteger(g.end_day) || (g.end_day as number) < 0 || (g.end_day as number) > CONVO_LIMITS.cadenceDayMax) return null
+    endDay = g.end_day as number
+  }
+  const person = (v: unknown): { ok: boolean; v: string | null } =>
+    v === undefined || v === null ? { ok: true, v: null } : typeof v === 'string' ? { ok: true, v: oneText(v, CONVO_LIMITS.nameChars) } : { ok: false, v: null }
+  let meeting: ConvoGoal['meeting'] = null
+  if (g.meeting !== undefined && g.meeting !== null) {
+    const m = g.meeting as { name?: unknown; mentor?: unknown }
+    const name = oneText(m?.name, CONVO_LIMITS.nameChars)
+    const mentor = person(m?.mentor)
+    if (typeof m !== 'object' || !name || !mentor.ok) return null
+    meeting = { name, mentor: mentor.v }
+  }
+  const meetings: ConvoGoal['meetings'] = []
+  if (g.meetings !== undefined && g.meetings !== null) {
+    if (!Array.isArray(g.meetings) || g.meetings.length > CONVO_LIMITS.meetingsMax) return null
+    for (const raw of g.meetings) {
+      const m = raw as { name?: unknown; mentor?: unknown; link?: unknown } | null
+      const name = oneText(m?.name, CONVO_LIMITS.nameChars)
+      const mentor = person(m?.mentor)
+      const mlink = parseLink(m?.link)
+      if (!m || typeof m !== 'object' || !name || !mentor.ok || !mlink) return null
+      meetings.push({ name, mentor: mentor.v, link: mlink })
+    }
+  }
+  return { pendingItems, schedulingLink: link, note, cadenceDays, sendMode, guidelines, endDay, meeting, meetings }
 }
 
 /** Um onboarding/sumido da fila v2; null se fora do contrato. Sempre no grupo do mentorado. */

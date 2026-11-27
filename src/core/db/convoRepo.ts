@@ -46,6 +46,9 @@ export interface ConvoRow {
   updatedAt: number
 }
 
+/** Objetivo guardado antes da v2.1 (sem os campos novos) ganha os vazios. */
+const GOAL_DEFAULT: ConvoGoal = { pendingItems: [], schedulingLink: null, note: null, cadenceDays: [0], sendMode: 'confirm', guidelines: null, endDay: null, meeting: null, meetings: [] }
+
 const json = <T>(s: unknown, fallback: T): T => {
   try {
     return typeof s === 'string' ? (JSON.parse(s) as T) : fallback
@@ -63,7 +66,7 @@ function toRow(r: Row): ConvoRow {
     createdAt: r.created_at,
     receivedAt: r.received_at,
     jid: r.jid ?? null,
-    goal: json<ConvoGoal>(r.goal_json, { pendingItems: [], schedulingLink: null, note: null, cadenceDays: [0], sendMode: 'confirm' }),
+    goal: { ...GOAL_DEFAULT, ...json<Partial<ConvoGoal>>(r.goal_json, {}) },
     itemsDone: json<string[]>(r.items_done_json, []),
     status: r.status,
     reason: r.reason ?? null,

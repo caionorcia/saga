@@ -14,8 +14,9 @@
  *   todas as travas (horário de envio, +7..25 min fora dele, ritmo, limites, nunca duas vezes, desconhecido nunca
  *   reenviado, sem citação, marcar como lida). Um envio por vez, só com a conexão estável e o limitador livre.
  * - **Fim.** A IA só sugere ("parece que a reunião foi marcada", "item X parece cumprido"); o mentor confirma. Sumido:
- *   `scheduled` · `no_reply` depois da última tentativa + 2 dias sem resposta (ou 30 dias sem marcar, se respondeu) ·
- *   `declined` · `failed`. Onboarding: `completed` com tudo confirmado · `no_reply` aos 30 dias · `declined` · `failed`.
+ *   `scheduled` · `no_reply` no `end_day` (sem ele: último dia da cadência + 2 dias), com `sem_agendamento` se
+ *   respondeu e não marcou · `declined` · `failed`. Onboarding: `completed` com tudo confirmado · `no_reply` no mesmo
+ *   prazo · `declined` · `failed`. A cadência é exatamente a que veio do Copiloto (v2.1).
  * - **Relatórios** (`followup_update` v2): `running` a cada mensagem que sai (tentativas, última tentativa, resumo sem
  *   telefones), `responded`, e o final; fila própria, na ordem, com espera crescente.
  * - Registro: só contagens e estados. Nunca o texto das mensagens, nomes ou números.
@@ -333,16 +334,20 @@ export class ConvoEngine {
     return job
   }
 
-  /** `no_reply` por tempo, com o motivo, ou null. */
+  /**
+   * `no_reply` por tempo (`null` = sem motivo; `undefined` = ainda não). v2.1: no `end_day` (do dia 0), se veio; senão no
+   * último dia da cadência + 2 dias de folga (uma resposta a caminho; nunca antes de 2 dias depois da última tentativa).
+   * Sumido que respondeu e não marcou encerra no mesmo dia, com `sem_agendamento`.
+   */
   private timeFinal(c: ConvoRow, now: number, day: number): string | null | undefined {
-    const len = c.goal.cadenceDays.length
-    if (c.type === 'onboarding') return now >= c.day0At + CONVO_LIMITS.maxDays * day ? null : undefined
-    if (c.slot < len) return undefined
-    if (c.status === 'active' || c.awaitingReply) {
-      const lastSlotAt = c.day0At + c.goal.cadenceDays[len - 1] * day
-      return now >= Math.max(c.lastAttemptAt ?? -Infinity, lastSlotAt) + CONVO_LIMITS.graceDays * day ? null : undefined
-    }
-    return now >= c.day0At + CONVO_LIMITS.maxDays * day ? CONVO_REASON.noSchedule : undefined
+    const days = c.goal.cadenceDays
+    const endAt =
+      c.goal.endDay !== null
+        ? c.day0At + c.goal.endDay * day
+        : Math.max(c.day0At + days[days.length - 1] * day, c.lastAttemptAt ?? -Infinity) + CONVO_LIMITS.graceDays * day
+    if (now < endAt) return undefined
+    if (c.type === 'onboarding') return null
+    return c.status === 'active' || c.awaitingReply ? null : CONVO_REASON.noSchedule
   }
 
   /** Confere o envio do rascunho: saiu (eco ou 2 min) → conta; não saiu → o rascunho volta a esperar o mentor. */
@@ -444,7 +449,8 @@ export class ConvoEngine {
         suggestItems: [...new Set([...cur.suggestItems, ...sugItems])]
       }
       if (out.action === 'needs_you') {
-        repo.convos.patch(c.id, { ...NO_DRAFT, ...suggest, needsYou: out.reason, summary: out.summary ?? cur.summary, aiError: null })
+        const needsYou = out.reason === CONVO_REASON.linkNotAllowed ? 'A IA tentou mandar um link que não veio com o follow-up (link_nao_permitido). Responda você mesmo ou gere de novo.' : out.reason
+        repo.convos.patch(c.id, { ...NO_DRAFT, ...suggest, needsYou, summary: out.summary ?? cur.summary, aiError: null })
         this.deps.diag('copiloto_convo', 'precisa de você (IA)')
         return
       }

@@ -102,7 +102,7 @@ const sumido = (id = C1, o: Record<string, unknown> = {}) => ({
   ...o
 })
 const onboarding = (id = C2, items = ['Assistir às Aulas Essenciais', 'Compartilhar fotos no Drive', 'Marcar a Reunião 1'], o: Record<string, unknown> = {}) =>
-  sumido(id, { type: 'onboarding', goal: goal({ pending_items: items, cadence_days: [0, 2, 4, 7, 10, 14, 21, 28] }), ...o })
+  sumido(id, { type: 'onboarding', goal: goal({ pending_items: items, cadence_days: [0, 2, 4, 7, 10, 14, 21, 28], end_day: 30 }), ...o })
 
 /** A IA falsa: o que ela devolve e quantas vezes foi chamada (e o último pedido). */
 let llmReply: (user: string) => Record<string, unknown> = () => ({})
@@ -233,7 +233,7 @@ describe('follow-ups de conversa no serviço (v0.10.0, contrato v2)', () => {
     await service.stop()
     for (const s of sockets) for (const k of WRITE_METHODS.slice(3)) expect(s.spies[k], k).not.toHaveBeenCalled()
     // registro: nunca o texto das mensagens nem o número
-    for (const [k, d] of diag) if (k.startsWith('send_') || k.startsWith('copiloto')) expect(d).not.toMatch(/5547999998888|Tudo bem|agenda|parcelar/i)
+    for (const [k, d] of diag) if (k.startsWith('send_') || k.startsWith('copiloto')) expect(d).not.toMatch(/5547999998888|Tudo bem|example\.com|parcelar/i)
     vi.useRealTimers()
     rmSync(tmp, { recursive: true, force: true })
   })
@@ -527,7 +527,37 @@ describe('follow-ups de conversa no serviço (v0.10.0, contrato v2)', () => {
     expect(updates).toContainEqual(expect.objectContaining({ id: C2, status: 'completed' }))
   })
 
-  it('onboarding sem cumprir em 30 dias (modo de teste: 60 min) → no_reply', async () => {
+  it('v2.1: cadência e end_day como vieram: sumido que respondeu e não marcou encerra no end_day com sem_agendamento', async () => {
+    await startOpen()
+    await service.copilotoSave({ followupTest: true })
+    llmReply = () => ({ mensagem: `Escolhe um horário: ${LINK}` })
+    await deliver([sumido(C1, { goal: goal({ cadence_days: [0, 1], end_day: 6, guidelines: 'Seja breve.', meeting: { name: 'Reunião 1', mentor: 'Mentor A' } }) })])
+    await drain(30_000)
+    expect((await view())!.attemptTotal).toBe(2)
+    expect(llmCalls[0].user).toContain('Seja breve.')
+    expect(llmCalls[0].user).toContain('Reunião a marcar: Reunião 1 (com Mentor A)')
+    await emit('messages.upsert', { messages: [gmsg({ id: 'a1', ts: clock.now(), text: 'Oi! Voltei' })] })
+    await drain(2 * MIN)
+    expect(convo().status).toBe('responded')
+    // dia 6 (12 min) depois do dia 0, sem marcar
+    await drain(10 * MIN)
+    expect(convo()).toMatchObject({ status: 'no_reply', reason: 'sem_agendamento' })
+  })
+
+  it('v2.1: sem end_day, encerra no último dia da cadência + a folga curta', async () => {
+    await startOpen()
+    await service.copilotoSave({ followupTest: true })
+    await deliver([sumido(C1, { goal: goal({ cadence_days: [0], end_day: null }) })])
+    await drain(30_000)
+    await service.convoAction(C1, { kind: 'skip' })
+    const end = convo().day0At + 2 * CONVO_TEST.dayMs
+    expect(clock.now()).toBeLessThan(end)
+    expect(convo().status).toBe('active')
+    await drain(end - clock.now() + 30_000)
+    expect(convo()).toMatchObject({ status: 'no_reply', reason: null })
+  })
+
+  it('onboarding sem cumprir até o end_day 30 (modo de teste: 60 min) → no_reply', async () => {
     await startOpen()
     await service.copilotoSave({ followupTest: true })
     await deliver([onboarding()])

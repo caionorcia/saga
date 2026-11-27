@@ -370,7 +370,10 @@ function ConvoCard({ convo: c }: { convo: ConvoView }) {
       {c.type === 'sumido' ? (
         <ul className="convo-goal small" aria-label="Objetivo">
           <li>{c.repliedAt !== null ? '✅' : '⬜'} Conseguir uma resposta</li>
-          <li>⬜ Marcar a reunião{c.goal.schedulingLink ? ' (pelo link da agenda)' : ''}</li>
+          <li>
+            ⬜ Marcar {c.goal.meeting ? `a ${c.goal.meeting.name}${c.goal.meeting.mentor ? ` com ${c.goal.meeting.mentor}` : ''}` : 'a reunião'}
+            {c.goal.schedulingLink ? ' (pelo link da agenda)' : ''}
+          </li>
         </ul>
       ) : (
         <ul className="convo-goal small" aria-label="Pendências">
@@ -390,6 +393,12 @@ function ConvoCard({ convo: c }: { convo: ConvoView }) {
       )}
       {c.goal.schedulingLink && <p className="muted small convo-link">Link da agenda: {c.goal.schedulingLink}</p>}
       {c.goal.note && <p className="muted small fu-note">Observação da equipe: {c.goal.note}</p>}
+      {c.goal.endDay !== null && <p className="muted small fu-note">Encerra no dia {c.goal.endDay} se não houver resposta.</p>}
+      {c.goal.guidelines && (
+        <p className="muted small fu-note" title={c.goal.guidelines}>
+          Com as diretrizes do Copiloto para o tom da conversa.
+        </p>
+      )}
 
       {(c.suggestScheduled || c.suggestItems.length > 0) && (
         <div className="convo-suggest small" role="status">

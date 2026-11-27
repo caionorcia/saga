@@ -1084,9 +1084,13 @@ Contrato: Adendo v2 em `2026-11-26-copiloto-integration.md`. O que muda no app:
   nesse grupo. Conferido no `prepareSend`, no consumo da confirmação e de novo no `executeSend`. Conversas individuais,
   mensagens avulsas comuns e follow-ups avulsos continuam com a regra; todas as outras travas valem para todos.
 - **Finais:** o mentor confirma (a IA só sugere "reunião marcada"/"pendência cumprida"). Sumido: `scheduled`, `no_reply`
-  (última tentativa + 2 dias sem resposta; se respondeu e não marcou, 30 dias depois do dia 0, motivo `sem_agendamento`),
-  `declined`, `failed`. Onboarding: `completed` com todas as pendências confirmadas, `no_reply` aos 30 dias, `declined`,
-  `failed`.
+  (no `end_day`; sem ele, último dia da cadência + 2 dias; se respondeu e não marcou, motivo `sem_agendamento`),
+  `declined`, `failed`. Onboarding: `completed` com todas as pendências confirmadas, `no_reply` no mesmo prazo,
+  `declined`, `failed`.
+- **v2.1 (diretrizes, end_day, reuniões):** cadência exatamente como veio; diretrizes do dono no pedido, abaixo das
+  regras fixas (nunca passam por cima delas); reunião a marcar com o nome do mentor; links permitidos = link da agenda +
+  links das reuniões, conferidos no código (fora da lista: refaz uma vez com aviso mais estrito, depois "Precisa de
+  você" `link_nao_permitido`).
 - **Interface:** cartão no topo da coluna das sugestões do grupo; as sugestões normais desse grupo não geram sozinhas
   enquanto o follow-up anda. Modo de teste (Configurações › Copiloto da Saga): 1 dia = 2 min nos follow-ups recebidos
   com ele ligado, desliga sozinho em 2 h, faixa de aviso; o horário de envio continua valendo (salvo "Forçar envio").

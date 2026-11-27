@@ -387,7 +387,9 @@ Em **Configurações › Copiloto da Saga** há a opção **Enviar follow-ups do
 Além da mensagem pronta (avulsa), o Copiloto agora pode mandar dois tipos de acompanhamento, sempre **no grupo do mentorado**:
 
 - **Onboarding:** no começo da mentoria, a IA escreve ao mentorado até ele cumprir as pendências que o Copiloto mandou (ex.: assistir às Aulas Essenciais, compartilhar fotos no Drive, marcar a Reunião 1). Para marcar reunião, ela manda o link da agenda.
-- **Sumido:** a pessoa está há muito tempo sem falar. A IA insiste em alguns dias combinados (padrão: dias 0, 2, 5 e 10) até ela responder; quando responder, manda o link da agenda e acompanha até a reunião ser marcada.
+- **Sumido:** a pessoa está há muito tempo sem falar. A IA insiste nos dias que o Copiloto definir (por exemplo, dias 0, 2, 5 e 10) até ela responder; quando responder, manda o link da agenda e acompanha até a reunião ser marcada.
+
+O Copiloto também manda, junto com cada follow-up, as **diretrizes de tom** da equipe (a IA segue, mas nunca acima das regras: não inventa nada e o que só você decide vem para você), o **dia de encerrar** e a **reunião a marcar** (com o nome do mentor dela e o link certo de cada reunião). A IA só pode mandar os links que vieram com o follow-up: se tentar outro, o SagaZap pede um texto novo e, se insistir, mostra **Precisa de você**.
 
 Como funciona na tela:
 
@@ -410,7 +412,7 @@ Como funciona na tela:
 5. Sem responder, a tentativa 2 aparece uns 4 minutos depois do começo (2 dias = 4 minutos), e assim por diante. Use **Pular esta tentativa** para andar mais rápido.
 6. Responda do número de teste no grupo. Em cerca de 1 minuto o cartão mostra "respondeu" e a IA escreve a resposta com o link da agenda.
 7. Mande do número de teste "posso parcelar?": aparece **Precisa de você**, sem rascunho.
-8. Clique em **Reunião marcada** para encerrar (ou deixe sem responder: depois da tentativa 4 e mais 4 minutos, encerra como "sem resposta"). Confira o final no Copiloto.
+8. Clique em **Reunião marcada** para encerrar (ou deixe sem responder: no dia de encerrar que veio do Copiloto, ou, sem ele, 4 minutos depois do último dia da cadência, encerra como "sem resposta"). Confira o final no Copiloto.
 
 Só os follow-ups recebidos com o modo de teste ligado andam rápido; os de mentorados de verdade seguem os dias normais.
 

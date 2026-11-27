@@ -329,7 +329,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       author: 'Equipe Saga · Marina',
       createdAt: now - 3 * 86_400_000,
       status: needs ? 'responded' : 'active',
-      goal: { pendingItems: [], schedulingLink: 'https://example.com/agenda', note: 'Está sem falar com a gente desde o mês passado.', cadenceDays: [0, 2, 5, 10], sendMode: 'confirm' },
+      goal: { pendingItems: [], schedulingLink: 'https://example.com/agenda', note: 'Está sem falar com a gente desde o mês passado.', cadenceDays: [0, 2, 5, 10], sendMode: 'confirm', guidelines: null, endDay: 12, meeting: { name: 'Reunião 1', mentor: 'Mentor de exemplo' }, meetings: [{ name: 'Reunião 1', mentor: 'Mentor de exemplo', link: 'https://example.com/agenda' }] },
       itemsDone: [],
       attemptsSent: needs ? 2 : 1,
       nextAttempt: needs ? 3 : 2,

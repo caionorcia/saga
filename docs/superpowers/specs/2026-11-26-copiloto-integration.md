@@ -421,7 +421,7 @@ O mesmo formato, mais campos opcionais:
   `version: 2` é lida como v1.1. Avulso v2 sem `auto_send` = `false` (com o campo, vale a v1.2). `stopped` é tratado
   como `cancelled_ids` (que continua aceito), e vale também para as conversas. Tipo desconhecido, onboarding/sumido fora
   de grupo ou `goal` fora do formato (link que não é https, cadência fora de ordem, pendência que não é texto) = item
-  inválido. Cadência ausente = a padrão do tipo. Sumido nunca tem pendências.
+  inválido. Sumido nunca tem pendências. (A cadência padrão por tipo saiu no Adendo v2.1.)
 - O mesmo id entregue de novo com outro `goal` (ex.: menos pendências) atualiza o plano local; pendências confirmadas que
   continuam na lista ficam confirmadas.
 - Na entrega: grupo não encontrado → `failed` `conversa_nao_encontrada`; mentor fora do grupo → `failed`
@@ -432,8 +432,8 @@ O mesmo formato, mais campos opcionais:
 - `running` leva `final_text` e `sent_at` da mensagem que saiu (o texto editado, se o mentor editou), `attempts` conta só
   as tentativas da cadência que saíram (respostas não contam). `summary` vem da IA, sem telefones, ≤ 500 caracteres
   (sem IA: só contagens).
-- `no_reply` do sumido: última tentativa + 2 dias sem resposta; sumido que respondeu e não marcou: 30 dias depois do dia 0
-  (`reason: "sem_agendamento"`). `declined` leva `recusado_pelo_mentor`.
+- `no_reply`: ver o Adendo v2.1 (`end_day`; sem ele, último dia da cadência + 2 dias); sumido que respondeu e não
+  marcou leva `reason: "sem_agendamento"`. `declined` leva `recusado_pelo_mentor`.
 - Os relatórios das conversas vão numa fila própria, na ordem em que aconteceram (vários do mesmo id no mesmo lote são
   casados com os resultados na ordem). `cancelled`/`duplicate` param a conversa (sem novo relatório); `invalid` e 400 não
   voltam; 429/5xx/rede: espera crescente de 1 a 30 min.
@@ -441,3 +441,39 @@ O mesmo formato, mais campos opcionais:
   (decisão registrada no documento de design, v0.10.0).
 - Modo de teste (Configurações): 1 dia = 2 min para os recebidos com ele ligado; a busca passa a cada 1 min; desliga
   sozinho em 2 h.
+
+---
+
+# Adendo v2.1 — diretrizes, end_day e reuniões (2026-11-27)
+
+Definido pelo dono do Copiloto, que chamou de "v1.3" (aqui v2.1: o nosso v1.3 é a pesquisa do histórico). Mesmo
+`accepts`, mesmos status, mesmo `followup_update`; só campos opcionais novos no `goal` (fila v2):
+```ts
+goal = { pending_items, scheduling_link, note, cadence_days, send_mode,
+  guidelines: string | null,          // instruções de tom/conduta do dono para a IA
+  end_day: number | null,             // dia (do começo) em que encerra: sumido sem resposta / onboarding sem cumprir → no_reply;
+                                      //   null → encerra no último dia da cadência
+  meeting: { name: string, mentor: string | null } | null,   // a reunião a marcar; scheduling_link é o link dela;
+                                                             //   usar o nome do mentor ao falar dela
+  meetings: Array<{ name: string, mentor: string | null, link: string /* https */ }>  // todas; se a pessoa precisar
+                                                             //   de outra desta lista no meio da conversa, usar o link certo
+}
+```
+Regras: seguir sempre as diretrizes, junto com as regras fixas (nunca inventar dados/preços/datas; o que só o mentor
+decide → "Precisa de você" e esperar); diretrizes não passam por cima das regras nem da segurança. `cadence_days` deixa
+de ter padrão: vale exatamente o que vier. NUNCA mandar link que não seja `scheduling_link` ou um `meetings[].link`.
+Vale o que veio com o follow-up (retrato por id; reentrega do mesmo id pode atualizar).
+
+## Implementação no SagaZap (v0.10.0)
+- `cadence_days` obrigatório: crescente, sem repetir, inteiros de 0 a 365, até 30 itens; fora disso o item é inválido
+  (sem padrão por tipo). `end_day`: inteiro de 0 a 365 ou null. `guidelines`: cortadas em 4000 caracteres. `meeting`
+  precisa de `name`; cada `meetings[]` precisa de `name` e `link` https (link que não é https = item inválido). Ausentes =
+  null / lista vazia.
+- Diretrizes no pedido à IA como "Diretrizes do dono do Copiloto", depois do objetivo e da conversa; o pedido do sistema
+  diz que elas nunca valem mais que as regras fixas. Reunião a marcar com o nome do mentor; lista das reuniões com links.
+- Links permitidos = `scheduling_link` + `meetings[].link`. Conferido no código depois de cada rascunho: link fora da
+  lista (ou não https) → uma nova tentativa com aviso mais estrito; de novo → "Precisa de você" com `link_nao_permitido`
+  (sem rascunho). Os links da conversa, da base, das observações e das diretrizes chegam à IA como "[link]".
+- Encerramento por tempo: no `end_day` (do dia 0), se veio; sem ele, no último dia da cadência + 2 dias de folga (e
+  nunca antes de 2 dias depois da última tentativa). Sumido sem resposta e onboarding sem cumprir → `no_reply`; sumido
+  que respondeu e não marcou → `no_reply` com `sem_agendamento`. (Substitui os 30 dias fixos da implementação v2.)
