@@ -15,6 +15,7 @@ import { chatHash, pickQuote, sendAddress } from '../../../src/core/send/logic'
 import { verifyUnknownSend } from '../../../src/core/send/verify'
 import { isGroupJid } from '../../../src/core/wa/normalize'
 import { runView } from '../../../src/core/wa/groupHistory'
+import { loadGroupKinds, sourceGroups } from '../../../src/core/wa/groupKinds'
 import { DEFAULT_SEND_OPTIONS, typingMs, type SendOptions } from '../../../src/shared/send'
 
 const DAY = 86_400_000
@@ -576,6 +577,47 @@ describe('WhatsAppClient', () => {
           expect(repo.groupMembers(GRP3)).toEqual(['5541922221111@s.whatsapp.net'])
           await emit('group-participants.update', { id: GRP3, action: 'promote', participants: ['5541922221111@s.whatsapp.net'] })
           expect(membership).toHaveBeenCalledTimes(3)
+        })
+
+        it('v0.11.0: a consulta dos grupos guarda comunidade, grupo de avisos e a comunidade de cada grupo (lista inteira)', async () => {
+          const COM = '120363040000000001@g.us'
+          const ANN = '120363040000000002@g.us'
+          last().groupFetchAllParticipating.mockResolvedValue(<Record<string, any>>{
+            [COM]: { id: COM, subject: 'Comunidade de exemplo', isCommunity: true, participants: [{ id: '5531933332222@s.whatsapp.net' }] },
+            [ANN]: { id: ANN, subject: 'Avisos', isCommunityAnnounce: true, linkedParent: COM, participants: [{ id: '5541922221111@s.whatsapp.net' }] },
+            [GRP]: { id: GRP, subject: 'Turma' }
+          })
+          await emit('connection.update', { connection: 'open' })
+          expect(await queue.tick()).toBe('ran')
+          const kinds = loadGroupKinds(repo)
+          expect(kinds.groups).toEqual({ [COM]: { c: 1 }, [ANN]: { a: 1, p: COM }, [GRP]: {} })
+          expect(kinds.at).toBe(clock.now())
+          expect(sourceGroups(COM, kinds)).toEqual([COM, ANN])
+          expect(sourceGroups(GRP, kinds)).toEqual([GRP])
+          // um evento de assunto (sem os campos de comunidade) não apaga nada
+          await emit('groups.update', [{ id: ANN, subject: 'Avisos novos' }])
+          expect(loadGroupKinds(repo).groups[ANN]).toEqual({ a: 1, p: COM })
+          // nenhum JID nem nome no registro
+          expect(JSON.stringify(diagLines)).not.toMatch(/120363040|Comunidade de exemplo|Avisos/)
+        })
+
+        it('v0.11.0: entrada num grupo (group-participants.update add) avisa só com o JID do grupo; saída não', async () => {
+          const added = vi.fn()
+          client.on('participantsAdded', added)
+          await emit('group-participants.update', { id: GRP3, action: 'add', participants: [{ id: '5541922221111@s.whatsapp.net' }] })
+          expect(added).toHaveBeenCalledWith(GRP3)
+          await emit('group-participants.update', { id: GRP3, action: 'remove', participants: ['5541922221111@s.whatsapp.net'] })
+          expect(added).toHaveBeenCalledTimes(1)
+        })
+
+        it('v0.11.0: requestGroupMembers põe a consulta de um grupo na fila (só com a conexão aberta, nos limites)', async () => {
+          const meta = () => repo.listJobs('pending').filter((j) => (j.payload as { kind?: string }).kind === 'group_meta')
+          client.requestGroupMembers(GRP3)
+          expect(meta()).toHaveLength(0)
+          await emit('connection.update', { connection: 'open' })
+          client.requestGroupMembers(GRP3)
+          client.requestGroupMembers(GRP3)
+          expect(meta()).toHaveLength(1)
         })
 
         it('v0.8.1: @lid que ganha telefone: o telefone entra como forma do participante (guardado) e avisa', async () => {

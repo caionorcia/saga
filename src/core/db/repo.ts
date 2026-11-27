@@ -832,6 +832,25 @@ export class Repo {
     }
   }
 
+  /**
+   * v0.11.0: os grupos com nome (o personalizado, o do WhatsApp ou o assunto guardado), para escolher na conferência dos
+   * grupos da mentoria. Só local.
+   */
+  groupNames(): Array<{ jid: string; name: string }> {
+    return (
+      this.db
+        .prepare(
+          `SELECT g.jid AS jid, COALESCE(c.custom_name, c.push_name, s.subject) AS name
+             FROM (SELECT group_jid AS jid FROM group_subjects UNION SELECT jid FROM contacts WHERE is_group = 1) g
+             LEFT JOIN contacts c ON c.jid = g.jid
+             LEFT JOIN group_subjects s ON s.group_jid = g.jid`
+        )
+        .all() as Row[]
+    )
+      .filter((r) => typeof r.name === 'string' && (r.name as string).trim() !== '')
+      .map((r) => ({ jid: r.jid as string, name: (r.name as string).trim() }))
+  }
+
   /** Participantes conhecidos de um grupo (pela consulta), em ordem. */
   groupMembers(groupJid: string): string[] {
     return (this.db.prepare('SELECT member_jid FROM group_members WHERE group_jid = ? ORDER BY member_jid').all(groupJid) as Row[]).map(

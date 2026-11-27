@@ -45,6 +45,7 @@ import {
   type HistoryAnchor
 } from './groupHistory'
 import type { GroupHistoryFetchView } from '../../shared/copiloto'
+import { saveGroupKinds, type GroupKindLike } from './groupKinds'
 import { chatHash, errCode, findSentEcho, hasRecentContactMessage, newMessageId, quotedMessage, unreadKeys, type WaKey } from '../send/logic'
 import { verifyUnknownSend } from '../send/verify'
 import { CONN_LOST_REASON, DEFAULT_SEND_OPTIONS, PAUSED_REASON, SEND_LIMITS, typingMs, type SendOptions } from '../../shared/send'
@@ -74,9 +75,9 @@ export interface WaSocket {
   /** só o armazenamento local de pares @lid → telefone (leitura das chaves no disco; nenhuma consulta ao WhatsApp) */
   signalRepository?: { lidMapping?: { getPNForLID(lid: string): Promise<string | null> } }
   /** só leitura (uma consulta IQ): os grupos de que o mentor participa, com o assunto e os participantes. Sempre pela fila. */
-  groupFetchAllParticipating?(): Promise<Record<string, { id?: string; subject?: string | null; participants?: ParticipantLike[] | null }>>
+  groupFetchAllParticipating?(): Promise<Record<string, { id?: string; subject?: string | null; participants?: ParticipantLike[] | null } & GroupKindLike>>
   /** v0.8.1, só leitura (uma consulta IQ): um grupo só (assunto e participantes). Sempre pela fila, no máximo uma vez por grupo. */
-  groupMetadata?(jid: string): Promise<{ id?: string; subject?: string | null; participants?: ParticipantLike[] | null } | null | undefined>
+  groupMetadata?(jid: string): Promise<({ id?: string; subject?: string | null; participants?: ParticipantLike[] | null } & GroupKindLike) | null | undefined>
   /**
    * v0.8.3, só o job `fetch_history` (pela fila, no máximo um a cada 20 s e 60 por dia): pede ao PRÓPRIO celular as
    * mensagens anteriores de um grupo (o mesmo pedido do WhatsApp Web ao rolar a conversa para cima). Vai só para o
@@ -259,8 +260,8 @@ interface ChatLike {
   lidJid?: string | null
 }
 
-/** O que o cliente lê de um grupo do Baileys (`GroupMetadata`): só o id e o assunto. */
-interface GroupLike {
+/** O que o cliente lê de um grupo do Baileys (`GroupMetadata`): o id, o assunto e (v0.11.0) se é comunidade/avisos. */
+interface GroupLike extends GroupKindLike {
   id?: string | null
   subject?: string | null
   /** `groups.upsert` (grupo novo, ou o mentor entrou nele) traz os participantes */
@@ -285,7 +286,8 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
  * mentor e no ritmo da busca) não é mensagem a ninguém: é o mesmo pedido do WhatsApp Web ao rolar a conversa para cima.
  *
  * Eventos: `'qr'(dataUrl)`, `'status'(ConnState)`, `'message'(NormalizedMessage)`,
- * `'disk'(low: boolean)` (só quando muda), `'contacts'()` (nomes de contatos mudaram), `'send'(jid)` (um envio mudou de estado).
+ * `'disk'(low: boolean)` (só quando muda), `'contacts'()` (nomes de contatos mudaram), `'send'(jid)` (um envio mudou de estado),
+ * `'participantsAdded'(groupJid)` (v0.11.0: entrou gente num grupo).
  */
 export class WhatsAppClient extends EventEmitter {
   private readonly policy: ReconnectPolicy
@@ -954,6 +956,7 @@ export class WhatsAppClient extends EventEmitter {
 
   private async learnGroups(groups: GroupLike[]): Promise<void> {
     const named = this.applyGroupNames(groups)
+    this.saveKinds(groups, false)
     // v0.8.1: grupo novo (ou o mentor entrou nele): os participantes vêm junto, sem consulta nenhuma
     const withMembers = groups.filter((g) => g?.id && Array.isArray(g.participants)).map((g) => ({ id: g.id as string, participants: g.participants }))
     const members = withMembers.length ? await this.applyGroupMembers(withMembers) : { count: 0, changed: false }
@@ -983,6 +986,26 @@ export class WhatsAppClient extends EventEmitter {
       this.emit('membership')
       this.emit('contacts')
     }
+    // v0.11.0 (Adendo v1.4): alguém entrou: a conferência dos grupos da mentoria confere este grupo (só o JID do grupo)
+    if (action === 'add') this.emit('participantsAdded', id)
+  }
+
+  /** v0.11.0: tipos dos grupos (comunidade, avisos), guardados; nunca quebra a ingestão. */
+  private saveKinds(groups: ReadonlyArray<GroupKindLike>, full: boolean): void {
+    try {
+      saveGroupKinds(this.deps.repo, groups, full, this.deps.clock.now())
+    } catch {
+      // só serve à conferência dos grupos da mentoria
+    }
+  }
+
+  /**
+   * v0.11.0 (Adendo v1.4): os participantes de um grupo escolhido para a conferência ainda não são conhecidos: a
+   * consulta só desse grupo, pela fila, dentro dos mesmos limites (10/h, 40/dia, uma por grupo por dia). Só com a conexão aberta.
+   */
+  requestGroupMembers(groupJid: string): void {
+    if (this.status !== 'open' || !isGroupJid(groupJid)) return
+    this.requestGroupMeta(groupJid)
   }
 
   /** v0.8.1: a consulta de um grupo só (assunto e participantes), pela fila, dentro dos limites (`GROUP_META_LIMITS`). */
@@ -1308,6 +1331,11 @@ export class WhatsAppClient extends EventEmitter {
     // v0.8.1: resposta vazia com grupos aqui não conta como feita (tenta de novo, no ritmo da fila)
     if (entries.length === 0 && this.deps.repo.groupCount() > 0) throw new Error('consulta dos grupos sem nenhum grupo')
     const groups = entries.map(([id, g]) => ({ id: g?.id ?? id, subject: g?.subject ?? null }))
+    // v0.11.0: comunidade, grupo de avisos e a comunidade de cada grupo (a lista inteira: o que sumiu, a conta saiu)
+    this.saveKinds(
+      entries.map(([id, g]) => ({ id: g?.id ?? id, isCommunity: g?.isCommunity ?? false, isCommunityAnnounce: g?.isCommunityAnnounce ?? false, linkedParent: g?.linkedParent ?? null })),
+      true
+    )
     const members = await this.applyGroupMembers(entries.map(([id, g]) => ({ id: g?.id ?? id, participants: g?.participants })))
     // só as contagens: nunca os nomes dos grupos nem os participantes
     this.diag('wa_groups', `nomes de grupos: ${groups.length} grupos${members.count ? `, ${members.count} participantes` : ''}`)
@@ -1338,6 +1366,7 @@ export class WhatsAppClient extends EventEmitter {
     }
     if (!g) return
     const named = this.applyGroupNames([{ id: groupJid, subject: g.subject ?? null }])
+    this.saveKinds([{ id: groupJid, isCommunity: g.isCommunity ?? null, isCommunityAnnounce: g.isCommunityAnnounce ?? null, linkedParent: g.linkedParent ?? null }], false)
     const members = await this.applyGroupMembers([{ id: groupJid, participants: g.participants }])
     this.diag('wa_groups', `consulta de um grupo: ${members.count} participantes`)
     if (members.changed) this.emit('membership')
