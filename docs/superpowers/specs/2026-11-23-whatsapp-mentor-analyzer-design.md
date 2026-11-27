@@ -644,6 +644,37 @@ Muitos grupos antigos com assunto apareciam como "Grupo sem nome".
   `copiloto_group_name_au`) põe a mensagem mais recente dele de novo na fila, com o `chat.name` novo. Grupo de que o
   mentor saiu não volta na consulta: continua sem nome (ou com o nome personalizado).
 
+### Histórico antigo dos grupos (v0.8.3, a pedido do mentor)
+
+Relato: no Copiloto, a mensagem de grupo mais antiga era de 25/11, e as individuais de 27/10.
+
+- **Causa:** a ingestão de grupos só existe desde a v0.1.5 (25/11); antes dela as mensagens `@g.us` do histórico inicial
+  eram descartadas, e o WhatsApp só manda o histórico ao vincular. O reenvio da v0.8.1 só manda o que está guardado aqui.
+- **Vincular de novo** (aparelho removido no celular → `logged_out` → só a sessão é apagada → "Reconectar" → QR → histórico
+  completo): a ingestão é `INSERT OR IGNORE` pela id, então nada duplica e o que já estava não emite `message` (nada de
+  áudio baixado ou transcrito de novo, nada de alerta, gatilho do Copiloto só nas novas); mensagens, memória, respostas
+  aprovadas, configurações, fila do Copiloto e envios ficam. As de grupo dos 30 dias entram e vão ao Copiloto pela captura
+  de sempre (mesmos ids `sz1:m:`). Ao abrir depois de um QR (`paired`), a consulta dos grupos roda de novo (pela fila).
+  **Correção:** um vínculo novo ou histórico pedido ao celular seguram o envio automático dos follow-ups: os recebidos
+  até 24 h depois (`copiloto.autoHoldUntil`, só estende) ficam para a confirmação do mentor, inclusive os que já estavam
+  esperando para sair sozinhos (antes, um automático já marcado saía 1 min depois de vincular de novo). Envios na fila
+  já expiravam com a queda (nunca saem depois de reconectar).
+- **Buscar no celular o histórico dos grupos** (botão em Configurações › Copiloto da Saga): `fetchMessageHistory` do
+  Baileys 7.0.0-rc14 (pedido PDO `HISTORY_SYNC_ON_DEMAND` ao próprio celular, o mesmo do WhatsApp Web ao rolar a
+  conversa; não vai a nenhum contato) com a resposta como `messaging-history.set` `syncType` ON_DEMAND (6), gravada pela
+  ingestão normal (janela de 30 dias). Grupos de mentorados com mensagem aqui e sem os 30 dias; ponto de partida = a mais
+  antiga guardada (id, `fromMe`, participante, horário em ms), depois a mais antiga da resposta. Job `fetch_history`
+  (limitador `wa_history`: 20–30 s, 60/h, 60/dia), que só fica pronto com a conexão aberta há 1 min, sem pedido esperando
+  resposta e dentro dos limites gravados (`wa.groupHistoryLog`: 20 s entre pedidos, 60 por dia local; o estado em
+  `wa.groupHistoryRun`). 50 mensagens por pedido; o grupo termina quando a resposta chega a 30 dias atrás ou vem sem nada
+  anterior. Sem resposta em 60 s = perdido (quieto); 2 seguidos no grupo → desiste dele; 3 seguidos → para
+  (`waiting_phone`) até clicar de novo. Nunca vira job com falha. Grupos sem mensagem nenhuma aqui não têm ponto de
+  partida: só contados ("N grupo(s) precisam reconectar o aparelho"). Registro: só contagens.
+- **Linha de status:** "Histórico dos grupos: mensagem mais antiga em DD/MM; X grupo(s), Y mensagem(ns) enviadas ao
+  Copiloto" (eventos `sz1:m:` de grupos aceitos na fila de saída; a mais antiga pela id do evento), e a linha da busca.
+- **Conferir no aparelho real:** a unidade do horário do pedido (ms, como o nome do campo do protocolo) e se o celular
+  atende pedidos de grupos antigos.
+
 ### Versão 0.3.1 (a pedido do mentor)
 
 **Foco mais forte.** "A diferença não ficou tão grande": as conversas que não pedem resposta ficam com opacidade 0,28 e
@@ -741,7 +772,8 @@ antes.
   últimos 30 dias, com 30–90 s entre envios e tetos por hora e por dia. O mentor está ciente.
 - **Escrita no WhatsApp só por um caminho:** o job `send_message`, criado depois da confirmação do mentor (token de
   uso único do `prepareSend` para exatamente aquele jid + texto, válido por 5 min). Nenhum outro código chama métodos de
-  escrita do socket; os testes verificam isso.
+  escrita do socket; os testes verificam isso. (v0.8.3: o pedido de histórico ao próprio celular, `fetchMessageHistory`,
+  só sai pelo job `fetch_history`, a pedido do mentor; não é mensagem a ninguém.)
 - **Histórico:** depende do que o WhatsApp envia ao vincular o aparelho;
   normalmente cobre 30 dias, mas não é garantido. Áudios antigos podem não
   estar mais disponíveis para download — nesse caso, mostrar "áudio

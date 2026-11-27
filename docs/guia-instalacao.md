@@ -328,6 +328,23 @@ Ao desligar, a fila deste computador é apagada. O que já foi enviado continua 
   grupos (os que apareciam como "Grupo sem nome"). Grupo de que você saiu pode continuar sem nome: dê um nome a ele na
   conversa, se quiser.
 
+#### Histórico antigo dos grupos (versão 0.8.3)
+
+Se o SagaZap foi vinculado antes da versão 0.1.5, os grupos só têm mensagens daquele dia em diante (o WhatsApp manda o
+histórico só ao vincular). A linha **Histórico dos grupos: mensagem mais antiga em DD/MM; X grupo(s), Y mensagem(ns)
+enviadas ao Copiloto** mostra até onde o Copiloto já tem. Há dois jeitos de trazer os 30 dias:
+
+1. **Buscar no celular o histórico dos grupos** (botão em **Configurações › Copiloto da Saga**): para os grupos que já têm
+   alguma mensagem aqui, o SagaZap pede ao seu celular as mensagens anteriores, aos poucos (um pedido a cada 20 s, no
+   máximo 60 por dia; se acabar, continua no dia seguinte). Deixe o celular ligado e com internet e o SagaZap conectado.
+   Nada é enviado a ninguém. A linha **Buscando no celular…** mostra o progresso. Se aparecer **N grupo(s) precisam
+   reconectar o aparelho**, esses grupos não têm nenhuma mensagem aqui: só o jeito 2 traz o histórico deles.
+2. **Vincular o aparelho de novo** (traz tudo de uma vez): no celular, **WhatsApp › Aparelhos conectados**, toque no
+   SagaZap e em **Desconectar**. No SagaZap aparece "vincule novamente": clique em **Reconectar** e escaneie o QR Code.
+   O WhatsApp manda o histórico de novo; o SagaZap guarda só o que faltava (nada duplica, áudios já transcritos não são
+   baixados de novo, respostas aprovadas, memória e configurações ficam). Nas 24 horas seguintes, os follow-ups do
+   Copiloto ficam esperando a sua confirmação (nenhum sai sozinho por causa do histórico antigo).
+
 ### Mensagens do Copiloto (versão 0.7.0)
 
 Com o Copiloto da Saga ligado, a equipe pode escrever no Copiloto uma mensagem para um mentorado (ou um grupo). O SagaZap busca essas mensagens a cada 5 minutos:
