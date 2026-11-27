@@ -451,7 +451,7 @@ function ConvoCard({ convo: c }: { convo: ConvoView }) {
           </label>
           <textarea
             id={`convo-${c.id}`}
-            rows={4}
+            rows={6}
             maxLength={CONVO_LIMITS.draftChars}
             value={d.state === 'ready' ? text : d.text}
             readOnly={d.state !== 'ready'}

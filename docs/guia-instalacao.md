@@ -382,6 +382,38 @@ Em **Configurações › Copiloto da Saga** há a opção **Enviar follow-ups do
 - Se o SagaZap não souber se uma mensagem saiu (a conexão caiu no meio), ele **não envia de novo sozinho**: o aviso volta a ser o de sempre, com **Conferir**.
 - Desligar a opção vale na hora: o que ainda não saiu fica esperando você, como antes. As mensagens que o Copiloto não marcar como automáticas continuam pedindo a sua confirmação. Ao ligar, só as mensagens que chegarem depois saem sozinhas; as que já estavam na conversa continuam esperando você. Se a equipe cancelar uma mensagem no Copiloto, ela some daqui e não sai.
 
+#### Follow-ups de onboarding e de sumido (versão 0.10.0)
+
+Além da mensagem pronta (avulsa), o Copiloto agora pode mandar dois tipos de acompanhamento, sempre **no grupo do mentorado**:
+
+- **Onboarding:** no começo da mentoria, a IA escreve ao mentorado até ele cumprir as pendências que o Copiloto mandou (ex.: assistir às Aulas Essenciais, compartilhar fotos no Drive, marcar a Reunião 1). Para marcar reunião, ela manda o link da agenda.
+- **Sumido:** a pessoa está há muito tempo sem falar. A IA insiste em alguns dias combinados (padrão: dias 0, 2, 5 e 10) até ela responder; quando responder, manda o link da agenda e acompanha até a reunião ser marcada.
+
+Como funciona na tela:
+
+- No grupo, no topo da coluna das sugestões, aparece o cartão **🔁 Follow-up Sumido — tentativa 2 de 4** (ou Onboarding), com o objetivo, a mensagem que a IA escreveu (você pode editar) e os botões **Enviar**, **Pular esta tentativa**, **Encerrar** e, no sumido, **Reunião marcada**. No onboarding, marque cada pendência cumprida; com todas marcadas, o onboarding termina.
+- **Nada sai sem o seu "Enviar".** O envio segue todas as travas da mensagem avulsa: horário de envio (fora dele, sai na abertura com 7 a 25 minutos a mais), ritmo, limites, nunca duas vezes, nunca reenvia no escuro, sem citar, e marca como lida. Fora do horário, o cartão oferece **Forçar envio agora**.
+- A IA escreve como você, curto, em português, sem inventar dados, preços, datas ou links (o único link que ela usa é o da agenda que veio do Copiloto). Ela só escreve quando uma tentativa vence ou o mentorado manda mensagem nova, e há no máximo um rascunho por vez.
+- Se o mentorado pedir algo que só você decide (dinheiro, contrato, cancelamento, exceção, reclamação), aparece **⚠ Precisa de você** e nenhum rascunho. Responda você mesmo no WhatsApp (o aviso some) ou clique em **Gerar rascunho mesmo assim**.
+- Quando a IA achar que a reunião foi marcada ou que uma pendência foi cumprida, ela só **sugere** no cartão; vale o que você confirmar.
+- Mensagens de outras pessoas do grupo não contam como resposta: só as do mentorado (ou da segunda cadeira).
+- Enquanto o follow-up anda, as sugestões normais daquele grupo não são geradas sozinhas (para não escrever em dobro).
+- Como você já participa do grupo do mentorado, escrever lá não é "começar conversa": a regra dos 30 dias não barra este follow-up **só nesse caso** (grupo em que você está e onde já escreveu antes). Conversas individuais continuam com a regra.
+- A equipe vê no Copiloto cada mensagem enviada, a resposta do mentorado e o final (reunião marcada, concluído, sem resposta, encerrado por você). Se a equipe parar o follow-up lá, o cartão some aqui na hora.
+
+##### Como testar um follow-up de sumido
+
+1. Use um **mentorado de teste** cadastrado no Copiloto (com o seu segundo número, por exemplo) e um grupo no WhatsApp com você e esse número, onde você já tenha mandado pelo menos uma mensagem.
+2. No SagaZap, em **Configurações › Copiloto da Saga**, ligue **Modo de teste dos follow-ups: cadência acelerada (1 dia = 2 minutos)**. Aparece uma faixa amarela no topo; o modo desliga sozinho em 2 horas.
+3. No Copiloto, crie um follow-up **Sumido** para o mentorado de teste. Em até 1 minuto ele aparece no grupo de teste, com a tentativa 1 escrita pela IA.
+4. Clique em **Enviar** (dentro do horário de envio; fora dele, marque **Forçar envio agora**). A mensagem chega ao grupo; no Copiloto aparece "running".
+5. Sem responder, a tentativa 2 aparece uns 4 minutos depois do começo (2 dias = 4 minutos), e assim por diante. Use **Pular esta tentativa** para andar mais rápido.
+6. Responda do número de teste no grupo. Em cerca de 1 minuto o cartão mostra "respondeu" e a IA escreve a resposta com o link da agenda.
+7. Mande do número de teste "posso parcelar?": aparece **Precisa de você**, sem rascunho.
+8. Clique em **Reunião marcada** para encerrar (ou deixe sem responder: depois da tentativa 4 e mais 4 minutos, encerra como "sem resposta"). Confira o final no Copiloto.
+
+Só os follow-ups recebidos com o modo de teste ligado andam rápido; os de mentorados de verdade seguem os dias normais.
+
 ## 5. O que significa a faixa de cima
 
 A faixa no topo mostra como o SagaZap está.

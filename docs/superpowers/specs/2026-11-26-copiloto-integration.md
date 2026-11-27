@@ -358,3 +358,86 @@ error: string | null                  // curto, quando status = 'error'
   `mentorado` = telefone do pedido ou da lista de mentorados (segunda cadeira inclusive).
 - `search_result` reenviado até o Copiloto responder 200 (qualquer `status`) ou 400; só `stored` conta em "respondidas
   hoje". Um id já respondido que volte em até 30 min não é refeito.
+
+---
+
+# Adendo v2 — tipos de follow-up (onboarding/sumido) (2026-11-27)
+
+Definido pelo dono do Copiloto (que chamou de "v1.2"; numerado aqui como v2 porque estende o v1.1/v1.2/v1.2.1 deste
+documento sem mudar o que já vale). Mesma URL, mesmo segredo; sempre no grupo do mentorado; nada de quem não é
+mentorado; sem mídia; nunca texto de mensagem em log.
+
+## Tipos
+1. **Avulso:** igual à v1.1/v1.2 (texto pronto; o mentor confirma e envia).
+2. **Onboarding:** no começo da mentoria, a IA conversa com o mentorado no grupo dele até ele cumprir as pendências do
+   Copiloto (ex.: assistir às Aulas Essenciais, compartilhar fotos/vídeos/press kit no Drive, marcar a Reunião 1). Para
+   marcar reunião, manda o link da agenda.
+3. **Sumido:** a pessoa está há muito tempo sem falar. A IA insiste até ela responder; quando responder, manda o link da
+   agenda e acompanha até a reunião ser marcada.
+
+Fora do horário ou mudando de assunto: a IA responde como o mentor responderia, sem inventar dados, preços ou datas.
+Pedido que só o mentor decide: a IA avisa o mentor e espera.
+
+## `{version: 1, action: "followups_pending", accepts: ["onboarding", "sumido"]}` → 200
+Sem `accepts`, a resposta continua v1.1 (só avulso). Com `accepts`:
+```ts
+{ version: 2,
+  followups: Array<{
+    id: string,                                  // uuid
+    type: 'avulso' | 'onboarding' | 'sumido',
+    target: { kind: 'group', chat_key: string }, // (avulso pode continuar individual, como na v1.1)
+    text: string | null,                         // null em onboarding/sumido
+    author: string | null,
+    created_at: string,                          // ISO
+    goal: null /* avulso */ | {
+      pending_items: string[],                   // vazio no sumido
+      scheduling_link: string | null,            // https
+      note: string | null,
+      cadence_days: number[],                    // dias (contados do começo) em que a IA escreve se não houve resposta
+      send_mode: 'confirm' | 'auto'
+    }
+  }>,
+  stopped: string[] }                            // parados pela equipe depois da entrega: parar a conversa já
+```
+- Sumido: `cadence_days` [0,2,5,10] (4 tentativas em 10 dias; sem resposta → para). Onboarding: [0,2,4,7,10,14,21,28]
+  (até cumprir as pendências, no máximo 30 dias).
+- `send_mode: "confirm"`: cada mensagem da IA espera o OK do mentor no SagaZap (o que vale agora); `"auto"` é para depois.
+
+## `{action: "followup_update", updates: [...]}`
+O mesmo formato, mais campos opcionais:
+```ts
+{ id, status, final_text, sent_at, reason,
+  attempts: number, last_attempt_at: string | null, replied_at: string | null,
+  summary: string | null }   // ≤ 500 caracteres: o que aconteceu até agora
+```
+- `running`: a cada mensagem que sai (com `attempts`/`last_attempt_at`) · `responded`: com `replied_at`.
+- Finais do sumido: `scheduled`, `no_reply` (4 tentativas sem resposta), `declined` (o mentor recusou), `failed` (com
+  `reason`). Finais do onboarding: `completed`, `no_reply` (30 dias sem cumprir), `declined`, `failed`.
+- Avulso continua `sent`/`declined`/`failed`.
+- `results[].status`: `updated`, `duplicate` (já final), `cancelled` (a equipe parou: parar a conversa), `invalid`.
+
+## Implementação no SagaZap (v0.10.0)
+- Toda busca (`followups_pending`, inclusive a conferência antes do envio automático) manda `accepts`. Resposta sem
+  `version: 2` é lida como v1.1. Avulso v2 sem `auto_send` = `false` (com o campo, vale a v1.2). `stopped` é tratado
+  como `cancelled_ids` (que continua aceito), e vale também para as conversas. Tipo desconhecido, onboarding/sumido fora
+  de grupo ou `goal` fora do formato (link que não é https, cadência fora de ordem, pendência que não é texto) = item
+  inválido. Cadência ausente = a padrão do tipo. Sumido nunca tem pendências.
+- O mesmo id entregue de novo com outro `goal` (ex.: menos pendências) atualiza o plano local; pendências confirmadas que
+  continuam na lista ficam confirmadas.
+- Na entrega: grupo não encontrado → `failed` `conversa_nao_encontrada`; mentor fora do grupo → `failed`
+  `mentor_fora_do_grupo`; nenhuma mensagem do mentor guardada no grupo → `failed` `sem_historico_do_mentor`.
+- `send_mode: "auto"` vale como `confirm` por enquanto (só a contagem vai ao registro).
+- Dia 0 = o primeiro horário de envio permitido depois da entrega. Resposta = mensagem do mentorado (telefone do roster,
+  inclusive segunda cadeira) no grupo depois da última tentativa; mensagens de outros participantes não contam.
+- `running` leva `final_text` e `sent_at` da mensagem que saiu (o texto editado, se o mentor editou), `attempts` conta só
+  as tentativas da cadência que saíram (respostas não contam). `summary` vem da IA, sem telefones, ≤ 500 caracteres
+  (sem IA: só contagens).
+- `no_reply` do sumido: última tentativa + 2 dias sem resposta; sumido que respondeu e não marcou: 30 dias depois do dia 0
+  (`reason: "sem_agendamento"`). `declined` leva `recusado_pelo_mentor`.
+- Os relatórios das conversas vão numa fila própria, na ordem em que aconteceram (vários do mesmo id no mesmo lote são
+  casados com os resultados na ordem). `cancelled`/`duplicate` param a conversa (sem novo relatório); `invalid` e 400 não
+  voltam; 429/5xx/rede: espera crescente de 1 a 30 min.
+- Regra dos 30 dias: dispensada só para esses follow-ups no grupo do mentorado em que o mentor participa e já escreveu
+  (decisão registrada no documento de design, v0.10.0).
+- Modo de teste (Configurações): 1 dia = 2 min para os recebidos com ele ligado; a busca passa a cada 1 min; desliga
+  sozinho em 2 h.

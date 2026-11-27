@@ -1057,3 +1057,37 @@ O mentor batizou o app de **SagaZap** e pediu um ícone novo. Só a marca muda; 
 - **Cópias de segurança:** o arquivo novo é `SagaZap-copia-AAAA-MM-DD.sagabackup`; o rodízio da cópia automática
   reconhece os dois prefixos e ordena pela data.
 
+## v0.10.0 — follow-ups de conversa (onboarding e sumido, contrato v2)
+
+Contrato: Adendo v2 em `2026-11-26-copiloto-integration.md`. O que muda no app:
+
+- **Motor de conversa** (`src/core/copiloto/convo.ts`, tabelas `copiloto_convos` e `copiloto_convo_reports`, schema v22).
+  Dia 0 = o primeiro horário permitido depois da entrega; cada dia da cadência sem resposta desde a última mensagem do
+  mentor vira UMA chamada à IA (tentativa); mensagem nova do mentorado (telefone do roster, inclusive segunda cadeira) vira
+  `responded` e, depois de 1 min de silêncio, UMA chamada para a resposta. Nunca há IA sem tentativa vencida ou mensagem
+  nova; no máximo um rascunho por follow-up; nunca duas mensagens da cadência com menos de 1 dia entre elas.
+- **IA** (`src/core/ai/convoPrompt.ts`): mesma corrente (Groq/Claude + reservas), limitador e teto diário das sugestões;
+  objetivo, conversa do grupo (30 dias, sem nomes nem números: "Mentor", "Mentorado", "Outra pessoa"), regras/trechos da
+  base e memória de estilo. Proíbe inventar dados, preços, datas e links; os links da conversa, da base e da observação
+  chegam como "[link]", e a saída com link que não é o da agenda ou com valor em reais é recusada (uma tentativa a mais).
+  Pedido de dinheiro/contrato/cancelamento/exceção/reclamação: "Precisa de você" sem chamar a IA; a IA também pode
+  devolver `precisa_de_voce`.
+- **Envio:** só com o clique do mentor (o "Enviar" do cartão é a confirmação; `send_mode: "auto"` vale como confirmação
+  por enquanto e só é contado no registro). Sai pelo `prepareSend` + `sendAvulsa` (id do rascunho na chave de
+  idempotência), com todas as travas: horário (fora dele, abertura + 7..25 min, gravado), um envio por vez com a conexão
+  estável e o limitador livre, tetos por hora/dia, "digitando…", sem citação, marcar como lida, desconhecido nunca
+  reenviado. "Forçar envio" só pelo cartão.
+- **Decisão: regra dos 30 dias no grupo do mentorado.** Mensagem no GRUPO do mentorado, do qual o mentor participa, não
+  é "iniciar conversa" com um desconhecido: é falar num grupo de trabalho em que ele está. Por isso, só para o rascunho
+  de um follow-up de conversa (onboarding/sumido) ativo, a regra dos 30 dias é dispensada quando o alvo é um grupo, o
+  mentor está entre os participantes conhecidos (ou eles ainda não foram consultados) e há mensagem do mentor guardada
+  nesse grupo. Conferido no `prepareSend`, no consumo da confirmação e de novo no `executeSend`. Conversas individuais,
+  mensagens avulsas comuns e follow-ups avulsos continuam com a regra; todas as outras travas valem para todos.
+- **Finais:** o mentor confirma (a IA só sugere "reunião marcada"/"pendência cumprida"). Sumido: `scheduled`, `no_reply`
+  (última tentativa + 2 dias sem resposta; se respondeu e não marcou, 30 dias depois do dia 0, motivo `sem_agendamento`),
+  `declined`, `failed`. Onboarding: `completed` com todas as pendências confirmadas, `no_reply` aos 30 dias, `declined`,
+  `failed`.
+- **Interface:** cartão no topo da coluna das sugestões do grupo; as sugestões normais desse grupo não geram sozinhas
+  enquanto o follow-up anda. Modo de teste (Configurações › Copiloto da Saga): 1 dia = 2 min nos follow-ups recebidos
+  com ele ligado, desliga sozinho em 2 h, faixa de aviso; o horário de envio continua valendo (salvo "Forçar envio").
+
