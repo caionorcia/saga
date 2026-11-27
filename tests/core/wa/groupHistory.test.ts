@@ -5,6 +5,9 @@ import { Repo } from '../../../src/core/db/repo'
 import {
   GROUP_HISTORY_LIMITS,
   historyTarget,
+  loadExhausted,
+  markExhausted,
+  mayHaveOlder,
   localDayStart,
   newRun,
   nextRequestAt,
@@ -46,13 +49,14 @@ describe('v0.8.3: limites gravados da busca do histórico no celular', () => {
     expect(nextRequestAt(repo, tomorrow + 1)).toBeLessThanOrEqual(tomorrow + 1)
   })
 
-  it('limite dos 30 dias pelo horário das mensagens; ponto de partida = a mensagem mais antiga do grupo', () => {
+  it('v0.9.0: sem limite de data (todo o histórico do celular); ponto de partida = a mensagem mais antiga do grupo', () => {
     const { repo } = setup()
-    expect(historyTarget(repo, NOW)).toBe(NOW - 30 * DAY)
+    expect(historyTarget(repo, NOW)).toBe(0)
     repo.upsertContact({ jid: GRP, isGroup: true })
     repo.insertMessage({ id: 'b', jid: GRP, fromMe: false, ts: NOW - 2 * DAY, kind: 'text', text: 'x', mediaKeyJson: null, durationSec: null, waKeyJson: JSON.stringify({ remoteJid: GRP, id: 'b', participant: '1@lid' }) })
     repo.insertMessage({ id: 'a', jid: GRP, fromMe: true, ts: NOW - 3 * DAY, kind: 'text', text: 'x', mediaKeyJson: null, durationSec: null })
-    expect(historyTarget(repo, NOW)).toBe(NOW - 2 * DAY - 30 * DAY)
+    expect(historyTarget(repo, NOW)).toBe(0)
+    expect(reachedTarget(NOW - 3000 * DAY, 0)).toBe(false)
     expect(oldestAnchor(repo, GRP)).toEqual({ id: 'a', fromMe: true, ts: NOW - 3 * DAY })
     expect(oldestAnchor(repo, '1@g.us')).toBeNull()
     expect(reachedTarget(NOW - 30 * DAY + 30 * 60_000, NOW - 30 * DAY)).toBe(true)
@@ -69,9 +73,22 @@ describe('v0.8.3: limites gravados da busca do histórico no celular', () => {
     saveRun(repo, run)
     const v = runView(repo, NOW)!
     expect(v).toMatchObject({ state: 'running', groups: 2, done: 1, requests: 4, received: 120, noAnchor: 3, capped: false })
-    expect(historyFetchLine(v)).toBe('Buscando no celular: 1 de 2 grupo(s) concluído(s) · 4 pedido(s) ao celular · 120 mensagem(ns) nova(s)')
+    expect(historyFetchLine(v)).toBe('Buscando no celular: 1 de 2 conversa(s) concluída(s) · 4 pedido(s) ao celular · 120 mensagem(ns) nova(s)')
     expect(historyFetchLine({ ...v, state: 'waiting_phone' })).toMatch(/o celular não respondeu/)
     expect(noAnchorLine(3)).toBe('3 grupo(s) precisam reconectar o aparelho para trazer o histórico')
     expect(newRun(NOW, 0, [], 2)).toMatchObject({ state: 'done', finishedAt: NOW })
+  })
+})
+
+describe('v0.9.0: conversas que chegaram ao fim', () => {
+  it('ficam anotadas com a mais antiga; mudou a mais antiga, pode ter mais de novo', () => {
+    const { repo } = setup()
+    expect(mayHaveOlder(repo, GRP, 'a')).toBe(true)
+    markExhausted(repo, GRP, 'a')
+    expect(loadExhausted(repo)).toEqual({ [GRP]: 'a' })
+    expect(mayHaveOlder(repo, GRP, 'a')).toBe(false)
+    expect(mayHaveOlder(repo, GRP, 'z')).toBe(true)
+    repo.setSetting('wa.historyExhausted', 'lixo')
+    expect(loadExhausted(repo)).toEqual({})
   })
 })

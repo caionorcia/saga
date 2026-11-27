@@ -8,6 +8,7 @@ import { SendRepo } from './sendRepo'
 import { BackupRepo } from './backupRepo'
 import { CopilotoRepo } from './copilotoRepo'
 import { FollowupRepo } from './followupRepo'
+import { recentSince } from '../recent'
 import type { GroupAnswer, ReasonCode, ReplyDecision, ReplyDecisionSource, ReplyReasonCode, ReplyVerdict, Verdict } from '../../shared/feedback'
 
 /** Qualidade da fonte do nome guardado em `push_name` (maior vence; empate: o mais novo). */
@@ -321,16 +322,20 @@ export { GROUP_ANSWER_MAX_MEMBERS }
  * (a) qualquer mensagem num grupo de que o contato participa (pelos participantes do grupo ou porque já mandou mensagem
  *     lá) com até GROUP_ANSWER_MAX_MEMBERS participantes conhecidos (tamanho desconhecido = grande);
  * (b) em qualquer grupo, a mensagem que menciona (@) o contato ou cita uma mensagem dele.
+ * v0.9.0: cada parte pelos índices (os grupos do contato → as mensagens do mentor neles; as menções ao contato), sem varrer
+ * todas as mensagens do mentor; o horário (13 dígitos) compara como texto.
  */
-const GROUP_ANSWER_SQL = (cjid: string, since: string) => `(
-  SELECT gm.ts || ' ' || gm.jid FROM messages gm
-   WHERE gm.from_me = 1 AND gm.ts > ${since} AND gm.jid LIKE '%@g.us'
-     AND (
-       (gm.jid IN (SELECT gs.group_jid FROM group_sizes gs WHERE gs.members <= ${GROUP_ANSWER_MAX_MEMBERS})
-        AND gm.jid IN (SELECT g.group_jid FROM group_members g WHERE g.member_jid = ${cjid}
-                       UNION SELECT s.jid FROM messages s WHERE s.sender_jid = ${cjid}))
-       OR EXISTS (SELECT 1 FROM message_targets t WHERE t.msg_id = gm.id AND t.target_jid = ${cjid}))
-   ORDER BY gm.ts DESC LIMIT 1)`
+const GROUP_ANSWER_SQL = (cjid: string, since: string) => `NULLIF(MAX(
+  COALESCE((SELECT gm.ts || ' ' || gm.jid FROM messages gm INDEXED BY idx_messages_jid_from_me_ts
+             WHERE gm.jid IN (SELECT gs.group_jid FROM group_sizes gs
+                               WHERE gs.members <= ${GROUP_ANSWER_MAX_MEMBERS} AND gs.group_jid LIKE '%@g.us'
+                                 AND gs.group_jid IN (SELECT g.group_jid FROM group_members g WHERE g.member_jid = ${cjid}
+                                                      UNION SELECT s.jid FROM messages s WHERE s.sender_jid = ${cjid}))
+               AND gm.from_me = 1 AND gm.ts > ${since}
+             ORDER BY gm.ts DESC LIMIT 1), ''),
+  COALESCE((SELECT gm.ts || ' ' || gm.jid FROM message_targets t INDEXED BY idx_message_targets_target CROSS JOIN messages gm ON gm.id = t.msg_id
+             WHERE t.target_jid = ${cjid} AND gm.from_me = 1 AND gm.ts > ${since} AND gm.jid LIKE '%@g.us'
+             ORDER BY gm.ts DESC LIMIT 1), '')), '')`
 
 function parseSources(json: unknown): KbSource[] {
   if (typeof json !== 'string') return []
@@ -537,9 +542,12 @@ export class Repo {
 
   listContacts(opts: { includeHidden: boolean; kind?: ContactKind }): ContactRow[] {
     const kind = opts.kind ?? 'all'
+    // v0.9.0: com o histórico completo, conversa parada há mais de 30 dias (o contato falou por último) não espera
+    // resposta; e o "Respondido no grupo" só olha os últimos 30 dias (nunca varre anos de mensagens do mentor)
+    const since = this.recentSince()
     const rows = this.db
       .prepare(
-        `WITH base AS (
+        `WITH base AS MATERIALIZED (
            SELECT c.jid, c.push_name, c.custom_name, c.hidden, c.notes, c.is_group,
                   l.id AS last_id, l.ts AS last_ts, l.from_me AS last_from_me,
                   CASE WHEN l.from_me = 0 THEN ${WAITING_SINCE_SQL('c.jid')} END AS waiting_since
@@ -553,15 +561,16 @@ export class Repo {
                 rc.user_needs AS rc_user_needs, rc.app_needs AS rc_app_needs, rc.app_source AS rc_app_source,
                 rc.app_reason AS rc_app_reason,
                 CASE WHEN b.is_group = 0 AND b.waiting_since IS NOT NULL
-                     THEN ${GROUP_ANSWER_SQL('b.jid', 'b.waiting_since')} END AS group_answer
+                     THEN ${GROUP_ANSWER_SQL('b.jid', 'MAX(b.waiting_since, ?3)')} END AS group_answer
            FROM base b
            LEFT JOIN reply_checks rc ON rc.jid = b.jid AND rc.msg_id = b.last_id AND b.last_from_me = 0
           ORDER BY b.last_ts IS NULL, b.last_ts DESC, b.jid`
       )
-      .all(opts.includeHidden ? 1 : 0, kind) as Row[]
+      .all(opts.includeHidden ? 1 : 0, kind, since) as Row[]
     return rows.map((r) => {
-      const answeredInGroup = this.parseGroupAnswer(r.group_answer)
-      const replyDecision = r.last_from_me === 0 ? decisionOf(r, answeredInGroup) : null
+      const waiting = r.last_from_me === 0 && r.last_ts >= since
+      const answeredInGroup = waiting ? this.parseGroupAnswer(r.group_answer) : null
+      const replyDecision = waiting ? decisionOf(r, answeredInGroup) : null
       return {
         jid: r.jid,
         pushName: r.push_name,
@@ -570,11 +579,11 @@ export class Repo {
         notes: r.notes,
         displayName: r.custom_name ?? r.push_name ?? (r.is_group === 1 ? UNNAMED_GROUP : formatPhone(r.jid)),
         lastTs: r.last_ts,
-        awaitingReply: r.last_from_me === 0,
+        awaitingReply: waiting,
         isGroup: r.is_group === 1,
-        waitingSince: typeof r.waiting_since === 'number' ? r.waiting_since : null,
+        waitingSince: waiting && typeof r.waiting_since === 'number' ? r.waiting_since : null,
         alerts: sortKinds(r.alert_kinds),
-        needsReply: r.last_from_me === 0 && (replyDecision?.needed ?? true),
+        needsReply: waiting && (replyDecision?.needed ?? true),
         replyDecision
       }
     })
@@ -598,16 +607,16 @@ export class Repo {
   groupAnswer(jid: string): GroupAnswer | null {
     const r = this.db
       .prepare(
-        `WITH base AS (
+        `WITH base AS MATERIALIZED (
            SELECT c.jid, c.is_group, l.from_me AS last_from_me, ${WAITING_SINCE_SQL('c.jid')} AS waiting_since
              FROM contacts c
              JOIN messages l ON l.id = (SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
             WHERE c.jid = ?1)
          SELECT CASE WHEN b.is_group = 0 AND b.last_from_me = 0 AND b.waiting_since IS NOT NULL
-                     THEN ${GROUP_ANSWER_SQL('b.jid', 'b.waiting_since')} END AS group_answer
+                     THEN ${GROUP_ANSWER_SQL('b.jid', 'MAX(b.waiting_since, ?2)')} END AS group_answer
            FROM base b`
       )
-      .get(jid) as Row | undefined
+      .get(jid, this.recentSince()) as Row | undefined
     return this.parseGroupAnswer(r?.group_answer)
   }
 
@@ -615,23 +624,23 @@ export class Repo {
   triageCounts(): { awaiting: number; withAlerts: number } {
     const r = this.db
       .prepare(
-        `WITH base AS (
+        `WITH base AS MATERIALIZED (
            SELECT c.jid, c.is_group, l.id AS last_id, ${WAITING_SINCE_SQL('c.jid')} AS waiting_since
              FROM contacts c
              JOIN messages l ON l.id = (SELECT id FROM messages WHERE jid = c.jid ORDER BY ts DESC, rowid DESC LIMIT 1)
-            WHERE c.hidden = 0 AND l.from_me = 0)
+            WHERE c.hidden = 0 AND +l.from_me = 0 AND +l.ts >= ?1)
          SELECT
            (SELECT COUNT(*) FROM base b
               LEFT JOIN reply_checks rc ON rc.jid = b.jid AND rc.msg_id = b.last_id
              WHERE COALESCE(
                      rc.user_needs,
-                     CASE WHEN b.is_group = 0 AND ${GROUP_ANSWER_SQL('b.jid', 'b.waiting_since')} IS NOT NULL THEN 0 END,
+                     CASE WHEN b.is_group = 0 AND ${GROUP_ANSWER_SQL('b.jid', 'MAX(b.waiting_since, ?1)')} IS NOT NULL THEN 0 END,
                      rc.app_needs,
                      1) = 1) AS awaiting,
            (SELECT COUNT(DISTINCT a.jid) FROM alerts a JOIN contacts c ON c.jid = a.jid
              WHERE a.dismissed_at IS NULL AND c.hidden = 0) AS with_alerts`
       )
-      .get() as Row
+      .get(this.recentSince()) as Row
     return { awaiting: r.awaiting, withAlerts: r.with_alerts }
   }
 
@@ -1057,6 +1066,55 @@ export class Repo {
     return rows.map(toMessage)
   }
 
+  /**
+   * v0.9.0: uma página da conversa: as `limit` mensagens mais novas (cronológicas) e se há outras antes delas.
+   * `includeId`: a página cresce até incluir essa mensagem (resultado da busca numa mensagem antiga), mais 20 antes dela.
+   * Pelo índice (jid, ts): rápido mesmo com 100 mil mensagens na conversa.
+   */
+  listMessagesPage(jid: string, limit: number, includeId?: string | null): { messages: MessageRow[]; hasMore: boolean } {
+    let n = Math.max(1, Math.floor(limit))
+    if (includeId) {
+      const r = this.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM messages m, (SELECT ts, rowid AS rid FROM messages WHERE id = ?2 AND jid = ?1) t
+            WHERE m.jid = ?1 AND (m.ts > t.ts OR (m.ts = t.ts AND m.rowid >= t.rid))`
+        )
+        .get(jid, includeId) as Row | undefined
+      if (r && r.n > 0) n = Math.max(n, Number(r.n) + 20)
+    }
+    const rows = this.listMessages(jid, n + 1)
+    return rows.length > n ? { messages: rows.slice(1), hasMore: true } : { messages: rows, hasMore: false }
+  }
+
+  /** v0.9.0: quantas mensagens a conversa tem (pelo índice). */
+  messageCount(jid: string): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM messages WHERE jid = ?').get(jid) as Row).n as number
+  }
+
+  /**
+   * v0.9.0: o começo da janela de 30 dias (alertas, "Para responder", resumos, áudios automáticos) pelo horário das
+   * mensagens do WhatsApp: a mais nova guardada (limitada a PC + 1 dia), ou o relógio do PC sem nenhuma.
+   */
+  recentSince(): number {
+    const bound = this.clock.now() + 86_400_000
+    const newest = this.newestMessageTs(bound)
+    return recentSince(newest === null ? this.clock.now() : Math.min(newest, bound))
+  }
+
+  /** v0.9.0: várias gravações de uma vez numa transação só (a ingestão de um lote de histórico). Sem `await` dentro. */
+  transaction<T>(fn: () => T): T {
+    if (this.db.isTransaction) return fn()
+    this.db.exec('BEGIN')
+    try {
+      const out = fn()
+      this.db.exec('COMMIT')
+      return out
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
   /** Horário (WhatsApp) da mensagem mais nova do banco (até `maxTs`, se dado), ou null sem mensagens. */
   newestMessageTs(maxTs?: number): number | null {
     const r = this.db
@@ -1080,6 +1138,11 @@ export class Repo {
 
   setAudioPath(id: string, path: string): void {
     this.db.prepare('UPDATE messages SET audio_path = ? WHERE id = ?').run(path, id)
+  }
+
+  /** v0.9.0: "Transcrever" de novo um áudio que falhou: volta a esperar a transcrição. */
+  clearTranscriptStatus(id: string): void {
+    this.db.prepare("UPDATE messages SET transcript_status = NULL WHERE id = ? AND transcript_status = 'failed'").run(id)
   }
 
   setTranscript(id: string, text: string | null, status: TranscriptStatus): void {
@@ -1138,6 +1201,38 @@ export class Repo {
       // expressão inválida: nada
     }
     return out
+  }
+
+  /**
+   * v0.9.0 (pesquisa do Copiloto): as mensagens destas conversas que combinam com a expressão (só no texto e nas
+   * transcrições, nunca no nome de quem mandou), dentro de `fromTs..toTs` (inclusivo), mais novas primeiro, e o total.
+   * Todo o histórico guardado. Expressão inválida = nenhuma.
+   */
+  searchInChats(match: string, jids: ReadonlyArray<string>, fromTs: number | null, toTs: number | null, limit: number): { rows: MessageRow[]; total: number } {
+    if (jids.length === 0) return { rows: [], total: 0 }
+    const where = `WHERE messages_fts MATCH ?1 AND m.jid IN (SELECT value FROM json_each(?2))
+                     AND (?3 IS NULL OR m.ts >= ?3) AND (?4 IS NULL OR m.ts <= ?4)`
+    const expr = `body : (${match})`
+    const list = JSON.stringify([...new Set(jids)])
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT m.*, ${SENDER_COLS} FROM messages_fts
+             JOIN messages m ON m.rowid = messages_fts.rowid
+             LEFT JOIN contacts sc ON sc.jid = m.sender_jid
+            ${where}
+            ORDER BY m.ts DESC, m.rowid DESC LIMIT ?5`
+        )
+        .all(expr, list, fromTs, toTs, limit) as Row[]
+      const total =
+        rows.length < limit
+          ? rows.length
+          : ((this.db.prepare(`SELECT COUNT(*) AS n FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid ${where}`).get(expr, list, fromTs, toTs) as Row)
+              .n as number)
+      return { rows: rows.map(toMessage), total }
+    } catch {
+      return { rows: [], total: 0 }
+    }
   }
 
   /** Quantas mensagens estão no índice da busca (diagnóstico e testes). */
@@ -1349,6 +1444,15 @@ export class Repo {
   jobIdByKey(key: string): number | null {
     const r = this.db.prepare('SELECT id FROM jobs WHERE key = ?').get(key) as Row | undefined
     return r ? Number(r.id) : null
+  }
+
+  /** v0.9.0: das chaves dadas, as que têm job pendente ou rodando (áudio pedido sob demanda: "Transcrevendo…"). */
+  activeJobKeys(keys: ReadonlyArray<string>): Set<string> {
+    if (keys.length === 0) return new Set()
+    const rows = this.db
+      .prepare("SELECT key FROM jobs WHERE key IN (SELECT value FROM json_each(?)) AND status IN ('pending', 'running')")
+      .all(JSON.stringify(keys)) as Row[]
+    return new Set(rows.map((r) => r.key as string))
   }
 
   /** Conclui sem rodar os jobs pendentes de um tipo (envios que ficaram na fila quando o app fechou). Quantos. */

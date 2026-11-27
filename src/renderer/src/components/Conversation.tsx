@@ -25,6 +25,8 @@ interface Props {
 }
 
 const HIGHLIGHT_MS = 2_500
+/** v0.9.0: mensagens por página da conversa (o histórico completo pode ter milhares) */
+export const PAGE = 200
 
 export function Conversation({ contact, analysis, alerts = [], onDismissAlert, onOpenChat, summarySkipped, focusMessage, forceSendToggle }: Props) {
   const [messages, setMessages] = useState<MessageView[] | null>(null)
@@ -45,21 +47,70 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert, o
   // fechou a conversa: o "Forçar envio" dela desliga
   useEffect(() => () => clearForceSend(jid), [jid])
 
+  /** v0.9.0: quantas mensagens (as mais novas) estão carregadas e se há mais antigas */
+  const [limit, setLimit] = useState(PAGE)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const limitRef = useRef(PAGE)
+  /** a mensagem que a busca pediu para mostrar: a página cresce até ela */
+  const includeRef = useRef<string | null>(null)
+  includeRef.current = focusMessage?.id ?? null
+  const loadRef = useRef<(n: number) => Promise<void>>(async () => {})
+
   useEffect(() => {
     let alive = true
     setMessages(null)
-    const load = () =>
+    setHasMore(false)
+    limitRef.current = PAGE
+    setLimit(PAGE)
+    const load = (n: number) =>
       window.saga
-        .listMessages(jid)
-        .then((m) => alive && setMessages(m))
-        .catch(() => alive && setMessages((old) => old ?? []))
-    void load()
-    const off = window.saga.onMessages(jid, () => void load())
+        .listMessagesPage(jid, n, includeRef.current)
+        .then((p) => {
+          if (!alive) return
+          setMessages(p.messages)
+          setHasMore(p.hasMore)
+          // a página cresceu até a mensagem pedida: as próximas atualizações mantêm esse tamanho
+          if (p.messages.length > limitRef.current) {
+            limitRef.current = p.messages.length
+            setLimit(p.messages.length)
+          }
+        })
+        .catch(() => {
+          if (alive) setMessages((old) => old ?? [])
+        })
+    loadRef.current = load
+    void load(limitRef.current)
+    const off = window.saga.onMessages(jid, () => void load(limitRef.current))
     return () => {
       alive = false
       off()
     }
   }, [jid])
+
+  // um resultado da busca numa mensagem que ainda não está carregada: carrega até ela
+  useEffect(() => {
+    if (focusMessage && messages && !messages.some((m) => m.id === focusMessage.id)) void loadRef.current(limitRef.current)
+  }, [focusMessage?.seq])
+
+  /** "Carregar mensagens mais antigas": mais uma página, sem pular a posição da leitura */
+  const loadOlder = async () => {
+    const el = threadRef.current
+    const before = el ? el.scrollHeight - el.scrollTop : 0
+    setLoadingOlder(true)
+    pinned.current = false
+    const n = limitRef.current + PAGE
+    limitRef.current = n
+    setLimit(n)
+    try {
+      await loadRef.current(n)
+    } finally {
+      setLoadingOlder(false)
+    }
+    setTimeout(() => {
+      if (el) el.scrollTop = el.scrollHeight - before
+    }, 0)
+  }
 
   const toBottom = () => {
     const el = threadRef.current
@@ -284,7 +335,14 @@ export function Conversation({ contact, analysis, alerts = [], onDismissAlert, o
         }}
       >
         {messages === null && <p className="empty">Carregando mensagens…</p>}
-        {messages?.length === 0 && <p className="empty">Nenhuma mensagem dos últimos 30 dias.</p>}
+        {messages?.length === 0 && <p className="empty">Nenhuma mensagem guardada desta conversa.</p>}
+        {hasMore && messages && messages.length > 0 && (
+          <p className="load-older">
+            <button type="button" className="btn btn-small" disabled={loadingOlder} data-limit={limit} onClick={() => void loadOlder()}>
+              {loadingOlder ? 'Carregando…' : 'Carregar mensagens mais antigas'}
+            </button>
+          </p>
+        )}
         {messages?.map((m, i) => {
           const prev = i > 0 ? messages[i - 1] : null
           const newDay = !prev || !sameDay(prev.ts, m.ts)
@@ -492,6 +550,8 @@ function AudioBody({ m }: { m: MessageView }) {
   const [playing, setPlaying] = useState(false)
   const [error, setError] = useState(false)
   const [retried, setRetried] = useState(false)
+  /** v0.9.0: "Transcrever" clicado (até a conversa voltar com o áudio na fila) */
+  const [asked, setAsked] = useState(false)
   const audio = useRef<HTMLAudioElement | null>(null)
   useEffect(
     () => () => {
@@ -528,7 +588,27 @@ function AudioBody({ m }: { m: MessageView }) {
   }
 
   let body: React.ReactNode
-  if (m.transcriptStatus === 'done') {
+  if (m.onDemand && !asked) {
+    body = (
+      <p className="transcript muted on-demand">
+        🎤 áudio{' '}
+        <button
+          type="button"
+          className="btn btn-small"
+          title="Áudio com mais de 30 dias: não foi baixado sozinho. Baixa e transcreve só este."
+          onClick={() => {
+            setAsked(true)
+            void window.saga
+              .transcribeAudio(m.id)
+              .then((ok) => !ok && setAsked(false))
+              .catch(() => setAsked(false))
+          }}
+        >
+          Transcrever
+        </button>
+      </p>
+    )
+  } else if (m.transcriptStatus === 'done') {
     body = m.transcript ? <p className="transcript">{m.transcript}</p> : <p className="transcript muted">Sem fala reconhecida.</p>
   } else if (m.transcriptStatus === 'unavailable') {
     body = <p className="transcript muted">Áudio indisponível</p>

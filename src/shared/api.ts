@@ -134,6 +134,17 @@ export interface MessageView {
   senderName: string | null
   /** grupo: a mensagem menciona o mentor ou cita uma mensagem dele */
   mentionsMe: boolean
+  /**
+   * v0.9.0: áudio com mais de 30 dias, sem transcrição e fora da fila: não é baixado nem transcrito sozinho. A conversa
+   * mostra "🎤 áudio" com "Transcrever" (`transcribeAudio(id)`).
+   */
+  onDemand?: boolean
+}
+
+/** v0.9.0: uma página da conversa (as mais novas, em ordem cronológica) e se há mensagens mais antigas. */
+export interface MessagePage {
+  messages: MessageView[]
+  hasMore: boolean
 }
 
 export type AiErrorCode =
@@ -200,7 +211,15 @@ export interface SagaApi {
    * conversas (telefone só profissional) e sempre passa `false`; os escondidos antigos foram mostrados de novo.
    */
   listContacts(includeHidden: boolean, kind?: ContactKind): Promise<Contact[]>
+  /** as mensagens mais novas da conversa (até 300) */
   listMessages(jid: string): Promise<MessageView[]>
+  /**
+   * v0.9.0: a conversa aos poucos (o histórico completo pode ter milhares de mensagens): as `limit` mais novas e se há
+   * mais antigas ("Carregar mensagens mais antigas" pede um `limit` maior). `includeId`: até incluir essa mensagem.
+   */
+  listMessagesPage(jid: string, limit: number, includeId?: string | null): Promise<MessagePage>
+  /** v0.9.0: "Transcrever" num áudio antigo: baixa e transcreve só ele, pela fila de sempre. `false` = não deu */
+  transcribeAudio(id: string): Promise<boolean>
   /** alertas ativos de uma conversa, ou de todas as não escondidas (mais graves primeiro) */
   listAlerts(jid?: string): Promise<Alert[]>
   /** "Resolver": tira o alerta ativo deste tipo; a lista de contatos é avisada (`onContactsChanged`) */
@@ -338,7 +357,8 @@ export interface SagaApi {
   copilotoRepairGroups(): Promise<CopilotoRepairResult>
   /**
    * v0.8.3: "Buscar no celular o histórico dos grupos": pede ao celular, aos poucos (um pedido a cada 20 s, no máximo 60
-   * por dia), as mensagens anteriores dos grupos dos mentorados, até 30 dias atrás. Só leitura
+   * por dia), as mensagens anteriores. v0.9.0: das conversas individuais e dos grupos dos mentorados, até o celular não
+   * ter mais. Só leitura
    */
   copilotoFetchGroupHistory(): Promise<CopilotoRepairResult>
 
@@ -359,6 +379,8 @@ export const INVOKE_METHODS = [
   'getState',
   'listContacts',
   'listMessages',
+  'listMessagesPage',
+  'transcribeAudio',
   'listAlerts',
   'dismissAlert',
   'rateAlert',

@@ -2,8 +2,10 @@
  * v0.8.3: "Buscar no celular o histórico dos grupos". O WhatsApp só manda o histórico ao vincular o aparelho; para os
  * grupos que já têm alguma mensagem aqui, o celular manda as anteriores sob pedido (`fetchMessageHistory`, o mesmo pedido
  * que o WhatsApp Web faz ao rolar uma conversa para cima: uma mensagem do próprio aparelho para o próprio celular, que
- * ninguém mais vê). A resposta chega como `messaging-history.set` do tipo ON_DEMAND e é gravada pela ingestão normal
- * (janela de 30 dias).
+ * ninguém mais vê). A resposta chega como `messaging-history.set` do tipo ON_DEMAND e é gravada pela ingestão normal.
+ * v0.9.0 (contrato v1.3): "Buscar no celular o histórico completo dos mentorados": conversas individuais e grupos de
+ * mentorados, até o celular não ter mais nada antes da mais antiga (sem o limite dos 30 dias, que vale só para o que vai
+ * ao Copiloto e para a IA). Mesmo ritmo e mesmos limites.
  *
  * Aqui ficam o estado (gravado no banco: vale entre reinícios) e os limites: no máximo um pedido a cada 20 s e 60 por
  * dia local, contados no banco. Sem rede nenhuma: quem pede é o cliente, pela fila (job `fetch_history`).
@@ -28,11 +30,35 @@ export const GROUP_HISTORY_LIMITS = {
   maxGroupMisses: 2,
   /** só com a conexão aberta há este tempo */
   stableMs: 60_000,
-  /** a mais antiga já está a menos disto do limite dos 30 dias: o grupo está completo */
-  doneMarginMs: 60 * 60_000,
-  /** histórico de 30 dias, igual à ingestão */
-  windowMs: 30 * DAY
+  /** a mais antiga já está a menos disto do limite (`target`): a conversa está completa */
+  doneMarginMs: 60 * 60_000
 } as const
+
+/**
+ * v0.9.0: as conversas em que o celular já disse que não tem nada antes da mais antiga guardada (jid → id dessa
+ * mensagem). Enquanto a mais antiga for a mesma, uma busca nova não pede de novo.
+ */
+export const GROUP_HISTORY_EXHAUSTED = 'wa.historyExhausted'
+
+export function loadExhausted(repo: Repo): Record<string, string> {
+  try {
+    const v = JSON.parse(repo.getSetting(GROUP_HISTORY_EXHAUSTED) ?? '{}') as unknown
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, string>) : {}
+  } catch {
+    return {}
+  }
+}
+
+export function markExhausted(repo: Repo, jid: string, anchorId: string): void {
+  const cur = loadExhausted(repo)
+  cur[jid] = anchorId
+  repo.setSetting(GROUP_HISTORY_EXHAUSTED, JSON.stringify(cur))
+}
+
+/** A conversa ainda pode ter histórico no celular (nunca chegou ao fim, ou chegou com outra mensagem mais antiga). */
+export function mayHaveOlder(repo: Repo, jid: string, oldestId: string): boolean {
+  return loadExhausted(repo)[jid] !== oldestId
+}
 
 /** o estado da busca (JSON) */
 export const GROUP_HISTORY_RUN = 'wa.groupHistoryRun'
@@ -75,7 +101,7 @@ export interface GroupHistoryRun {
   state: GroupHistoryFetchView['state']
   startedAt: number
   finishedAt: number | null
-  /** limite dos 30 dias (epoch ms, pelo horário das mensagens do WhatsApp) */
+  /** até onde buscar (epoch ms). v0.9.0: 0 = todo o histórico que o celular tiver */
   target: number
   order: string[]
   groups: Record<string, GroupHistoryGroup>
@@ -158,11 +184,9 @@ export function recordRequest(repo: Repo, now: number): void {
   repo.setSetting(GROUP_HISTORY_LOG, JSON.stringify([...keep, now]))
 }
 
-/** O limite dos 30 dias, pelo horário das mensagens do WhatsApp (o relógio do PC só sem mensagem nenhuma). */
-export function historyTarget(repo: Repo, now: number): number {
-  const bound = now + DAY
-  const newest = repo.newestMessageTs(bound)
-  return Math.min(newest ?? now, bound) - GROUP_HISTORY_LIMITS.windowMs
+/** Até onde buscar. v0.9.0: todo o histórico que o celular tiver (antes: 30 dias atrás). */
+export function historyTarget(_repo: Repo, _now: number): number {
+  return 0
 }
 
 /** A mensagem guardada mais antiga do grupo como ponto de partida, ou null. */
@@ -179,7 +203,7 @@ export function oldestAnchor(repo: Repo, jid: string): HistoryAnchor | null {
   return { id: m.id, fromMe: m.fromMe, ts: m.ts, ...(participant ? { participant } : {}) }
 }
 
-/** O grupo já tem mensagem até (quase) o limite dos 30 dias. */
+/** A conversa já tem mensagem até (quase) o limite (`target`; com 0, nunca: vale a resposta vazia do celular). */
 export const reachedTarget = (ts: number, target: number): boolean => ts - target <= GROUP_HISTORY_LIMITS.doneMarginMs
 
 /** Para a tela (só contagens). */

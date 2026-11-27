@@ -19,6 +19,7 @@ import { NAME_RANK, type Repo } from '../db/repo'
 import type { SendRow } from '../db/sendRepo'
 import { ONE_GB, hasFreeSpace } from '../disk'
 import { audioFileId } from '../media'
+import { recentSince } from '../recent'
 import type { RateLimiter } from '../queue/limiter'
 import { DeferJobError, type JobQueue } from '../queue/queue'
 import type { NormalizedMessage } from '../types'
@@ -30,6 +31,7 @@ import {
   GROUP_HISTORY_LIMITS,
   historyTarget,
   loadRun,
+  markExhausted,
   newRun,
   nextRequestAt,
   oldestAnchor,
@@ -131,7 +133,6 @@ const SEND_DEFER_MS = 15_000
 const SEND_STALL_MS = 10 * 60_000
 
 const DAY = 86_400_000
-const HISTORY_WINDOW_MS = 30 * DAY
 const URGENT_WINDOW_MS = 3 * DAY
 const URGENT_PRIORITY = 10
 const SLEEP_WARMUP_THRESHOLD_MS = 3_600_000
@@ -1062,29 +1063,28 @@ export class WhatsAppClient extends EventEmitter {
     return Number.isFinite(newest) ? Math.min(newest, bound) : this.deps.clock.now()
   }
 
-  /** Grava as mensagens novas (as já guardadas, pela id, ficam como estão). Devolve quantas entraram, por conversa. */
+  /**
+   * Grava as mensagens novas (as já guardadas, pela id, ficam como estão). Devolve quantas entraram, por conversa.
+   * v0.9.0 (contrato v1.3): guarda TODO o histórico que o celular mandar, de qualquer data. A janela de 30 dias (pelo
+   * horário das mensagens do WhatsApp) vale só para o download automático dos áudios (e a transcrição que vem depois);
+   * áudio mais antigo fica como áudio, com "Transcrever" sob pedido na conversa. O lote é gravado numa transação só
+   * (primeiro os JIDs são resolvidos, depois tudo é gravado sem `await` no meio) e os avisos saem depois de gravar.
+   */
   private async ingest(messages: WAMessage[]): Promise<{ inserted: number; byJid: Map<string, number> }> {
     const { repo, queue } = this.deps
     const me = this.auth?.state.creds.me as { id?: string; lid?: string } | undefined
     const opts = { ownJid: me?.id, ownLid: me?.lid }
-    const normalized = messages.map((raw) => ({ raw, n: normalize(raw, opts) }))
     const bound = this.anchorBound()
-    const batchMax = normalized.reduce((m, { n }) => (n && n.ts > m && n.ts <= bound ? n.ts : m), -Infinity)
-    // janela de 30 dias pelo horário das mensagens do WhatsApp, nunca pelo relógio do PC
-    const cutoff = this.waNow(batchMax) - HISTORY_WINDOW_MS
-    const audios: NormalizedMessage[] = []
-    let inserted = 0
-    const byJid = new Map<string, number>()
-    for (const { raw, n } of normalized) {
-      if (!n || n.ts < cutoff) continue
+    // 1) normaliza e resolve @lid → telefone (pode consultar o armazenamento do Baileys)
+    const ready: Array<{ n: NormalizedMessage; lid: string; pushName: string | null }> = []
+    let batchMax = -Infinity
+    for (const raw of messages) {
+      const n = normalize(raw, opts)
+      if (!n) continue
+      if (n.ts > batchMax && n.ts <= bound) batchMax = n.ts
       const lid = n.jid
       n.jid = await this.resolveJid(n.jid)
       if (n.senderJid) n.senderJid = await this.resolveJid(n.senderJid)
-      // eco de uma resposta enviada pelo app (id gerado aqui): fica na conversa de onde ela saiu, mesmo enviada ao @lid
-      if (n.fromMe) {
-        const sent = repo.sends.byMsgId(n.id)
-        if (sent) n.jid = sent.jid
-      }
       // menções e citação das minhas mensagens de grupo: guarda o @lid e o telefone (casa com a conversa individual)
       if (n.targets?.length) {
         const all = new Set(n.targets)
@@ -1093,30 +1093,48 @@ export class WhatsAppClient extends EventEmitter {
       }
       // num grupo o pushName é de quem mandou (vai na mensagem), nunca o nome do grupo
       const pushName = n.fromMe || n.isGroup ? null : raw.pushName?.trim() || null
-      repo.upsertContact({ jid: n.jid, pushName, nameRank: NAME_RANK.push, isGroup: n.isGroup === true })
-      // nome melhor já conhecido (agenda, perfil, chat), inclusive o que chegou para o @lid
-      const known = this.knownNames.get(n.jid) ?? (lid !== n.jid ? this.knownNames.get(lid) : undefined)
-      if (known) {
-        if (lid !== n.jid && this.knownNames.get(lid) === known) {
-          this.knownNames.delete(lid)
-          this.knownNames.set(n.jid, known)
+      ready.push({ n, lid, pushName })
+    }
+    if (ready.length === 0) return { inserted: 0, byJid: new Map() }
+    // janela dos áudios automáticos pelo horário das mensagens do WhatsApp, nunca pelo relógio do PC
+    const autoSince = recentSince(this.waNow(batchMax))
+    // 2) grava o lote inteiro numa transação (síncrono)
+    const fresh: NormalizedMessage[] = []
+    repo.transaction(() => {
+      for (const { n, lid, pushName } of ready) {
+        // eco de uma resposta enviada pelo app (id gerado aqui): fica na conversa de onde ela saiu, mesmo enviada ao @lid
+        if (n.fromMe) {
+          const sent = repo.sends.byMsgId(n.id)
+          if (sent) n.jid = sent.jid
         }
-        repo.setContactName(n.jid, known.name, known.rank)
+        repo.upsertContact({ jid: n.jid, pushName, nameRank: NAME_RANK.push, isGroup: n.isGroup === true })
+        // nome melhor já conhecido (agenda, perfil, chat), inclusive o que chegou para o @lid
+        const known = this.knownNames.get(n.jid) ?? (lid !== n.jid ? this.knownNames.get(lid) : undefined)
+        if (known) {
+          if (lid !== n.jid && this.knownNames.get(lid) === known) {
+            this.knownNames.delete(lid)
+            this.knownNames.set(n.jid, known)
+          }
+          repo.setContactName(n.jid, known.name, known.rank)
+        }
+        if (n.isGroup) this.checkGroup(n.jid, n.ts)
+        if (repo.insertMessage(n)) fresh.push(n)
       }
-      if (n.isGroup) this.checkGroup(n.jid, n.ts)
-      if (!repo.insertMessage(n)) continue
-      inserted++
+    })
+    // 3) avisos e áudios, depois de gravar o lote inteiro (o histórico chega fora de ordem)
+    const byJid = new Map<string, number>()
+    const audios: NormalizedMessage[] = []
+    for (const n of fresh) {
       byJid.set(n.jid, (byJid.get(n.jid) ?? 0) + 1)
       this.emit('message', n)
-      if (n.kind === 'audio') audios.push(n)
+      if (n.kind === 'audio' && n.ts >= autoSince) audios.push(n)
     }
-    // prioridade depois de gravar o lote inteiro (o histórico chega fora de ordem);
     // contatos escondidos não têm os áudios baixados (voltam para a fila se forem mostrados de novo)
     for (const a of audios) {
       if (repo.isHidden(a.jid)) continue
       queue.enqueue('download_audio', a.id, { id: a.id, ts: a.ts }, this.priorityFor(a))
     }
-    return { inserted, byJid }
+    return { inserted: fresh.length, byJid }
   }
 
   /**
@@ -1134,7 +1152,11 @@ export class WhatsAppClient extends EventEmitter {
 
   // --- handlers da fila ---
 
-  private async downloadAudio(payload: { id: string; ts?: number }, signal?: AbortSignal): Promise<void> {
+  /**
+   * Baixa o áudio e põe a transcrição na fila. v0.9.0: `manual` = o mentor clicou em "Transcrever" num áudio antigo
+   * (mais de 30 dias): a transcrição vai na frente, no ritmo e no limite de gasto de sempre.
+   */
+  private async downloadAudio(payload: { id: string; ts?: number; manual?: boolean }, signal?: AbortSignal): Promise<void> {
     const { repo, queue, mediaDir } = this.deps
     if (!(await this.hasFreeSpace(mediaDir, ONE_GB))) {
       // pausa só os downloads e devolve o job sem gastar tentativa; voltam na próxima medição com espaço
@@ -1179,7 +1201,7 @@ export class WhatsAppClient extends EventEmitter {
       'transcribe',
       `transcribe:${row.id}`,
       { id: row.id, durationSec: row.durationSec, ts: row.ts },
-      this.priorityFor(row)
+      payload.manual === true ? URGENT_PRIORITY : this.priorityFor(row)
     )
   }
 
@@ -1375,7 +1397,9 @@ export class WhatsAppClient extends EventEmitter {
     if (!run || run.state !== 'running' || !run.pending) return
     const jid = run.pending.jid
     const unit = run.pending.unit
-    const mine = messages.filter((m) => m?.key?.remoteJid === jid && typeof m.key.id === 'string')
+    // v0.9.0: conversa individual pode voltar pelo @lid (ou pelo telefone): vale a mesma conversa guardada aqui
+    const sameChat = (r: unknown) => typeof r === 'string' && (r === jid || this.lidToPn.get(stripDevice(r)) === jid)
+    const mine = messages.filter((m) => sameChat(m?.key?.remoteJid) && typeof m.key.id === 'string')
     // resposta de outra conversa: o pedido deste grupo continua esperando
     if (mine.length === 0 && messages.length > 0) return
     run.pending = null
@@ -1399,9 +1423,11 @@ export class WhatsAppClient extends EventEmitter {
           oldest = { id: m.key.id as string, fromMe: m.key.fromMe === true, ts, ...(participant ? { participant } : {}) }
         }
       }
-      // nada antes da mais antiga: o celular não tem mais; chegou aos 30 dias: completo
-      if (!oldest || (g.anchor && oldest.ts >= g.anchor.ts) || reachedTarget(oldest.ts, run.target)) g.s = 'done'
-      else g.anchor = oldest
+      // nada antes da mais antiga: o celular não tem mais (fica anotado: a próxima busca não pede de novo)
+      if (!oldest || (g.anchor && oldest.ts >= g.anchor.ts) || reachedTarget(oldest.ts, run.target)) {
+        g.s = 'done'
+        if (g.anchor) markExhausted(repo, jid, g.anchor.id)
+      } else g.anchor = oldest
     }
     saveRun(repo, run)
     this.diag('wa_history', `resposta do celular: ${mine.length} mensagem(ns), ${insertedByJid.get(jid) ?? 0} nova(s)`)

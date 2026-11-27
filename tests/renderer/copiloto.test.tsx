@@ -81,7 +81,7 @@ describe('Configurações › Copiloto: histórico dos grupos (v0.8.3)', () => {
   it('linha do histórico no Copiloto; "Buscar no celular" mostra o progresso e os grupos sem ponto de partida', async () => {
     render(<CopilotoSection />)
     await screen.findByLabelText('Enviar para o Copiloto da Saga')
-    expect(screen.queryByRole('button', { name: 'Buscar no celular o histórico dos grupos' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Buscar no celular o histórico completo dos mentorados' })).toBeNull()
     fireEvent.change(screen.getByLabelText('Endereço do Copiloto'), { target: { value: URL_OK } })
     fireEvent.click(screen.getByRole('button', { name: 'Salvar endereço' }))
     await screen.findByText('Salvo ✓')
@@ -89,14 +89,14 @@ describe('Configurações › Copiloto: histórico dos grupos (v0.8.3)', () => {
     await screen.findByLabelText('Código do Copiloto')
     fireEvent.click(screen.getByLabelText('Enviar para o Copiloto da Saga'))
     expect((await screen.findByTestId('copiloto-group-history')).textContent).toBe('Histórico dos grupos: nenhuma mensagem de grupo enviada ao Copiloto ainda')
-    fireEvent.click(screen.getByRole('button', { name: 'Buscar no celular o histórico dos grupos' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar no celular o histórico completo dos mentorados' }))
     expect(await screen.findByText(/Busca no celular começou/)).toBeTruthy()
     expect(screen.getByTestId('copiloto-history-fetch').textContent).toBe(
-      'Buscando no celular: 1 de 4 grupo(s) concluído(s) · 3 pedido(s) ao celular · 120 mensagem(ns) nova(s)'
+      'Buscando no celular: 1 de 4 conversa(s) concluída(s) · 3 pedido(s) ao celular · 120 mensagem(ns) nova(s)'
     )
     expect(screen.getByTestId('copiloto-history-no-anchor').textContent).toBe('1 grupo(s) precisam reconectar o aparelho para trazer o histórico')
     // em andamento: o botão espera
-    expect((screen.getByRole('button', { name: 'Buscar no celular o histórico dos grupos' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Buscar no celular o histórico completo dos mentorados' }) as HTMLButtonElement).disabled).toBe(true)
     expect(ctl.calls.some((c) => c.method === 'copilotoFetchGroupHistory')).toBe(true)
   })
 })

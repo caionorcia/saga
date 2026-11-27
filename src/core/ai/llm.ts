@@ -240,10 +240,12 @@ function transcriptFingerprint(msgs: MessageRow[]): string {
  * Novas = mensagens depois do último fromMe (sem nenhum fromMe: as últimas 40). Em grupo, no máximo as últimas 40.
  * Se o mentor falou por último, novas = [] (botão "Gerar novas" continua permitido).
  * `upToId`: o contexto como era quando essa mensagem era a última (ex.: a análise que gerou a sugestão salva);
- * se ela não estiver entre as mensagens recentes, usa todas.
+ * se ela não estiver entre as mensagens recentes, usa todas. v0.9.0: só as dos últimos 30 dias (horário do WhatsApp).
  */
 export function analysisContext(repo: Repo, jid: string, upToId?: string | null): AnalysisContext {
-  let all = repo.listMessages(jid, PRIOR_LIMIT + NO_MENTOR_REPLY_LIMIT + 200)
+  // v0.9.0: a IA (resumo e sugestões) só olha os últimos 30 dias; o histórico mais antigo fica só guardado
+  const since = repo.recentSince()
+  let all = repo.listMessages(jid, PRIOR_LIMIT + NO_MENTOR_REPLY_LIMIT + 200).filter((m) => m.ts >= since)
   if (upToId) {
     const idx = all.findIndex((m) => m.id === upToId)
     if (idx >= 0) all = all.slice(0, idx + 1)

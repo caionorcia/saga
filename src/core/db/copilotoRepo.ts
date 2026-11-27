@@ -165,9 +165,7 @@ export class CopilotoRepo {
 
   /**
    * Carga inicial de uma conversa de mentorado: anota tudo dos últimos dias (mensagens, alertas, envios, o "Para
-   * responder" e o resumo) para virar evento, e marca a conversa como feita.
-   * v0.8.1: grupo sem mensagem nos últimos dias leva a mais recente guardada aqui (seja de quando for), para o Copiloto
-   * saber que o grupo existe. Devolve quantas mensagens anotou.
+   * responder" e o resumo) para virar evento, e marca a conversa como feita. Devolve quantas mensagens anotou.
    */
   backfill(jid: string, since: number): number {
     let n = 0
@@ -187,12 +185,18 @@ export class CopilotoRepo {
     return n
   }
 
-  /** As mensagens da carga: as dos últimos dias; grupo sem nenhuma nesse tempo, a mais recente guardada (ou nada). */
+  /**
+   * As mensagens da carga: as dos últimos dias. v0.9.0 (contrato v1.3): mensagem mais antiga nunca vai ao Copiloto (antes,
+   * grupo sem nenhuma nesse tempo levava a mais recente guardada, de quando fosse).
+   */
   backfillMessageIds(jid: string, since: number): string[] {
-    const ids = (this.db.prepare('SELECT id FROM messages WHERE jid = ? AND ts >= ? ORDER BY ts, rowid').all(jid, since) as Row[]).map((r) => r.id as string)
-    if (ids.length > 0 || !jid.endsWith('@g.us')) return ids
-    const last = this.db.prepare('SELECT id FROM messages WHERE jid = ? ORDER BY ts DESC, rowid DESC LIMIT 1').get(jid) as Row | undefined
-    return last ? [last.id as string] : []
+    return (this.db.prepare('SELECT id FROM messages WHERE jid = ? AND ts >= ? ORDER BY ts, rowid').all(jid, since) as Row[]).map((r) => r.id as string)
+  }
+
+  /** A mensagem mais recente guardada da conversa (id), ou null. */
+  latestMessageId(jid: string): string | null {
+    const r = this.db.prepare('SELECT id FROM messages WHERE jid = ? ORDER BY ts DESC, rowid DESC LIMIT 1').get(jid) as Row | undefined
+    return r ? (r.id as string) : null
   }
 
   /** Os alertas e os envios diretos da carga (os mesmos de `backfill`). */

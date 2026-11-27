@@ -41,6 +41,8 @@ export function registerIpc(service: SagaService, opts: IpcOptions): () => void 
     getState: () => service.getState(),
     listContacts: (includeHidden, kind) => service.listContacts(!!includeHidden, kind ?? 'all'),
     listMessages: (jid) => service.listMessages(String(jid)),
+    listMessagesPage: (jid, limit, includeId) => service.listMessagesPage(String(jid), Number(limit), includeId ? String(includeId) : null),
+    transcribeAudio: (id) => service.transcribeAudio(String(id)),
     listAlerts: (jid) => service.listAlerts(jid === undefined ? undefined : String(jid)),
     dismissAlert: (jid, kind) => service.dismissAlert(String(jid), kind),
     rateAlert: (id, verdict, reason) => service.rateAlert(Number(id), verdict, reason),

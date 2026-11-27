@@ -46,6 +46,7 @@ import { LIMITS, RateLimiter, type LimiterName } from './queue/limiter'
 import { JobQueue, type JobType } from './queue/queue'
 import { EncryptionUnavailableError, SettingsStore, testKey, type Cipher, type KeyKind, type Provider, type SettingsPatch } from './settings'
 import type { NormalizedMessage } from './types'
+import { recentSince } from './recent'
 import { GROUPS_FETCHED_SETTING, WhatsAppClient, type ConnState, type WhatsAppClientDeps } from './wa/client'
 import type { WaVersionFetcher } from './wa/version'
 import { formatPhone } from './db/repo'
@@ -94,6 +95,7 @@ import type {
   AppState,
   UpdateCheck,
   UpdateState,
+  MessagePage,
   MessageView,
   RecentEvent,
   SaveReplyInput,
@@ -184,6 +186,13 @@ const DEFAULT_STOP_TIMEOUT_MS = 5_000
 const SEND_PRIORITY = 20
 /** de quanto em quanto tempo os envios parados na fila há mais de 10 min voltam a "aguardando confirmação" */
 const SEND_SWEEP_MS = 15_000
+/** v0.9.0: mensagens por página da conversa ("Carregar mensagens mais antigas" pede mais) e o teto de uma página */
+const MESSAGE_PAGE = 200
+const MESSAGE_PAGE_MAX = 20_000
+/** `listMessages` (sugestões): as mais novas */
+const LIST_MESSAGES_MAX = 300
+/** v0.9.0: "Transcrever" num áudio antigo: na frente dos áudios automáticos (atrás dos envios) */
+const ON_DEMAND_PRIORITY = 10
 
 /** Espera `p` por até `ms`; erros de `p` (agora ou depois) nunca escapam. */
 async function withDeadline(p: Promise<unknown>, ms: number): Promise<void> {
@@ -542,6 +551,11 @@ export class SagaService extends EventEmitter {
         reconcileSent(repo, m)
       } catch (e) {
         repo.logEvent('reconcile_error', e instanceof Error ? e.message : String(e))
+      }
+      // v0.9.0: histórico antigo (mais de 30 dias) só fica guardado: sem alertas, "Para responder" nem IA
+      if (m.ts < recentSince(this.clock.now())) {
+        this.markMessages(m.jid)
+        return
       }
       try {
         // o mentor respondeu: os alertas de antes se resolvem (o desânimo fica até o mentor resolver)
@@ -925,8 +939,47 @@ export class SagaService extends EventEmitter {
     return changed
   }
 
+  /** As mensagens mais novas da conversa (no máximo 300; a conversa na tela usa `listMessagesPage`). */
   async listMessages(jid: string): Promise<MessageView[]> {
-    return this.repo.listMessages(jid).map(toView)
+    return this.views(this.repo.listMessages(jid, LIST_MESSAGES_MAX))
+  }
+
+  /**
+   * v0.9.0: uma página da conversa (as `limit` mais novas; "Carregar mensagens mais antigas" pede mais). `includeId`: a
+   * página cresce até incluir essa mensagem (resultado da busca).
+   */
+  async listMessagesPage(jid: string, limit: number, includeId?: string | null): Promise<MessagePage> {
+    const n = Math.min(MESSAGE_PAGE_MAX, Math.max(1, Math.floor(Number(limit) || MESSAGE_PAGE)))
+    const page = this.repo.listMessagesPage(jid, n, includeId ?? null)
+    return { messages: this.views(page.messages), hasMore: page.hasMore }
+  }
+
+  /** As mensagens para a tela; áudio antigo (mais de 30 dias) sem transcrição e fora da fila: "Transcrever" sob pedido. */
+  private views(rows: MessageRow[]): MessageView[] {
+    const since = this.repo.recentSince()
+    const old = rows.filter((m) => m.kind === 'audio' && m.transcriptStatus === null && m.ts < since)
+    const queued = this.repo.activeJobKeys(old.flatMap((m) => [m.id, `transcribe:${m.id}`]))
+    const onDemand = new Set(old.filter((m) => !queued.has(m.id) && !queued.has(`transcribe:${m.id}`)).map((m) => m.id))
+    return rows.map((m) => (onDemand.has(m.id) ? { ...toView(m), onDemand: true } : toView(m)))
+  }
+
+  /**
+   * v0.9.0: "Transcrever" num áudio antigo (mais de 30 dias, não baixado sozinho): baixa e transcreve só este, pela fila
+   * de sempre (ritmo do WhatsApp, limite de gasto do dia). `false` se não é um áudio que espera transcrição.
+   */
+  async transcribeAudio(id: string): Promise<boolean> {
+    const m = this.repo.getMessage(id)
+    if (!m || m.kind !== 'audio' || (m.transcriptStatus !== null && m.transcriptStatus !== 'failed')) return false
+    if (m.transcriptStatus === 'failed') this.repo.clearTranscriptStatus(id)
+    if (m.audioPath && existsSync(m.audioPath)) {
+      this.queue.requeue('transcribe', `transcribe:${m.id}`, { id: m.id, durationSec: m.durationSec, ts: m.ts }, ON_DEMAND_PRIORITY, { revive: true })
+    } else {
+      this.queue.requeue('download_audio', m.id, { id: m.id, ts: m.ts, manual: true }, ON_DEMAND_PRIORITY, { revive: true })
+    }
+    this.diag('audio_on_demand', 'áudio antigo pedido para transcrever')
+    this.markMessages(m.jid)
+    this.markState()
+    return true
   }
 
   async renameContact(jid: string, name: string): Promise<void> {
@@ -947,11 +1000,15 @@ export class SagaService extends EventEmitter {
     this.scheduleEmit()
   }
 
-  /** Devolve à fila (no ritmo normal) os áudios do contato ainda sem transcrição: baixar ou só transcrever. */
+  /**
+   * Devolve à fila (no ritmo normal) os áudios do contato ainda sem transcrição: baixar ou só transcrever. v0.9.0: só os
+   * dos últimos 30 dias (os mais antigos ficam com "Transcrever" sob pedido).
+   */
   private requeueMissingAudio(jid: string): number {
     let n = 0
+    const since = this.repo.recentSince()
     for (const m of this.repo.listMessages(jid)) {
-      if (m.kind !== 'audio' || m.transcriptStatus !== null) continue
+      if (m.kind !== 'audio' || m.transcriptStatus !== null || m.ts < since) continue
       if (m.audioPath && existsSync(m.audioPath)) {
         this.queue.requeue('transcribe', `transcribe:${m.id}`, { id: m.id, durationSec: m.durationSec, ts: m.ts })
       } else {
@@ -1802,9 +1859,9 @@ export class SagaService extends EventEmitter {
   }
 
   /**
-   * v0.8.3: "Buscar no celular o histórico dos grupos": os grupos de mentorados com mensagem guardada aqui e sem os 30
-   * dias completos. O cliente pede ao celular pela fila, aos poucos; o que chegar entra pela ingestão normal e vai ao
-   * Copiloto pela captura de sempre (mesmos ids).
+   * v0.8.3: "Buscar no celular o histórico dos grupos". v0.9.0: "o histórico completo dos mentorados": as conversas
+   * individuais e os grupos de mentorados com mensagem guardada aqui que o celular ainda não esgotou. O cliente pede ao
+   * celular pela fila, aos poucos; o que chegar entra pela ingestão normal; só os últimos 30 dias vão ao Copiloto.
    */
   async copilotoFetchGroupHistory(): Promise<CopilotoRepairResult> {
     if (!this.copiloto.enabled()) return { ok: false, message: COPILOTO_TEXT.historyOff }

@@ -27,7 +27,7 @@ describe('migração v11 (v0.3.0): sem conversas escondidas', () => {
 
     db = openDb(file)
     repo = new Repo(db)
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(20)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(21)
     expect(repo.listContacts({ includeHidden: true }).filter((c) => c.hidden)).toEqual([])
     expect(JSON.parse(repo.getSetting('migration.unhidden_jids')!).sort()).toEqual(['a@s.whatsapp.net', 'c@s.whatsapp.net'])
     db.close()

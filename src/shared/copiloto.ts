@@ -28,7 +28,7 @@ export const COPILOTO_TEXT = {
   network: 'Sem conexão com o Copiloto. Tente de novo.',
   server: 'O Copiloto não respondeu direito. Tente de novo mais tarde.',
   repairOff: 'Ligue o envio para o Copiloto antes de reenviar o histórico dos grupos.',
-  historyOff: 'Ligue o envio para o Copiloto antes de buscar o histórico dos grupos.',
+  historyOff: 'Ligue o envio para o Copiloto antes de buscar o histórico dos mentorados.',
   historyNoRoster: 'A lista de mentorados ainda não chegou do Copiloto. Clique em "Testar conexão" e tente de novo.',
   historyUnavailable: 'Esta versão do WhatsApp não permite buscar o histórico no celular.'
 } as const
@@ -60,15 +60,16 @@ export function groupHistoryLine(h: CopilotoGroupHistory): string {
 
 /**
  * v0.8.3: "Buscar no celular o histórico dos grupos" (pedidos ao celular, um a cada 20 s, no máximo 60 por dia).
+ * v0.9.0: "Buscar no celular o histórico completo dos mentorados": conversas individuais e grupos, até o celular não ter mais.
  * - `running`: pedindo (ou esperando o ritmo, a conexão ou o dia seguinte, quando `capped`);
  * - `waiting_phone`: o celular não respondeu três vezes seguidas (desligado ou sem internet): para até clicar de novo;
- * - `done`: todos os grupos chegaram a 30 dias atrás (ou o celular não tinha mais).
+ * - `done`: o celular não tinha mais nada antes da mais antiga de cada conversa.
  */
 export interface GroupHistoryFetchView {
   state: 'running' | 'waiting_phone' | 'done'
   startedAt: number
   finishedAt: number | null
-  /** grupos de mentorados com mensagem guardada aqui (dá para pedir as anteriores) */
+  /** conversas de mentorados (individuais e grupos) com mensagem guardada aqui (dá para pedir as anteriores) */
   groups: number
   /** desses, quantos já terminaram */
   done: number
@@ -82,7 +83,7 @@ export interface GroupHistoryFetchView {
 }
 
 export function historyFetchLine(v: GroupHistoryFetchView): string {
-  const progress = `${v.done} de ${v.groups} grupo(s) concluído(s) · ${v.requests} pedido(s) ao celular · ${v.received} mensagem(ns) nova(s)`
+  const progress = `${v.done} de ${v.groups} conversa(s) concluída(s) · ${v.requests} pedido(s) ao celular · ${v.received} mensagem(ns) nova(s)`
   if (v.state === 'done') return `Busca no celular concluída: ${progress}`
   if (v.state === 'waiting_phone') return `Busca no celular parada: o celular não respondeu. Deixe o celular ligado e com internet e clique de novo. ${progress}`
   return `Buscando no celular: ${progress}${v.capped ? ' · limite de pedidos de hoje atingido, continua amanhã' : ''}`

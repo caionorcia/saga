@@ -275,11 +275,12 @@ describe('WhatsAppClient', () => {
   })
 
   describe('ingestão', () => {
-    it('janela de 30 dias pelo timestamp da mensagem; grupos entram; status, newsletter e transmissão ignorados', async () => {
+    it('v0.9.0: guarda todo o histórico (de qualquer data); grupos entram; status, newsletter e transmissão ignorados', async () => {
       await emit('messaging-history.set', {
         chats: [],
         contacts: [],
         messages: [
+          wamsg({ id: 'ancient', ts: NOW - 900 * DAY }),
           wamsg({ id: 'old', ts: NOW - 31 * DAY }),
           wamsg({ id: 'new', ts: NOW - 29 * DAY }),
           wamsg({ id: 'today', ts: NOW - 1000 }),
@@ -290,8 +291,8 @@ describe('WhatsAppClient', () => {
           wamsg({ id: 'bcl', jid: '1234567890@broadcast', ts: NOW - DAY })
         ]
       })
-      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['new', 'today'])
-      expect(repo.listMessages(GRP).map((m) => m.id)).toEqual(['grp'])
+      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['ancient', 'old', 'new', 'today'])
+      expect(repo.listMessages(GRP).map((m) => m.id)).toEqual(['grp-old', 'grp'])
       expect(repo.listContacts({ includeHidden: true }).map((c) => [c.jid, c.isGroup])).toEqual([
         [JID, false],
         [GRP, true]
@@ -609,21 +610,32 @@ describe('WhatsAppClient', () => {
       expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['velha', 'dentro', 'nova'])
     })
 
-    it('relógio do PC adiantado: a janela conta a partir da mensagem mais nova do WhatsApp', async () => {
+    it('v0.9.0: áudio antigo é guardado sem ir para a fila; a janela dos áudios conta pela mensagem mais nova do WhatsApp (PC adiantado)', async () => {
       clock.advance(60 * DAY) // o PC está 60 dias à frente
       await emit('messaging-history.set', {
         chats: [],
         contacts: [],
         messages: [
-          wamsg({ id: 'velha', ts: NOW - 31 * DAY }),
-          wamsg({ id: 'dentro', ts: NOW - 29 * DAY }),
+          wamsg({ id: 'velha', audio: 10, ts: NOW - 31 * DAY }),
+          wamsg({ id: 'dentro', audio: 10, ts: NOW - 29 * DAY }),
           wamsg({ id: 'nova', ts: NOW - 1000 })
         ]
       })
-      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['dentro', 'nova'])
-      // um lote depois, só com mensagem velha, usa a mais nova já vista no banco
-      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'velha2', jid: JID2, ts: NOW - 40 * DAY })] })
-      expect(repo.listMessages(JID2)).toEqual([])
+      expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['velha', 'dentro', 'nova'])
+      expect(repo.getMessage('velha')).toMatchObject({ kind: 'audio', transcriptStatus: null, audioPath: null })
+      expect(repo.listJobs('pending').map((j) => j.key)).toEqual(['dentro'])
+      // um lote depois, só com áudio velho, usa a mais nova já vista no banco: guardado, sem download
+      await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'velha2', jid: JID2, audio: 5, ts: NOW - 40 * DAY })] })
+      expect(repo.listMessages(JID2).map((m) => m.id)).toEqual(['velha2'])
+      expect(repo.listJobs('pending').map((j) => j.key)).toEqual(['dentro'])
+    })
+
+    it('v0.9.0: lote grande de histórico (5 mil mensagens) é gravado numa transação, rápido', async () => {
+      const messages = Array.from({ length: 5_000 }, (_, i) => wamsg({ id: `h${i}`, jid: i % 2 ? JID : JID2, ts: NOW - (i + 1) * 3_600_000 }))
+      const t = performance.now()
+      await emit('messaging-history.set', { chats: [], contacts: [], messages })
+      expect(repo.messageCount(JID) + repo.messageCount(JID2)).toBe(5_000)
+      expect(performance.now() - t).toBeLessThan(5_000)
     })
 
     it('uma mensagem com horário absurdo no futuro não derruba as mensagens reais (nem neste lote, nem nos próximos)', async () => {
@@ -1271,9 +1283,10 @@ describe('WhatsAppClient', () => {
         ]
       })
       // só as novas: ids iguais não entram de novo, o áudio transcrito não volta para a fila
-      expect(seen).toEqual(['g-old1', 'g-old2'])
-      expect(history).toEqual([{ inserted: 2, onDemand: false }])
-      expect(repo.listMessages(GRP).map((m) => m.id)).toEqual(['g-old2', 'g-old1', 'g-new'])
+      expect(seen).toEqual(['g-old1', 'g-old2', 'g-too-old'])
+      expect(history).toEqual([{ inserted: 3, onDemand: false }])
+      // v0.9.0: o histórico mais antigo que 30 dias também fica guardado
+      expect(repo.listMessages(GRP).map((m) => m.id)).toEqual(['g-too-old', 'g-old2', 'g-old1', 'g-new'])
       expect(repo.listMessages(JID).map((m) => m.id)).toEqual(['i1', 'au1'])
       expect(repo.getMessage('au1')).toMatchObject({ transcriptStatus: 'done', transcript: 'transcrição pronta' })
       const jobs = [...repo.listJobs('pending'), ...repo.listJobs('done')]
@@ -1316,7 +1329,7 @@ describe('WhatsAppClient', () => {
         expect(last().groupFetchAllParticipating).toHaveBeenCalledTimes(1)
       })
 
-      it('só com a conexão estável; um pedido por vez de 50 antes da mais antiga; a resposta entra pela ingestão (30 dias) até completar', async () => {
+      it('só com a conexão estável; um pedido por vez de 50 antes da mais antiga; a resposta entra pela ingestão (todo o histórico) até o celular não ter mais', async () => {
         const history: Array<{ inserted: number; onDemand: boolean }> = []
         client.on('history', (h: { inserted: number; onDemand: boolean }) => history.push(h))
         const view = client.startGroupHistory([GRP, GRP2], 1)
@@ -1345,28 +1358,35 @@ describe('WhatsAppClient', () => {
         await queue.tick()
         expect(calls()).toHaveLength(2)
         expect(calls()[1]).toEqual([50, { remoteJid: GRP, id: 'o2', fromMe: false, participant: '999@lid' }, NOW - 12 * DAY])
-        // chegou antes dos 30 dias: o que passa da janela não entra e o grupo está completo
+        // v0.9.0: passou dos 30 dias: tudo entra e o grupo continua (até o celular não ter mais)
         await emit('messaging-history.set', {
           syncType: ON_DEMAND,
           chats: [],
           contacts: [],
-          messages: [wamsg({ id: 'o3', jid: GRP, participant: JID2, ts: NOW - 25 * DAY }), wamsg({ id: 'o4', jid: GRP, participant: JID2, ts: NOW - 31 * DAY })]
+          messages: [wamsg({ id: 'o3', jid: GRP, participant: JID2, ts: NOW - 25 * DAY }), wamsg({ id: 'o4', jid: GRP, participant: JID2, ts: NOW - 400 * DAY })]
         })
         expect(repo.getMessage('o3')).not.toBeNull()
-        expect(repo.getMessage('o4')).toBeNull()
+        expect(repo.getMessage('o4')).not.toBeNull()
         // ritmo: 20 s entre pedidos
         await advance(5_000)
         await queue.tick()
         expect(calls()).toHaveLength(2)
         await advance(20_000)
         await queue.tick()
-        expect(calls()[2]).toEqual([50, { remoteJid: GRP2, id: 'h1', fromMe: true }, NOW - 3 * DAY])
+        expect(calls()[2]).toEqual([50, { remoteJid: GRP, id: 'o4', fromMe: false, participant: JID2 }, NOW - 400 * DAY])
+        // o celular só devolve o que já estava aqui (nada mais antigo): grupo concluído, segue para o outro
+        await emit('messaging-history.set', { syncType: ON_DEMAND, chats: [], contacts: [], messages: [wamsg({ id: 'o4', jid: GRP, participant: JID2, ts: NOW - 400 * DAY })] })
+        await advance(20_000)
+        await queue.tick()
+        expect(calls()[3]).toEqual([50, { remoteJid: GRP2, id: 'h1', fromMe: true }, NOW - 3 * DAY])
         // o celular não tem mais nada antes desta: grupo concluído
         await emit('messaging-history.set', { syncType: ON_DEMAND, chats: [], contacts: [], messages: [] })
         await advance(30_000)
         await queue.tick()
-        expect(calls()).toHaveLength(3)
-        expect(runView(repo, clock.now())).toMatchObject({ state: 'done', groups: 2, done: 2, requests: 3, received: 3, noAnchor: 1 })
+        expect(calls()).toHaveLength(4)
+        expect(runView(repo, clock.now())).toMatchObject({ state: 'done', groups: 2, done: 2, requests: 4, received: 4, noAnchor: 1 })
+        // as conversas que chegaram ao fim ficam anotadas (com a mais antiga de agora): a próxima busca não pede de novo
+        expect(JSON.parse(repo.getSetting('wa.historyExhausted') ?? '{}')).toEqual({ [GRP]: 'o4', [GRP2]: 'h1' })
         // clicar de novo depois de concluída: busca nova (só os grupos que ainda faltam)
         expect(client.startGroupHistory([], 1)).toMatchObject({ state: 'done', groups: 0 })
         expect(repo.listJobs('failed')).toHaveLength(0)

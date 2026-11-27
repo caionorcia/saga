@@ -126,13 +126,16 @@ describe('v0.8.1: grupo que passa a ser de mentorado depois da carga inicial', (
     expect(groupMsgs(G_ANA).map((e: any) => e.id)).toEqual([messageEventId(G_ANA, m.id)])
   })
 
-  it('grupo sem mensagem nos últimos 30 dias: vai a mais recente guardada, para o Copiloto saber que ele existe', async () => {
+  it('v0.9.0 (contrato v1.3): grupo sem mensagem nos últimos 30 dias não manda nenhuma mensagem (nem a mais recente)', async () => {
     ctx.repo.setGroupMembers(G_ANA, [ANA])
     ctx.add(G_ANA, { fromMe: true, text: 'bem antiga', minutesAgo: 80 * 24 * 60 })
-    const latest = ctx.add(G_ANA, { fromMe: true, text: 'antiga', minutesAgo: 45 * 24 * 60 })
+    ctx.add(G_ANA, { fromMe: true, text: 'antiga', minutesAgo: 45 * 24 * 60 })
     await enable()
     await drain()
-    expect(groupMsgs(G_ANA).map((e: any) => e.id)).toEqual([messageEventId(G_ANA, latest.id)])
+    expect(groupMsgs(G_ANA)).toEqual([])
+    expect(sync.repairGroupsNow(new Set(roster))).toMatchObject({ groups: 0, messages: 0, empty: 1 })
+    await drain()
+    expect(groupMsgs(G_ANA)).toEqual([])
   })
 
   it('grupo sem mentorado nunca entra (nem na conferência, nem no reenvio)', async () => {
@@ -277,15 +280,17 @@ describe('v0.8.3: histórico antigo dos grupos chegando depois (vincular de novo
     for (const c of calls) expect(c.raw).not.toContain(BIA_PHONE)
   })
 
-  it('candidatos da busca no celular: grupos de mentorados com mensagem e sem os 30 dias; sem mensagem nenhuma só contam', async () => {
+  it('v0.9.0: candidatos da busca no celular: conversas individuais e grupos de mentorados com mensagem (todo o histórico), menos os que o celular já esgotou; grupo sem mensagem só conta', async () => {
     expect(sync.historyCandidates()).toBeNull() // sem roster
     ctx.add(ANA, { text: 'oi', minutesAgo: 1 })
+    ctx.add(BIA, { text: 'não é mentorada', minutesAgo: 1 })
     ctx.repo.setGroupMembers(G_ANA, [ANA])
     ctx.add(G_ANA, { fromMe: true, minutesAgo: 2 * 24 * 60 })
-    // completo: já tem mensagem de 30 dias atrás
+    // o celular já disse que não tem nada antes da mais antiga deste: fica de fora
     const G_FULL = '120363000000000003@g.us'
     ctx.repo.setGroupMembers(G_FULL, [ANA])
-    ctx.add(G_FULL, { fromMe: true, minutesAgo: 30 * 24 * 60 - 10 })
+    const oldest = ctx.add(G_FULL, { fromMe: true, minutesAgo: 400 * 24 * 60 })
+    ctx.repo.setSetting('wa.historyExhausted', JSON.stringify({ [G_FULL]: oldest.id }))
     // de mentorado, sem nenhuma mensagem aqui
     ctx.repo.setGroupMembers('120363000000000009@g.us', [CAIO])
     // não é de mentorado
@@ -293,7 +298,7 @@ describe('v0.8.3: histórico antigo dos grupos chegando depois (vincular de novo
     ctx.add(G_BIA, { senderJid: BIA, minutesAgo: 60 })
     await enable()
     await drain()
-    expect(sync.historyCandidates()).toEqual({ jids: [G_ANA], noAnchor: 1 })
+    expect(sync.historyCandidates()).toEqual({ jids: [ANA, G_ANA], noAnchor: 1 })
   })
 
   it('histórico importado segura o envio automático: só os follow-ups recebidos depois de 24 h saem sozinhos', async () => {

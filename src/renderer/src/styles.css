@@ -255,6 +255,9 @@ button.alert-main:hover .alert-detail { text-decoration: underline; }
 .bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .bubble-time { display: block; text-align: right; font-size: 11px; color: var(--muted); margin-top: 2px; }
 .audio-row { display: flex; align-items: center; gap: 10px; min-width: 230px; }
+/* v0.9.0: áudio antigo (mais de 30 dias): só sob pedido */
+.on-demand { display: flex; align-items: center; gap: 8px; }
+.load-older { text-align: center; margin: 4px 0 10px; }
 .play { width: 34px; height: 34px; border-radius: 50%; border: 0; background: var(--accent); color: var(--on-accent); cursor: pointer; font-size: 13px; flex: none; }
 .play:disabled { background: var(--play-disabled); cursor: not-allowed; }
 .audio-wave { flex: 1; height: 18px; border-radius: 4px; background: repeating-linear-gradient(90deg, var(--wave) 0 2px, transparent 2px 5px); opacity: .7; -webkit-mask: linear-gradient(#000, #000); }

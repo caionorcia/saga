@@ -369,7 +369,10 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     while (i > 0 && !c.messages[i - 1].fromMe) i--
     return c.messages[i].ts
   }
+  /** v0.9.0: áudios antigos (mais de 30 dias) que esperam o "Transcrever" */
+  const onDemand = new Set<string>()
   const toView = (m: DemoContact['messages'][number]): MessageView => ({
+    ...(onDemand.has(m.id) ? { onDemand: true } : {}),
     id: m.id,
     jid: m.jid,
     fromMe: m.fromMe,
@@ -527,6 +530,24 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
         .filter((c) => kind === 'all' || (kind === 'group') === c.isGroup)
         .sort((a, b) => (b.lastTs ?? 0) - (a.lastTs ?? 0)),
     listMessages: async (jid) => (find(jid)?.messages ?? []).map(toView),
+    listMessagesPage: async (jid, limit, includeId) => {
+      const all = (find(jid)?.messages ?? []).map(toView)
+      let n = limit
+      const at = includeId ? all.findIndex((m) => m.id === includeId) : -1
+      if (at >= 0) n = Math.max(n, all.length - at + 20)
+      return { messages: all.slice(Math.max(0, all.length - n)), hasMore: all.length > n }
+    },
+    transcribeAudio: async (id) => {
+      record('transcribeAudio', [id], true)
+      for (const c of demo) {
+        const m = c.messages.find((x) => x.id === id)
+        if (m && m.kind === 'audio' && m.transcriptStatus === null) {
+          onDemand.delete(id)
+          return true
+        }
+      }
+      return false
+    },
     listAlerts: async (jid) =>
       jid !== undefined
         ? activeAlerts(jid)

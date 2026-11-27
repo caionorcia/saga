@@ -211,6 +211,10 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   getState: () => true,
   listContacts: ([h, k]) => isBool(h) && (k === undefined || (CONTACT_KINDS as readonly unknown[]).includes(k)),
   listMessages: ([j]) => nonEmpty(j),
+  listMessagesPage: (a) =>
+    a.length >= 2 && a.length <= 3 && nonEmpty(a[0]) && Number.isInteger(a[1]) && (a[1] as number) > 0 && (a[1] as number) <= 20_000 &&
+    (a[2] === undefined || a[2] === null || nonEmpty(a[2])),
+  transcribeAudio: (a) => a.length === 1 && nonEmpty(a[0]),
   listAlerts: (a) => a.length <= 1 && (a[0] === undefined || nonEmpty(a[0])),
   dismissAlert: (a) => a.length === 2 && nonEmpty(a[0]) && (ALERT_KINDS as readonly unknown[]).includes(a[1]),
   rateAlert: (a) =>

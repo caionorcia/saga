@@ -233,7 +233,7 @@ export function CopilotoSection() {
           )}
           {st.enabled && (
             <button type="button" className="btn" disabled={busy || fetching} onClick={() => void fetchHistory()}>
-              Buscar no celular o histórico dos grupos
+              Buscar no celular o histórico completo dos mentorados
             </button>
           )}
         </div>
@@ -245,10 +245,11 @@ export function CopilotoSection() {
         )}
         {st.enabled && (
           <Info summary="E a busca no celular?">
-            Para os grupos que já têm alguma mensagem aqui, o SagaZap pede ao seu celular as mensagens anteriores, até 30
-            dias atrás: um pedido a cada 20 segundos, no máximo 60 por dia, só com o WhatsApp conectado. O celular precisa
-            estar ligado e com internet. Nada é enviado a ninguém. Grupos sem nenhuma mensagem aqui só recebem o histórico
-            vinculando o aparelho de novo (veja o guia).
+            Para as conversas e os grupos dos mentorados que já têm alguma mensagem aqui, o SagaZap pede ao seu celular as
+            mensagens anteriores, até o celular não ter mais: um pedido a cada 20 segundos, no máximo 60 por dia, só com o
+            WhatsApp conectado. O celular precisa estar ligado e com internet. Nada é enviado a ninguém. O histórico antigo
+            fica só neste computador (o Copiloto recebe só os últimos 30 dias e pode pesquisar o resto). Vincular o aparelho
+            de novo é o caminho mais rápido (veja o guia).
           </Info>
         )}
         <p className={`s-msg ${msg?.bad ? 'field-error small' : 'ok-text small'}`} role="status" aria-live="polite">

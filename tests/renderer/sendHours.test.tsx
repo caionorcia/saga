@@ -95,7 +95,7 @@ describe('Horário de envio: confirmação', () => {
 
 describe('Horário de envio: "Forçar envio" no cabeçalho', () => {
   const stubConversation = () => {
-    window.saga = { ...window.saga, listMessages: vi.fn(async () => []), onMessages: vi.fn(() => () => {}) } as typeof window.saga
+    window.saga = { ...window.saga, listMessages: vi.fn(async () => []), listMessagesPage: vi.fn(async () => ({ messages: [], hasMore: false })), onMessages: vi.fn(() => () => {}) } as typeof window.saga
   }
 
   it('ligado: a confirmação dessa conversa já abre com "Forçar envio" marcado', async () => {

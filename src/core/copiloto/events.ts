@@ -88,7 +88,7 @@ export interface BuiltEvent {
 const iso = (ms: number): string => new Date(ms).toISOString()
 
 /** Rótulos que o SagaZap grava no texto de mídia sem legenda (`wa/normalize.ts`). */
-function messageType(m: MessageRow): MessageEvent['message_type'] {
+export function messageType(m: MessageRow): MessageEvent['message_type'] {
   if (m.kind === 'text') return 'text'
   if (m.kind === 'audio') return 'audio'
   const t = m.text ?? ''
@@ -105,6 +105,11 @@ export interface BuilderDeps {
   roster: ReadonlySet<string>
   /** o telefone que o app conhece para um @lid (JID `@s.whatsapp.net`), ou null */
   pnForLid?: (lid: string) => string | null
+  /**
+   * v0.9.0 (contrato v1.3): mensagens (e envios) com horário antes disto (epoch ms; os últimos 30 dias) nunca viram
+   * evento `message`, por nenhum caminho (captura, carga, reenvio, renome de grupo, transcrição nova).
+   */
+  minTs?: number
 }
 
 /**
@@ -162,7 +167,13 @@ export class EventBuilder {
     return { key: chatKey(jid), kind: 'individual', name: c.name, phones: [phone] }
   }
 
+  /** v0.9.0: a mensagem está dentro da janela que vai ao Copiloto (os últimos 30 dias). */
+  inWindow(ts: number): boolean {
+    return this.deps.minTs === undefined || ts >= this.deps.minTs
+  }
+
   message(m: MessageRow): BuiltEvent | null {
+    if (!this.inWindow(m.ts)) return null
     const chat = this.chat(m.jid)
     if (!chat) return null
     const repo = this.deps.repo
@@ -200,6 +211,7 @@ export class EventBuilder {
     if (!s || s.status !== 'sent' || !s.waMsgId) return null
     const echo = this.deps.repo.getMessage(s.waMsgId)
     if (echo && echo.jid === s.jid) return this.message(echo)
+    if (!this.inWindow(s.sentAt ?? s.queuedAt)) return null
     const chat = this.chat(s.jid)
     if (!chat) return null
     const id = messageEventId(s.jid, s.waMsgId)
@@ -256,11 +268,19 @@ export class EventBuilder {
     const c = this.contact(jid)
     if (!c || c.lastTs === null) return null
     const repo = this.deps.repo.copiloto
-    const inbound = repo.lastInbound(jid)
+    const lastIn = repo.lastInbound(jid)
+    // v0.9.0: mensagem de fora da janela (mais de 30 dias) não foi ao Copiloto: o estado não aponta para ela
+    const inbound = lastIn && this.inWindow(lastIn.ts) ? lastIn : null
     let needs: boolean | null = false
     let decidedBy: ReplyStateEvent['decided_by'] = null
     let reason: string | null = null
     let resolution: ReplyStateEvent['resolution'] = inbound ? 'replied' : null
+    if (!c.awaitingReply && lastIn && c.lastTs === lastIn.ts) {
+      // o contato falou por último, mas há mais de 30 dias: não fica em "Para responder"
+      decidedBy = 'rule'
+      reason = 'Sem mensagem nos últimos 30 dias'
+      resolution = 'not_needed'
+    }
     if (c.awaitingReply) {
       const d = c.replyDecision
       resolution = null

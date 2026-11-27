@@ -32,7 +32,7 @@ import type { FollowupRow } from '../db/followupRepo'
 import { EventBuilder, serialize } from './events'
 import { parsePending, resolveTarget, shortReason, type FollowupUpdate, type PendingFollowup } from './followups'
 import { generateCode, isRosterHash, messageEventId, phoneOfJid } from './identity'
-import { historyTarget, reachedTarget, runView } from '../wa/groupHistory'
+import { mayHaveOlder, runView } from '../wa/groupHistory'
 
 export const COPILOTO_LIMITS = {
   batchEvents: 100,
@@ -270,24 +270,27 @@ export class CopilotoSync {
   }
 
   /**
-   * v0.8.3: os grupos de mentorados para a busca no celular: os que têm mensagem guardada e ainda não chegam a 30 dias
-   * atrás, e quantos não têm mensagem nenhuma aqui (sem ponto de partida). null sem a lista de mentorados.
+   * v0.8.3: as conversas de mentorados para a busca no celular. v0.9.0 (contrato v1.3): as individuais e os grupos de
+   * mentorados com mensagem guardada aqui (o ponto de partida), menos as que o celular já disse não ter nada antes da mais
+   * antiga; e quantos grupos não têm mensagem nenhuma aqui (sem ponto de partida). null sem a lista de mentorados.
    */
   historyCandidates(): { jids: string[]; noAnchor: number } | null {
     const set = this.rosterSet()
     if (!set) return null
     const b = this.builder(set)
-    const target = historyTarget(this.repo, this.deps.clock.now())
     const jids: string[] = []
     let noAnchor = 0
-    for (const jid of this.repo.copiloto.groupJids()) {
+    const groups = this.repo.copiloto.groupJids()
+    const people = this.repo.copiloto.listChats().filter((c) => !c.isGroup).map((c) => c.jid)
+    for (const jid of [...people, ...groups]) {
       if (!b.chat(jid)) {
-        if (!this.repo.copiloto.chat(jid) && b.groupPhones(jid).length > 0) noAnchor++
+        if (jid.endsWith('@g.us') && !this.repo.copiloto.chat(jid) && b.groupPhones(jid).length > 0) noAnchor++
         continue
       }
       const oldest = this.repo.oldestMessage(jid)
-      if (!oldest) noAnchor++
-      else if (!reachedTarget(oldest.ts, target)) jids.push(jid)
+      if (!oldest) {
+        if (jid.endsWith('@g.us')) noAnchor++
+      } else if (mayHaveOlder(this.repo, jid, oldest.id)) jids.push(jid)
     }
     return { jids, noAnchor }
   }
@@ -678,7 +681,9 @@ export class CopilotoSync {
   // --- o que mudou → fila ---
 
   private builder(roster: ReadonlySet<string>): EventBuilder {
-    return new EventBuilder({ repo: this.repo, roster, ...(this.deps.pnForLid ? { pnForLid: this.deps.pnForLid } : {}) })
+    // v0.9.0: só os últimos 30 dias viram evento `message` (o histórico mais antigo fica só neste computador)
+    const minTs = this.deps.clock.now() - COPILOTO_LIMITS.backfillDays * DAY
+    return new EventBuilder({ repo: this.repo, roster, minTs, ...(this.deps.pnForLid ? { pnForLid: this.deps.pnForLid } : {}) })
   }
 
   /** Transforma as mudanças anotadas em eventos (só de mentorados) e põe na fila. Devolve quantas olhou. */
@@ -716,7 +721,8 @@ export class CopilotoSync {
       else if (kind === 'x') built = b.send(Number(key))
       else if (kind === 'n') {
         // v0.8.1: o grupo ganhou (ou trocou de) nome: a mensagem mais recente volta à fila com o `chat.name` novo
-        const last = this.repo.copiloto.backfillMessageIds(jid, Number.MAX_SAFE_INTEGER)[0]
+        // (v0.9.0: só se ela for dos últimos 30 dias)
+        const last = this.repo.copiloto.latestMessageId(jid)
         const m = last ? this.repo.getMessage(last) : null
         if (m && m.jid === jid) built = b.message(m)
       }
