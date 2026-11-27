@@ -2,7 +2,7 @@
 
 Este guia é para quem **não usa terminal**. Você só vai clicar e copiar/colar. Leva uns 10 minutos.
 
-O SagaZap lê as suas conversas individuais do WhatsApp (dos últimos 30 dias), transcreve os áudios e sugere respostas. **Ele nunca envia mensagens**: você copia a sugestão e cola no WhatsApp.
+O SagaZap lê as suas conversas do WhatsApp (guarda todo o histórico; o automático vale para os últimos 30 dias), transcreve os áudios e sugere respostas. **Ele nunca envia mensagens**: você copia a sugestão e cola no WhatsApp.
 
 ## 1. Baixar o instalador
 
@@ -318,8 +318,8 @@ Ao desligar, a fila deste computador é apagada. O que já foi enviado continua 
 #### Grupos e nomes dos grupos (versão 0.8.1)
 
 - Um grupo entra no Copiloto assim que o SagaZap fica sabendo que um mentorado participa dele (também num grupo novo,
-  em poucos segundos depois da sua primeira mensagem lá), com os últimos 30 dias. Grupo sem mensagem nos últimos 30 dias
-  leva a mensagem mais recente que estiver neste computador.
+  em poucos segundos depois da sua primeira mensagem lá), com os últimos 30 dias. (Desde a 0.9.0, grupo sem mensagem nos
+  últimos 30 dias não manda nenhuma: o Copiloto recebe só os últimos 30 dias.)
 - Depois de atualizar para a 0.8.1, o SagaZap reenvia uma vez o histórico dos grupos dos mentorados (sozinho, uns
   minutos depois de conectar). Em **Configurações › Copiloto da Saga** aparece a linha **Grupos: X grupo(s) e Y
   mensagem(ns) colocados na fila para o Copiloto (Z grupo(s) sem nenhuma mensagem neste computador)**; os pendentes
@@ -332,11 +332,12 @@ Ao desligar, a fila deste computador é apagada. O que já foi enviado continua 
 
 Se o SagaZap foi vinculado antes da versão 0.1.5, os grupos só têm mensagens daquele dia em diante (o WhatsApp manda o
 histórico só ao vincular). A linha **Histórico dos grupos: mensagem mais antiga em DD/MM; X grupo(s), Y mensagem(ns)
-enviadas ao Copiloto** mostra até onde o Copiloto já tem. Há dois jeitos de trazer os 30 dias:
+enviadas ao Copiloto** mostra até onde o Copiloto já tem. Há dois jeitos de trazer o histórico:
 
-1. **Buscar no celular o histórico dos grupos** (botão em **Configurações › Copiloto da Saga**): para os grupos que já têm
-   alguma mensagem aqui, o SagaZap pede ao seu celular as mensagens anteriores, aos poucos (um pedido a cada 20 s, no
-   máximo 60 por dia; se acabar, continua no dia seguinte). Deixe o celular ligado e com internet e o SagaZap conectado.
+1. **Buscar no celular o histórico completo dos mentorados** (botão em **Configurações › Copiloto da Saga**; desde a 0.9.0
+   vale também para as conversas individuais e vai até o celular não ter mais): para as conversas que já têm alguma
+   mensagem aqui, o SagaZap pede ao seu celular as mensagens anteriores, aos poucos (um pedido a cada 20 s, no máximo 60
+   por dia; se acabar, continua no dia seguinte). Deixe o celular ligado e com internet e o SagaZap conectado.
    Nada é enviado a ninguém. A linha **Buscando no celular…** mostra o progresso. Se aparecer **N grupo(s) precisam
    reconectar o aparelho**, esses grupos não têm nenhuma mensagem aqui: só o jeito 2 traz o histórico deles.
 2. **Vincular o aparelho de novo** (traz tudo de uma vez): no celular, **WhatsApp › Aparelhos conectados**, toque no
@@ -344,6 +345,21 @@ enviadas ao Copiloto** mostra até onde o Copiloto já tem. Há dois jeitos de t
    O WhatsApp manda o histórico de novo; o SagaZap guarda só o que faltava (nada duplica, áudios já transcritos não são
    baixados de novo, respostas aprovadas, memória e configurações ficam). Nas 24 horas seguintes, os follow-ups do
    Copiloto ficam esperando a sua confirmação (nenhum sai sozinho por causa do histórico antigo).
+
+#### Histórico completo e pesquisa pelo Copiloto (versão 0.9.0)
+
+- O SagaZap guarda **todo** o histórico que o celular mandar, de qualquer data. Conversas longas abrem com as mensagens
+  mais novas; **Carregar mensagens mais antigas**, no alto, traz mais.
+- O que é automático continua só com os **últimos 30 dias**: o envio ao Copiloto, os alertas, o "Para responder", os
+  resumos e sugestões, e o download e a transcrição dos áudios. Conversa parada há mais de 30 dias sai de "Para
+  responder".
+- Áudio com mais de 30 dias aparece como **🎤 áudio** com o botão **Transcrever**: ele baixa e transcreve só aquele
+  áudio, na fila de sempre (e dentro do limite de gasto do dia).
+- O Copiloto pode **pesquisar** o histórico completo de um mentorado: o SagaZap confere os pedidos a cada minuto (com o
+  SagaZap aberto e o Copiloto ligado), procura neste computador (texto e transcrições) e devolve até 50 trechos. Não toca
+  no WhatsApp; nunca vão números de quem não é mentorado nem arquivos. A linha **Pesquisas do Copiloto: N respondidas
+  hoje** mostra só a contagem (o que foi procurado não fica registrado).
+- O caminho mais rápido para trazer o histórico antigo continua sendo **vincular o aparelho de novo** (jeito 2 acima).
 
 ### Mensagens do Copiloto (versão 0.7.0)
 

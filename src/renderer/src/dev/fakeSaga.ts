@@ -92,6 +92,11 @@ export interface FakeOptions {
    * marcado para envio automático (agendado para a próxima abertura do horário + alguns minutos); padrão: desligado
    */
   autoFollowups?: boolean
+  /**
+   * v0.9.0: a primeira conversa individual ganha histórico de 45 dias atrás (com um áudio antigo que espera o
+   * "Transcrever") e o Copiloto aparece ligado com pesquisas respondidas hoje; padrão: desligado
+   */
+  oldHistory?: boolean
 }
 
 const EXTRA_SUGGESTION = 'Combinado! Qualquer coisa me avisa por aqui.'
@@ -99,6 +104,31 @@ const EXTRA_SUGGESTION = 'Combinado! Qualquer coisa me avisa por aqui.'
 export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
   const now = opts.now ?? Date.now()
   const demo: DemoContact[] = loadDemo(now)
+  if (opts.oldHistory) {
+    const c = demo.find((x) => !x.isGroup && x.messages.length > 0)
+    if (c) {
+      const base = c.messages[0]
+      const ago = (d: number, min: number) => now - d * 86_400_000 - min * 60_000
+      const mk = (id: string, ts: number, o: Partial<DemoContact['messages'][number]>): DemoContact['messages'][number] => ({
+        ...base,
+        id,
+        ts,
+        fromMe: false,
+        kind: 'text',
+        text: null,
+        durationSec: null,
+        hasAudio: false,
+        transcript: null,
+        transcriptStatus: null,
+        ...o
+      })
+      c.messages.unshift(
+        mk('OLD1', ago(45, 30), { text: 'Bom dia! Comecei hoje o plano de conteúdo que combinamos.' }),
+        mk('OLD2', ago(45, 20), { kind: 'audio', durationSec: 37 }),
+        mk('OLD3', ago(45, 5), { fromMe: true, text: 'Ótimo começo! Me conta na sexta como foi.' })
+      )
+    }
+  }
   const state: AppState = { ...DEFAULT_STATE, ...opts.state }
   const kb = createFakeKb(now, { empty: opts.emptyKb })
   const hidden = new Set<string>()
@@ -397,7 +427,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     if (opts.aiDelayMs) await wait(opts.aiDelayMs)
     const lastMsgId = c.messages[c.messages.length - 1].id
     generatedFor.set(jid, lastMsgId)
-    const pendingAudios = c.messages.filter((m) => m.kind === 'audio' && m.transcriptStatus === null).length
+    const pendingAudios = c.messages.filter((m) => m.kind === 'audio' && m.transcriptStatus === null && !onDemand.has(m.id)).length
     let a = analyses.get(jid)
     if (!a || fresh) {
       if (fresh) chosen.delete(jid)
@@ -496,6 +526,10 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     groupHistory: { oldestTs: null, groups: 0, messages: 0, pending: 0 },
     historyFetch: null,
     searches: { today: 0, lastAt: null }
+  }
+  if (opts.oldHistory) {
+    for (const c of demo) for (const m of c.messages) if (m.kind === 'audio' && m.transcriptStatus === null && m.ts < now - 30 * 86_400_000) onDemand.add(m.id)
+    Object.assign(copiloto, { enabled: true, url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook', hasCode: true, rosterSize: 24, rosterAt: now, chats: 5, lastSentAt: now - 60_000, searches: { today: 3, lastAt: now - 12 * 60_000 } })
   }
   if (opts.autoFollowups) Object.assign(copiloto, { enabled: true, url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook', hasCode: true, rosterSize: 24, rosterAt: now, chats: 5, autoFollowups: true })
   applyAuto()
@@ -1023,6 +1057,7 @@ declare global {
  * `?setup=1` mostra o assistente com um QR Code, `?qr=1` mostra o QR na tela principal (vincular de novo) e
  * `?theme=dark|light|system` escolhe o tema salvo e `?hours=outside` põe o relógio do horário de envio fora dele.
  * `?auto=1` (v0.8.0) liga o envio automático dos follow-ups do Copiloto (o da conversa individual aparece agendado).
+ * `?old=1` (v0.9.0) põe histórico antigo (com um áudio para "Transcrever") e o Copiloto ligado com pesquisas.
  */
 export async function installFakeSaga(): Promise<void> {
   const params = new URLSearchParams(location.search)
@@ -1040,7 +1075,7 @@ export async function installFakeSaga(): Promise<void> {
   if (patch.conn === 'waiting_retry' && patch.retryAt === undefined) patch.retryAt = Date.now() + 2 * 60_000
   const t = params.get('theme')
   const theme = t === 'light' || t === 'dark' || t === 'system' ? t : undefined
-  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside', followups: params.get('followups') !== '0', autoFollowups: params.get('auto') === '1' })
+  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside', followups: params.get('followups') !== '0', autoFollowups: params.get('auto') === '1', oldHistory: params.get('old') === '1' })
   window.saga = ctl.api
   window.__sagaFake = ctl
 }

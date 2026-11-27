@@ -341,3 +341,17 @@ error: string | null                  // curto, quando status = 'error'
 ```
 - O Copiloto guarda os resultados por **24 h** e depois apaga.
 - Nada de mídia; nunca telefone de quem não é mentorado.
+
+## Implementação no SagaZap (v0.9.0)
+- Janela de 30 dias pelo relógio do computador em todos os caminhos de evento `message` (carga, gatilho, transcrição
+  nova, reenvio, grupo que passou a casar, nome novo). Grupo sem mensagem recente não manda mais a mais recente (a nota
+  v0.8.1 fica substituída). `reply_state` de conversa parada há mais de 30 dias: `needs_reply: false`, `decided_by:
+  'rule'`, `resolution: 'not_needed'`, sem `last_inbound_message_id`.
+- `search_pending`: a cada 60 s; com eventos na fila espera a vez deles, no máximo 2 min. Pedido fora do contrato (alvo,
+  consulta ou período inválidos) responde `status: 'error'` com `alvo_invalido`, `consulta_invalida` ou
+  `periodo_invalido`; erro local, `falha_local`. Sem conversa do mentorado ou só palavras vazias: `done` sem resultados.
+- Busca: as palavras da consulta como prefixo (o mesmo índice da busca geral), todas; sem nada, qualquer uma. `from..to`
+  inclusivo. `sender_name`: nome guardado (personalizado, agenda/perfil, ou o do remetente no grupo); nunca um número.
+  `mentorado` = telefone do pedido ou da lista de mentorados (segunda cadeira inclusive).
+- `search_result` reenviado até o Copiloto responder 200 (qualquer `status`) ou 400; só `stored` conta em "respondidas
+  hoje". Um id já respondido que volte em até 30 min não é refeito.

@@ -678,6 +678,37 @@ Relato: no Copiloto, a mensagem de grupo mais antiga era de 25/11, e as individu
   ritmo e no limite do dia; enquanto a unidade não é conhecida, um ponto só conta como perdido depois das duas.
 - **Conferir no aparelho real:** se o celular atende pedidos de grupos antigos.
 
+### Histórico completo e pesquisa pelo Copiloto (v0.9.0, contrato v1.3, a pedido do mentor)
+
+- **Gravação sem janela:** a ingestão guarda tudo o que o celular mandar, de qualquer data, em lote numa transação só (os
+  JIDs são resolvidos antes; nenhum `await` dentro da transação; os avisos saem depois). Bancos antigos: só índices novos
+  (schema v21: `messages(sender_jid, jid)` parcial e `messages(jid, kind, ts)`), nenhum dado migrado.
+- **Janela de 30 dias** (`src/core/recent.ts`) só para o automático: eventos ao Copiloto (`EventBuilder.minTs` =
+  relógio − 30 dias em todos os caminhos: carga, gatilhos, transcrição nova, reenvio dos grupos, grupo que passou a casar,
+  nome novo; grupo sem mensagem recente não leva mais a mais antiga; o `reply_state` não aponta para mensagem antiga);
+  IA (contexto do resumo/sugestões, alertas: já 7 dias); "Para responder" e contadores (conversa cujo contato falou por
+  último há mais de 30 dias, pelo horário do WhatsApp, não espera resposta; "Respondido no grupo" só olha a janela);
+  download automático e transcrição dos áudios (pelo horário do WhatsApp da ingestão).
+- **Áudio antigo:** fica como áudio, sem download. `MessageView.onDemand` (áudio sem transcrição, fora da janela e fora
+  da fila) → "🎤 áudio" com **Transcrever** (`transcribeAudio`): job `download_audio` com `manual` e prioridade 10, depois
+  `transcribe` na mesma prioridade; mesmo limitador, mesmo teto de gasto.
+- **Conversa em páginas:** `listMessagesPage(jid, limit, includeId)` (200 por vez, até 20 mil; `includeId` cresce até a
+  mensagem da busca + 20) e "Carregar mensagens mais antigas" sem pular a leitura. `listMessages` (sugestões) traz as 300
+  mais novas.
+- **Desempenho:** "Respondido no grupo" pelos índices (grupos do contato → mensagens do mentor neles; menções ao
+  contato), CTE materializado. Teste com 120 mil mensagens (2 anos, 1.500 conversas, uma com 40 mil): lista < 500 ms,
+  contadores < 200 ms, página < 50 ms, pesquisa por mentorado < 300 ms (pula em CI).
+- **Busca no celular** (agora "Buscar no celular o histórico completo dos mentorados"): conversas individuais e grupos de
+  mentorados, sem o limite de 30 dias; a conversa acaba quando o celular não devolve nada antes da mais antiga (fica em
+  `wa.historyExhausted` com a id dela; a próxima busca não pede de novo enquanto ela for a mais antiga). Mesmos limites
+  (1 pedido a cada 20 s, 60 por dia). Resposta de conversa individual pode voltar pelo @lid.
+- **Pesquisa pelo Copiloto:** `search_pending` a cada 60 s com a integração ligada (fila de uma requisição por vez; com
+  eventos na fila, espera a vez deles, no máximo 2 min); espera crescente e 401 iguais aos follow-ups; `cancelled_ids`
+  tiram o resultado ainda não enviado. Escopo, busca e regras de quem mandou em `src/core/copiloto/search.ts`. O resultado
+  fica só na memória até o Copiloto confirmar (`stored`, `expired`, `invalid` ou 400); rede/5xx/429 tentam de novo (1 →
+  30 min). Nunca toca no WhatsApp. Configurações mostra só "Pesquisas do Copiloto: N respondidas hoje · última às HH:MM"
+  (`copiloto.searchStats`); o registro leva só contagens, nunca o texto procurado.
+
 ### Versão 0.3.1 (a pedido do mentor)
 
 **Foco mais forte.** "A diferença não ficou tão grande": as conversas que não pedem resposta ficam com opacidade 0,28 e
