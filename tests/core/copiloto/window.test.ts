@@ -44,7 +44,7 @@ async function drain(max = 40): Promise<void> {
   }
 }
 
-/** nenhum evento `message` com `sent_at` de mais de 30 dias antes de agora */
+/** nenhum evento `message` com `sent_at` de mais de 30 dias antes de agora (nos testes sem grupo parado) */
 function noOldMessages(): void {
   const limit = ctx.clock.now() - 30 * DAY
   for (const e of events()) if (e.type === 'message') expect(Date.parse(e.sent_at)).toBeGreaterThanOrEqual(limit)
@@ -95,31 +95,45 @@ describe('v0.9.0: o Copiloto nunca recebe mensagem com mais de 30 dias', () => {
     for (const c of calls) expect(c.raw).not.toContain('conteúdo do áudio antigo')
   })
 
-  it('reenvio dos grupos, grupo que passou a casar e nome novo: nada de mais de 30 dias', async () => {
+  it('exceção: grupo de mentorado sem mensagem recente manda só a mais recente (qualquer data), por todos os caminhos', async () => {
+    const g80 = ctx.add(G_ANA, { fromMe: true, text: 'bem antiga do grupo', ...daysAgo(80) })
     const g45 = ctx.add(G_ANA, { fromMe: true, text: 'antiga do grupo', ...daysAgo(45) })
     await enable()
     await drain()
     expect(messageIds()).toEqual([])
-    // passou a casar (participante conhecido depois)
+    // passou a casar (participante conhecido depois): vai só a mais recente
     ctx.repo.setGroupMembers(G_ANA, [ANA])
     sync.membershipChanged()
     ctx.clock.advance(COPILOTO_LIMITS.regroupEveryMs)
     await drain()
-    expect(messageIds()).toEqual([])
-    // nome novo: a mais recente é antiga, não vai
+    expect(messageIds()).toEqual([messageEventId(G_ANA, g45.id)])
+    // nome novo: a mesma mensagem (mesmo id) de novo, com o nome
+    calls = []
     ctx.repo.setGroupSubject(G_ANA, 'Turma de exemplo')
     await drain()
-    expect(messageIds()).toEqual([])
-    // reenvio pelo botão
-    expect(sync.repairGroupsNow(new Set(roster))).toMatchObject({ groups: 0, messages: 0, empty: 1 })
+    expect(messageIds()).toEqual([messageEventId(G_ANA, g45.id)])
+    // reenvio pelo botão: também só ela
+    calls = []
+    expect(sync.repairGroupsNow(new Set(roster))).toMatchObject({ groups: 1, messages: 1, empty: 0 })
     await drain()
-    expect(messageIds()).not.toContain(messageEventId(G_ANA, g45.id))
-    // uma recente entra normalmente (e só ela)
+    expect(messageIds()).toEqual([messageEventId(G_ANA, g45.id)])
+    // histórico antigo que chega depois (busca no celular), mais velho que a mais recente: fica só aqui
+    calls = []
+    const g300 = ctx.add(G_ANA, { senderJid: ANA, text: 'do ano passado', ...daysAgo(300) })
+    await drain()
+    expect(messageIds()).toEqual([])
+    // chegou mensagem recente: ela vai; as antigas continuam só aqui
     const g1 = ctx.add(G_ANA, { fromMe: true, text: 'recente do grupo', ...daysAgo(1) })
     await drain()
     expect(messageIds()).toEqual([messageEventId(G_ANA, g1.id)])
-    expect(events().filter((e: any) => e.type === 'message').every((e: any) => e.chat.key === chatKey(G_ANA))).toBe(true)
-    noOldMessages()
+    for (const m of [g80, g300]) expect(events().some((e: any) => e.id === messageEventId(G_ANA, m.id))).toBe(false)
+  })
+
+  it('conversa individual sem mensagem recente não manda nenhuma (a exceção é só de grupo)', async () => {
+    ctx.add(ANA, { text: 'antiga', ...daysAgo(60) })
+    await enable()
+    await drain()
+    expect(messageIds()).toEqual([])
   })
 
   it('conversa parada há mais de 30 dias (o contato falou por último): "Para responder" desligado, sem apontar mensagem', async () => {

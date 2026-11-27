@@ -685,7 +685,8 @@ Relato: no Copiloto, a mensagem de grupo mais antiga era de 25/11, e as individu
   (schema v21: `messages(sender_jid, jid)` parcial e `messages(jid, kind, ts)`), nenhum dado migrado.
 - **Janela de 30 dias** (`src/core/recent.ts`) só para o automático: eventos ao Copiloto (`EventBuilder.minTs` =
   relógio − 30 dias em todos os caminhos: carga, gatilhos, transcrição nova, reenvio dos grupos, grupo que passou a casar,
-  nome novo; grupo sem mensagem recente não leva mais a mais antiga; o `reply_state` não aponta para mensagem antiga);
+  nome novo; exceção: grupo de mentorado sem mensagem recente leva só a mais recente guardada, de qualquer data, para o
+  Copiloto saber que ele existe; o `reply_state` não aponta para mensagem antiga);
   IA (contexto do resumo/sugestões, alertas: já 7 dias); "Para responder" e contadores (conversa cujo contato falou por
   último há mais de 30 dias, pelo horário do WhatsApp, não espera resposta; "Respondido no grupo" só olha a janela);
   download automático e transcrição dos áudios (pelo horário do WhatsApp da ingestão).

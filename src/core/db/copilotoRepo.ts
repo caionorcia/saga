@@ -186,11 +186,14 @@ export class CopilotoRepo {
   }
 
   /**
-   * As mensagens da carga: as dos últimos dias. v0.9.0 (contrato v1.3): mensagem mais antiga nunca vai ao Copiloto (antes,
-   * grupo sem nenhuma nesse tempo levava a mais recente guardada, de quando fosse).
+   * As mensagens da carga: as dos últimos dias. Grupo sem nenhuma nesse tempo leva a mais recente guardada (de quando for),
+   * para o Copiloto saber que o grupo existe (exceção mantida no contrato v1.3); o resto mais antigo nunca vai.
    */
   backfillMessageIds(jid: string, since: number): string[] {
-    return (this.db.prepare('SELECT id FROM messages WHERE jid = ? AND ts >= ? ORDER BY ts, rowid').all(jid, since) as Row[]).map((r) => r.id as string)
+    const ids = (this.db.prepare('SELECT id FROM messages WHERE jid = ? AND ts >= ? ORDER BY ts, rowid').all(jid, since) as Row[]).map((r) => r.id as string)
+    if (ids.length > 0 || !jid.endsWith('@g.us')) return ids
+    const last = this.latestMessageId(jid)
+    return last ? [last] : []
   }
 
   /** A mensagem mais recente guardada da conversa (id), ou null. */

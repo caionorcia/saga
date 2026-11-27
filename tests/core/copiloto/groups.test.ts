@@ -128,16 +128,13 @@ describe('v0.8.1: grupo que passa a ser de mentorado depois da carga inicial', (
     expect(groupMsgs(G_ANA).map((e: any) => e.id)).toEqual([messageEventId(G_ANA, m.id)])
   })
 
-  it('v0.9.0 (contrato v1.3): grupo sem mensagem nos últimos 30 dias não manda nenhuma mensagem (nem a mais recente)', async () => {
+  it('grupo sem mensagem nos últimos 30 dias: vai só a mais recente guardada, para o Copiloto saber que ele existe', async () => {
     ctx.repo.setGroupMembers(G_ANA, [ANA])
     ctx.add(G_ANA, { fromMe: true, text: 'bem antiga', minutesAgo: 80 * 24 * 60 })
-    ctx.add(G_ANA, { fromMe: true, text: 'antiga', minutesAgo: 45 * 24 * 60 })
+    const latest = ctx.add(G_ANA, { fromMe: true, text: 'antiga', minutesAgo: 45 * 24 * 60 })
     await enable()
     await drain()
-    expect(groupMsgs(G_ANA)).toEqual([])
-    expect(sync.repairGroupsNow(new Set(roster))).toMatchObject({ groups: 0, messages: 0, empty: 1 })
-    await drain()
-    expect(groupMsgs(G_ANA)).toEqual([])
+    expect(groupMsgs(G_ANA).map((e: any) => e.id)).toEqual([messageEventId(G_ANA, latest.id)])
   })
 
   it('grupo sem mentorado nunca entra (nem na conferência, nem no reenvio)', async () => {

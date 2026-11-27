@@ -318,8 +318,8 @@ Ao desligar, a fila deste computador é apagada. O que já foi enviado continua 
 #### Grupos e nomes dos grupos (versão 0.8.1)
 
 - Um grupo entra no Copiloto assim que o SagaZap fica sabendo que um mentorado participa dele (também num grupo novo,
-  em poucos segundos depois da sua primeira mensagem lá), com os últimos 30 dias. (Desde a 0.9.0, grupo sem mensagem nos
-  últimos 30 dias não manda nenhuma: o Copiloto recebe só os últimos 30 dias.)
+  em poucos segundos depois da sua primeira mensagem lá), com os últimos 30 dias. Grupo sem mensagem nos últimos 30 dias
+  leva só a mensagem mais recente que estiver neste computador (o resto antigo fica só aqui).
 - Depois de atualizar para a 0.8.1, o SagaZap reenvia uma vez o histórico dos grupos dos mentorados (sozinho, uns
   minutos depois de conectar). Em **Configurações › Copiloto da Saga** aparece a linha **Grupos: X grupo(s) e Y
   mensagem(ns) colocados na fila para o Copiloto (Z grupo(s) sem nenhuma mensagem neste computador)**; os pendentes

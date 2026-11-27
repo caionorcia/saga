@@ -172,8 +172,18 @@ export class EventBuilder {
     return this.deps.minTs === undefined || ts >= this.deps.minTs
   }
 
+  /**
+   * Exceção pedida pelo mentor (follow-ups precisam do grupo no Copiloto): grupo de mentorado sem mensagem nos últimos 30
+   * dias manda a mensagem mais recente guardada (de quando for). Só essa; o resto mais antigo fica só aqui.
+   */
+  private latestOfIdleGroup(m: MessageRow): boolean {
+    if (!m.jid.endsWith('@g.us')) return false
+    const latest = this.deps.repo.copiloto.latestMessageId(m.jid)
+    return latest === m.id
+  }
+
   message(m: MessageRow): BuiltEvent | null {
-    if (!this.inWindow(m.ts)) return null
+    if (!this.inWindow(m.ts) && !this.latestOfIdleGroup(m)) return null
     const chat = this.chat(m.jid)
     if (!chat) return null
     const repo = this.deps.repo
