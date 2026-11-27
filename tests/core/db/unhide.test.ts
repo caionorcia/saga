@@ -20,14 +20,14 @@ describe('migração v11 (v0.3.0): sem conversas escondidas', () => {
     // volta ao esquema v10: tira as colunas da v12 para a migração poder rodar de novo
     db.exec('ALTER TABLE analyses DROP COLUMN chosen_index; ALTER TABLE analyses DROP COLUMN chosen_reply_id; ALTER TABLE approved_replies DROP COLUMN rejected_json')
     db.exec('DROP TRIGGER messages_fts_ai; DROP TRIGGER messages_fts_au; DROP TRIGGER messages_fts_ad; DROP TABLE messages_fts; DROP INDEX idx_messages_ts')
-    db.exec('DROP TRIGGER copiloto_group_name_au; DROP TABLE group_subjects; DROP TRIGGER copiloto_send_au; DROP TRIGGER copiloto_msg_ai; DROP TRIGGER copiloto_msg_au; DROP TRIGGER copiloto_alert_ai; DROP TRIGGER copiloto_alert_au; DROP TRIGGER copiloto_afb_ai; DROP TRIGGER copiloto_afb_au; DROP TRIGGER copiloto_rc_ai; DROP TRIGGER copiloto_rc_au; DROP TRIGGER copiloto_rf_ai; DROP TRIGGER copiloto_rf_au; DROP TRIGGER copiloto_analysis_ai; DROP TRIGGER copiloto_analysis_au; DROP TABLE copiloto_outbox; DROP TABLE copiloto_dirty; DROP TABLE copiloto_chats')
+    db.exec('DROP TRIGGER copiloto_msg_sender_au; DROP TRIGGER copiloto_group_name_au; DROP TABLE group_subjects; DROP TRIGGER copiloto_send_au; DROP TRIGGER copiloto_msg_ai; DROP TRIGGER copiloto_msg_au; DROP TRIGGER copiloto_alert_ai; DROP TRIGGER copiloto_alert_au; DROP TRIGGER copiloto_afb_ai; DROP TRIGGER copiloto_afb_au; DROP TRIGGER copiloto_rc_ai; DROP TRIGGER copiloto_rc_au; DROP TRIGGER copiloto_rf_ai; DROP TRIGGER copiloto_rf_au; DROP TRIGGER copiloto_analysis_ai; DROP TRIGGER copiloto_analysis_au; DROP TABLE copiloto_outbox; DROP TABLE copiloto_dirty; DROP TABLE copiloto_chats')
     db.exec('ALTER TABLE messages DROP COLUMN wa_key_json; DROP TABLE sends')
     db.exec('PRAGMA user_version = 10')
     db.close()
 
     db = openDb(file)
     repo = new Repo(db)
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(22)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(23)
     expect(repo.listContacts({ includeHidden: true }).filter((c) => c.hidden)).toEqual([])
     expect(JSON.parse(repo.getSetting('migration.unhidden_jids')!).sort()).toEqual(['a@s.whatsapp.net', 'c@s.whatsapp.net'])
     db.close()

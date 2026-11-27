@@ -302,7 +302,8 @@ export class CopilotoRepo {
       this.db
         .prepare(
           `SELECT member_jid AS j FROM group_members WHERE group_jid = ?1
-           UNION SELECT DISTINCT sender_jid FROM messages WHERE jid = ?1 AND sender_jid IS NOT NULL`
+           UNION SELECT DISTINCT sender_jid FROM messages WHERE jid = ?1 AND sender_jid IS NOT NULL
+           UNION SELECT DISTINCT sender_pn FROM messages WHERE jid = ?1 AND sender_pn IS NOT NULL`
         )
         .all(groupJid) as Row[]
     ).map((r) => r.j as string)
@@ -314,7 +315,8 @@ export class CopilotoRepo {
       this.db
         .prepare(
           `SELECT group_jid AS g FROM group_members WHERE member_jid IN (SELECT value FROM json_each(?1))
-           UNION SELECT DISTINCT jid FROM messages WHERE sender_jid IN (SELECT value FROM json_each(?1)) AND jid LIKE '%@g.us'`
+           UNION SELECT DISTINCT jid FROM messages WHERE sender_jid IN (SELECT value FROM json_each(?1)) AND jid LIKE '%@g.us'
+           UNION SELECT DISTINCT jid FROM messages WHERE sender_pn IN (SELECT value FROM json_each(?1)) AND jid LIKE '%@g.us'`
         )
         .all(JSON.stringify(memberJids)) as Row[]
     ).map((r) => r.g as string)

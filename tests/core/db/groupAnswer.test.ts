@@ -241,6 +241,29 @@ describe('participantes: @lid × telefone', () => {
     expect(contact(ANA_LID).replyDecision?.by).toBe('group')
   })
 
+  it('v0.10.1: quem mandou no grupo pelo @lid com o telefone guardado na mensagem (sem participantes conhecidos) casa com a conversa individual', () => {
+    repo.upsertContact({ jid: G_TURMA, pushName: 'Turma 3', isGroup: true })
+    repo.setGroupMembers(G_TURMA, [], 3)
+    add(G_TURMA, { minutesAgo: 90, senderJid: ANA_LID, senderPn: ANA, text: 'oi' })
+    add(ANA, { minutesAgo: 60 })
+    add(G_TURMA, { minutesAgo: 30, fromMe: true })
+    expect(contact(ANA).replyDecision).toMatchObject({ by: 'group', group: { jid: G_TURMA } })
+  })
+
+  it('v0.10.1: o par @lid → telefone aprendido depois: guardado e aplicado às mensagens desse @lid (e "Respondido no grupo")', () => {
+    repo.upsertContact({ jid: G_TURMA, pushName: 'Turma 3', isGroup: true })
+    repo.setGroupMembers(G_TURMA, [], 3)
+    add(G_TURMA, { minutesAgo: 90, senderJid: ANA_LID, text: 'oi' })
+    add(ANA, { minutesAgo: 60 })
+    add(G_TURMA, { minutesAgo: 30, fromMe: true })
+    expect(contact(ANA).replyDecision?.by).not.toBe('group')
+    repo.linkLidPhone(ANA_LID, ANA)
+    expect(repo.pnForLid(ANA_LID)).toBe(ANA)
+    expect(repo.listMessages(G_TURMA)[0].senderPn).toBe(ANA)
+    expect(contact(ANA).replyDecision).toMatchObject({ by: 'group', group: { jid: G_TURMA } })
+    expect(repo.unresolvedLids()).toEqual([])
+  })
+
   it('setGroupMembers troca a lista; `false` quando nada mudou', () => {
     expect(repo.setGroupMembers(G_ANA, [ANA, ANA_LID])).toBe(true)
     expect(repo.setGroupMembers(G_ANA, [ANA_LID, ANA])).toBe(false)

@@ -325,6 +325,56 @@ describe('WhatsAppClient', () => {
         expect(repo.listContacts({ includeHidden: true }).map((c) => c.jid)).toEqual([GRP])
       })
 
+      describe('v0.10.1: remetente @lid dos grupos', () => {
+        const LID = '808080808080@lid'
+        const PN = '5547911112222@s.whatsapp.net'
+        const senderPnOf = (id: string) => repo.getMessage(id)?.senderPn ?? null
+
+        it('reproduz o defeito: histórico do @lid sem telefone, depois a mensagem ao vivo com o telefone só em participantAlt', async () => {
+          await emit('messaging-history.set', {
+            chats: [],
+            contacts: [],
+            messages: [wamsg({ id: 'h1', jid: GRP, participant: `${LID.replace('@', ':4@')}`, ts: NOW - 5000 })]
+          })
+          // antes da v0.10.1: o @lid ficava sem telefone para sempre (o par do participantAlt não era aprendido)
+          expect(senderPnOf('h1')).toBeNull()
+          await emit('messages.upsert', { type: 'notify', messages: [wamsg({ id: 'l1', jid: GRP, participant: LID, participantAlt: PN, ts: NOW - 1000 })] })
+          expect(senderPnOf('l1')).toBe(PN)
+          expect(senderPnOf('h1')).toBe(PN)
+          expect(client.pnForLid(LID)).toBe(PN)
+          // o par fica guardado: outra execução do app sabe o telefone sem esperar o WhatsApp
+          expect(repo.pnForLid(LID)).toBe(PN)
+        })
+
+        it('a mesma mensagem chega de novo com participantAlt (já guardada sem telefone): o telefone entra nela', async () => {
+          await emit('messaging-history.set', { chats: [], contacts: [], messages: [wamsg({ id: 'h2', jid: GRP, participant: LID, ts: NOW - 5000 })] })
+          expect(senderPnOf('h2')).toBeNull()
+          await emit('messages.upsert', { type: 'append', messages: [wamsg({ id: 'h2', jid: GRP, participant: LID, participantAlt: PN, ts: NOW - 5000 })] })
+          expect(senderPnOf('h2')).toBe(PN)
+          expect(repo.listMessages(GRP)).toHaveLength(1)
+        })
+
+        it('o armazenamento local do Baileys (sem rede) resolve os @lid guardados sem telefone ao conectar', async () => {
+          await emit('messaging-history.set', { chats: [], contacts: [], messages: [wamsg({ id: 'h3', jid: GRP, participant: LID, ts: NOW - 5000 })] })
+          expect(senderPnOf('h3')).toBeNull()
+          last().signalRepository.lidMapping.getPNForLID.mockImplementation(async (l: string) => (l === LID ? PN.replace('@', ':0@') : null))
+          await emit('connection.update', { connection: 'open' })
+          expect(senderPnOf('h3')).toBe(PN)
+          expect(repo.pnForLid(LID)).toBe(PN)
+        })
+
+        it('contato com id e lid, e lidPnMappings do histórico: os pares ficam guardados', async () => {
+          await emit('messaging-history.set', {
+            chats: [],
+            contacts: [{ id: '5511955556666@s.whatsapp.net', lid: '919191@lid', notify: 'Contato' }],
+            lidPnMappings: [{ lid: '929292:3@lid', pn: '5511966667777:2@s.whatsapp.net' }],
+            messages: []
+          })
+          expect(repo.pnForLid('919191@lid')).toBe('5511955556666@s.whatsapp.net')
+          expect(repo.pnForLid('929292@lid')).toBe('5511966667777@s.whatsapp.net')
+        })
+      })
+
       it('áudio de grupo: prioridade 0, mesmo aguardando; 10 se me menciona ou cita minha mensagem (e é recente)', async () => {
         await emit('messaging-history.set', {
           chats: [],

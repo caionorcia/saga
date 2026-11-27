@@ -135,6 +135,8 @@ export interface MessageRow {
   transcriptStatus: TranscriptStatus | null
   /** grupo: quem mandou (null nas minhas e em conversas individuais) */
   senderJid: string | null
+  /** v0.10.1, grupo: o telefone (`@s.whatsapp.net`) de quem mandou, quando conhecido (mesmo que `senderJid` seja @lid) */
+  senderPn?: string | null
   /** grupo: o pushName de quem mandou, como chegou na mensagem */
   senderName: string | null
   /**
@@ -331,7 +333,8 @@ const GROUP_ANSWER_SQL = (cjid: string, since: string) => `NULLIF(MAX(
              WHERE gm.jid IN (SELECT gs.group_jid FROM group_sizes gs
                                WHERE gs.members <= ${GROUP_ANSWER_MAX_MEMBERS} AND gs.group_jid LIKE '%@g.us'
                                  AND gs.group_jid IN (SELECT g.group_jid FROM group_members g WHERE g.member_jid = ${cjid}
-                                                      UNION SELECT s.jid FROM messages s WHERE s.sender_jid = ${cjid}))
+                                                      UNION SELECT s.jid FROM messages s WHERE s.sender_jid = ${cjid}
+                                                      UNION SELECT p.jid FROM messages p WHERE p.sender_pn = ${cjid}))
                AND gm.from_me = 1 AND gm.ts > ${since}
              ORDER BY gm.ts DESC LIMIT 1), ''),
   COALESCE((SELECT gm.ts || ' ' || gm.jid FROM message_targets t INDEXED BY idx_message_targets_target CROSS JOIN messages gm ON gm.id = t.msg_id
@@ -388,13 +391,29 @@ function toMessage(r: Row): MessageRow {
     transcript: r.transcript,
     transcriptStatus: r.transcript_status,
     senderJid: r.sender_jid ?? null,
+    senderPn: r.sender_pn ?? null,
     senderName: r.sender_name ?? null,
     senderLabel: r.sender_jid
-      ? (r.s_custom ?? (r.s_rank >= NAME_RANK.profile ? r.s_push : null) ?? r.sender_name ?? r.s_push ?? formatPhone(r.sender_jid))
+      ? (r.s_custom ?? (r.s_rank >= NAME_RANK.profile ? r.s_push : null) ?? r.sender_name ?? r.s_push ?? formatPhone(r.sender_pn ?? r.sender_jid))
       : null,
     mentionsMe: r.mentions_me === 1,
     waKeyJson: r.wa_key_json ?? null
   }
+}
+
+/** v0.10.1: o telefone de quem mandou a mensagem de grupo (o informado, ou o remetente quando ele já é telefone). */
+function senderPnOf(m: NormalizedMessage): string | null {
+  if (m.senderPn) return m.senderPn
+  const j = m.senderJid
+  return j && j.endsWith('@s.whatsapp.net') ? j : null
+}
+
+/**
+ * v0.10.1: quem mandou a mensagem de grupo, pela melhor forma conhecida: o telefone (`sender_pn`), senão como chegou
+ * (telefone ou @lid). null nas minhas e nas individuais.
+ */
+export function senderOf(m: Pick<MessageRow, 'senderJid' | 'senderPn'>): string | null {
+  return m.senderPn ?? m.senderJid ?? null
 }
 
 /** Colunas extras do contato de quem mandou (grupos), para `senderLabel`. */
@@ -723,17 +742,82 @@ export class Repo {
 
   /**
    * v0.8.1: um @lid ganhou telefone. Nos grupos em que ele participa (pela consulta ou por ter mandado mensagem), o
-   * telefone entra como mais uma forma do participante, guardada (o mapa do WhatsApp é só da memória). Quantos grupos.
+   * telefone entra como mais uma forma do participante, guardada. v0.10.1: o par fica guardado (`lid_pn`) e as
+   * mensagens desse @lid ainda sem telefone ganham o `sender_pn` (as dos grupos de mentorados voltam ao Copiloto).
+   * Quantos grupos ganharam a forma nova.
    */
   linkLidPhone(lid: string, pn: string): number {
+    let groups = 0
+    this.inTx(() => {
+      this.saveLidPn(lid, pn)
+      const res = this.db
+        .prepare(
+          `INSERT OR IGNORE INTO group_members(group_jid, member_jid)
+           SELECT group_jid, ?2 FROM group_members WHERE member_jid = ?1
+           UNION SELECT DISTINCT jid, ?2 FROM messages WHERE sender_jid = ?1 AND jid LIKE '%@g.us'`
+        )
+        .run(lid, pn)
+      groups = Number(res.changes)
+      this.db.prepare('UPDATE messages SET sender_pn = ?2 WHERE sender_jid = ?1 AND sender_pn IS NULL').run(lid, pn)
+    })
+    return groups
+  }
+
+  /** v0.10.1: guarda o par @lid → telefone (os dois sem dispositivo). `true` se mudou. */
+  saveLidPn(lid: string, pn: string): boolean {
     const res = this.db
       .prepare(
-        `INSERT OR IGNORE INTO group_members(group_jid, member_jid)
-         SELECT group_jid, ?2 FROM group_members WHERE member_jid = ?1
-         UNION SELECT DISTINCT jid, ?2 FROM messages WHERE sender_jid = ?1 AND jid LIKE '%@g.us'`
+        `INSERT INTO lid_pn(lid, pn, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(lid) DO UPDATE SET pn = excluded.pn, updated_at = excluded.updated_at WHERE lid_pn.pn <> excluded.pn`
       )
-      .run(lid, pn)
-    return Number(res.changes)
+      .run(lid, pn, this.clock.now())
+    return Number(res.changes) > 0
+  }
+
+  /** v0.10.1: o telefone guardado para um @lid (sem dispositivo), ou null. */
+  pnForLid(lid: string): string | null {
+    const r = this.db.prepare('SELECT pn FROM lid_pn WHERE lid = ?').get(lid) as Row | undefined
+    return r ? (r.pn as string) : null
+  }
+
+  /** v0.10.1: todos os pares guardados (carregados na memória do cliente ao iniciar). */
+  lidPnPairs(): Array<{ lid: string; pn: string }> {
+    return (this.db.prepare('SELECT lid, pn FROM lid_pn').all() as Row[]).map((r) => ({ lid: r.lid as string, pn: r.pn as string }))
+  }
+
+  /** v0.10.1: os @lid de quem mandou mensagem (ou participa de grupo) ainda sem telefone guardado. */
+  unresolvedLids(limit = 5000): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT j FROM (SELECT DISTINCT sender_jid AS j FROM messages WHERE sender_jid LIKE '%@lid' AND sender_pn IS NULL
+                          UNION SELECT member_jid FROM group_members WHERE member_jid LIKE '%@lid')
+            WHERE j NOT IN (SELECT lid FROM lid_pn) ORDER BY j LIMIT ?`
+        )
+        .all(limit) as Row[]
+    ).map((r) => r.j as string)
+  }
+
+  /**
+   * v0.10.1: o `sender_pn` das mensagens guardadas pelo que já se sabe (o remetente que já é telefone; o par @lid →
+   * telefone guardado). Quantas mensagens ganharam o telefone.
+   */
+  backfillSenderPn(): number {
+    let n = 0
+    this.inTx(() => {
+      n += Number(
+        this.db.prepare("UPDATE messages SET sender_pn = sender_jid WHERE sender_pn IS NULL AND from_me = 0 AND sender_jid LIKE '%@s.whatsapp.net'").run().changes
+      )
+      n += Number(
+        this.db
+          .prepare(
+            `UPDATE messages SET sender_pn = (SELECT pn FROM lid_pn WHERE lid = messages.sender_jid)
+              WHERE sender_pn IS NULL AND from_me = 0 AND sender_jid LIKE '%@lid' AND sender_jid IN (SELECT lid FROM lid_pn)`
+          )
+          .run().changes
+      )
+    })
+    return n
   }
 
   private inTx(fn: () => void): void {
@@ -973,7 +1057,7 @@ export class Repo {
   lastMessage(jid: string): MessageRow | null {
     const r = this.db
       .prepare(
-        `SELECT m.*, ${SENDER_COLS} FROM messages m LEFT JOIN contacts sc ON sc.jid = m.sender_jid
+        `SELECT m.*, ${SENDER_COLS} FROM messages m LEFT JOIN contacts sc ON sc.jid = COALESCE(m.sender_pn, m.sender_jid)
           WHERE m.jid = ? ORDER BY m.ts DESC, m.rowid DESC LIMIT 1`
       )
       .get(jid) as Row | undefined
@@ -987,7 +1071,7 @@ export class Repo {
   latestContactRun(jid: string, limit: number): { messages: MessageRow[]; more: boolean } {
     const rows = this.db
       .prepare(
-        `SELECT m.*, ${SENDER_COLS} FROM messages m LEFT JOIN contacts sc ON sc.jid = m.sender_jid
+        `SELECT m.*, ${SENDER_COLS} FROM messages m LEFT JOIN contacts sc ON sc.jid = COALESCE(m.sender_pn, m.sender_jid)
           WHERE m.jid = ?1 AND m.from_me = 0
             AND m.ts > COALESCE((SELECT MAX(me.ts) FROM messages me WHERE me.jid = ?1 AND me.from_me = 1), -1)
           ORDER BY m.ts DESC, m.rowid DESC LIMIT ?2`
@@ -1038,8 +1122,8 @@ export class Repo {
   insertMessage(m: NormalizedMessage): boolean {
     const res = this.db
       .prepare(
-        `INSERT OR IGNORE INTO messages(id, jid, from_me, ts, kind, text, media_key_json, duration_sec, sender_jid, sender_name, mentions_me, wa_key_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO messages(id, jid, from_me, ts, kind, text, media_key_json, duration_sec, sender_jid, sender_name, mentions_me, wa_key_json, sender_pn)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         m.id,
@@ -1053,9 +1137,13 @@ export class Repo {
         m.senderJid ?? null,
         m.senderName ?? null,
         m.mentionsMe ? 1 : 0,
-        m.waKeyJson ?? null
+        m.waKeyJson ?? null,
+        m.fromMe ? null : (senderPnOf(m) ?? null)
       )
     const inserted = Number(res.changes) > 0
+    // v0.10.1: a mesma mensagem chegou de novo com o telefone de quem mandou (antes guardada só com o @lid)
+    const pn = m.fromMe ? null : senderPnOf(m)
+    if (!inserted && pn) this.db.prepare('UPDATE messages SET sender_pn = ? WHERE id = ? AND jid = ? AND sender_pn IS NULL').run(pn, m.id, m.jid)
     if (inserted && m.fromMe && m.targets?.length) {
       const ins = this.db.prepare('INSERT OR IGNORE INTO message_targets(msg_id, target_jid) VALUES (?, ?)')
       for (const t of new Set(m.targets)) ins.run(m.id, t)
@@ -1068,7 +1156,7 @@ export class Repo {
     const rows = this.db
       .prepare(
         `SELECT m.*, ${SENDER_COLS} FROM (SELECT rowid AS rid, * FROM messages WHERE jid = ? ORDER BY ts DESC, rowid DESC LIMIT ?) m
-         LEFT JOIN contacts sc ON sc.jid = m.sender_jid
+         LEFT JOIN contacts sc ON sc.jid = COALESCE(m.sender_pn, m.sender_jid)
          ORDER BY m.ts ASC, m.rid ASC`
       )
       .all(jid, limit ?? -1) as Row[]
@@ -1140,7 +1228,7 @@ export class Repo {
 
   getMessage(id: string): MessageRow | null {
     const r = this.db
-      .prepare(`SELECT m.*, ${SENDER_COLS} FROM messages m LEFT JOIN contacts sc ON sc.jid = m.sender_jid WHERE m.id = ?`)
+      .prepare(`SELECT m.*, ${SENDER_COLS} FROM messages m LEFT JOIN contacts sc ON sc.jid = COALESCE(m.sender_pn, m.sender_jid) WHERE m.id = ?`)
       .get(id) as Row | undefined
     return r ? toMessage(r) : null
   }
@@ -1168,13 +1256,13 @@ export class Repo {
     try {
       const rows = this.db
         .prepare(
-          `SELECT m.id, m.jid, m.ts, m.from_me, m.kind, m.text, m.transcript, m.transcript_status, m.sender_jid, m.sender_name,
+          `SELECT m.id, m.jid, m.ts, m.from_me, m.kind, m.text, m.transcript, m.transcript_status, m.sender_jid, m.sender_pn, m.sender_name,
                   ${SENDER_COLS}, c.custom_name AS c_custom, c.push_name AS c_push, c.is_group AS c_group,
                   bm25(messages_fts, 1.0, 0.4) AS rank
              FROM messages_fts
              JOIN messages m ON m.rowid = messages_fts.rowid
              JOIN contacts c ON c.jid = m.jid
-             LEFT JOIN contacts sc ON sc.jid = m.sender_jid
+             LEFT JOIN contacts sc ON sc.jid = COALESCE(m.sender_pn, m.sender_jid)
             WHERE messages_fts MATCH ?1 AND c.hidden = 0
               ${searchWhere}
             ORDER BY rank, m.ts DESC LIMIT ?6`
@@ -1228,7 +1316,7 @@ export class Repo {
         .prepare(
           `SELECT m.*, ${SENDER_COLS} FROM messages_fts
              JOIN messages m ON m.rowid = messages_fts.rowid
-             LEFT JOIN contacts sc ON sc.jid = m.sender_jid
+             LEFT JOIN contacts sc ON sc.jid = COALESCE(m.sender_pn, m.sender_jid)
             ${where}
             ORDER BY m.ts DESC, m.rowid DESC LIMIT ?5`
         )

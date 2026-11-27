@@ -13,6 +13,8 @@ export interface NormalizedMessage {
   isGroup?: boolean
   /** grupo: quem mandou (telefone quando conhecido, senão @lid); null nas minhas */
   senderJid?: string | null
+  /** v0.10.1, grupo: o telefone (`@s.whatsapp.net`) de quem mandou, quando conhecido (pela chave ou pelos pares @lid) */
+  senderPn?: string | null
   /** grupo: o pushName de quem mandou */
   senderName?: string | null
   /** grupo: a mensagem me menciona (@) ou cita uma mensagem minha */

@@ -97,6 +97,26 @@ function groupSender(key: WAMessage['key']): string | null {
   return p && isIndividualJid(p) ? stripDevice(p) : null
 }
 
+/**
+ * v0.10.1: o par @lid ↔ telefone que a chave da mensagem traz. No Baileys 7 o endereço alternativo do remetente vem em
+ * `participantAlt` (grupos) ou `remoteJidAlt` (individuais), tirado do `participant_pn`/`sender_pn` (ou `*_lid`) da
+ * mensagem. Nas minhas, o alternativo tende a ser o meu próprio número: não vale. Os dois sem dispositivo; null sem par.
+ */
+export function keyLidPair(key: WAMessage['key'] | null | undefined): { lid: string; pn: string } | null {
+  if (!key || key.fromMe) return null
+  const k = key as WAMessage['key'] & { participantAlt?: string | null; remoteJidAlt?: string | null }
+  const pair = isGroupJid(k.remoteJid) ? [k.participant, k.participantAlt] : [k.remoteJid, k.remoteJidAlt]
+  const lid = pair.find((j): j is string => typeof j === 'string' && j.endsWith(`@${LID_SERVER}`))
+  const pn = pair.map((j) => toPhoneJid(j)).find((j): j is string => !!j)
+  return lid && pn ? { lid: stripDevice(lid), pn } : null
+}
+
+/** v0.10.1: o telefone de quem mandou, se a chave traz (`participantAlt` ou o próprio `participant`). */
+function groupSenderPn(key: WAMessage['key']): string | null {
+  const k = key as WAMessage['key'] & { participantAlt?: string | null }
+  return toPhoneJid(k.participantAlt) ?? toPhoneJid(k.participant)
+}
+
 interface ContextInfoLike {
   mentionedJid?: string[] | null
   participant?: string | null
@@ -184,6 +204,7 @@ export function normalize(msg: WAMessage, opts: NormalizeOptions = {}): Normaliz
     ? {
         isGroup: true,
         senderJid: fromMe ? null : groupSender(key),
+        ...(fromMe ? {} : { senderPn: groupSenderPn(key) }),
         senderName: fromMe ? null : nonEmpty(msg.pushName?.trim()),
         mentionsMe: !fromMe && mentionsMe(content, opts),
         ...(fromMe ? { targets: targetsOf(content) } : {})

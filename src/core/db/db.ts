@@ -21,26 +21,46 @@ import schemaV19 from './schema-v19.sql?raw'
 import schemaV20 from './schema-v20.sql?raw'
 import schemaV21 from './schema-v21.sql?raw'
 import schemaV22 from './schema-v22.sql?raw'
+import schemaV23 from './schema-v23.sql?raw'
 
 /**
- * v19 (v0.8.0): colunas novas com `ALTER TABLE ... ADD COLUMN`, que o SQLite não aceita duas vezes. Cada linha do
- * arquivo só roda se a coluna ainda não existe (um banco que voltou o `user_version` migra de novo sem erro).
+ * v19 (v0.8.0), v23 (v0.10.1): colunas novas com `ALTER TABLE ... ADD COLUMN`, que o SQLite não aceita duas vezes. Cada
+ * linha do arquivo só roda se a coluna ainda não existe (um banco que voltou o `user_version` migra de novo sem erro).
  */
-function migrateV19(db: DatabaseSync): void {
-  for (const raw of schemaV19.replace(/^\s*--.*$/gm, '').split(';')) {
-    const stmt = raw.trim()
-    if (!stmt) continue
-    const m = /^ALTER TABLE (\w+) ADD COLUMN (\w+)/i.exec(stmt)
-    if (m) {
-      const cols = db.prepare(`PRAGMA table_info(${m[1]})`).all() as Array<{ name: string }>
-      if (cols.some((c) => c.name === m[2])) continue
+function idempotentAlters(sql: string): (db: DatabaseSync) => void {
+  return (db) => {
+    for (const raw of splitStatements(sql)) {
+      const stmt = raw.trim()
+      if (!stmt) continue
+      const m = /^ALTER TABLE (\w+) ADD COLUMN (\w+)/i.exec(stmt)
+      if (m) {
+        const cols = db.prepare(`PRAGMA table_info(${m[1]})`).all() as Array<{ name: string }>
+        if (cols.some((c) => c.name === m[2])) continue
+      }
+      db.exec(stmt)
     }
-    db.exec(stmt)
   }
 }
 
+/** Divide em comandos pelo `;`, sem cortar o corpo de um gatilho (`BEGIN ... END;`). Comentários `--` saem. */
+function splitStatements(sql: string): string[] {
+  const out: string[] = []
+  let cur = ''
+  for (const part of sql.replace(/^\s*--.*$/gm, '').split(';')) {
+    cur += `${part};`
+    if (/\bBEGIN\b/i.test(cur) && !/\bEND\s*;$/i.test(cur.trim())) continue
+    out.push(cur.slice(0, -1))
+    cur = ''
+  }
+  if (cur.trim()) out.push(cur.slice(0, -1))
+  return out
+}
+
+const migrateV19 = idempotentAlters(schemaV19)
+const migrateV23 = idempotentAlters(schemaV23)
+
 /** Migrações em ordem; o índice + 1 é o `user_version` resultante. */
-const MIGRATIONS: Array<string | ((db: DatabaseSync) => void)> = [schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, migrateV19, schemaV20, schemaV21, schemaV22]
+const MIGRATIONS: Array<string | ((db: DatabaseSync) => void)> = [schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, migrateV19, schemaV20, schemaV21, schemaV22, migrateV23]
 
 export function openDb(file: string | ':memory:'): DatabaseSync {
   const db = new DatabaseSync(file)

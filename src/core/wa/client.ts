@@ -24,7 +24,7 @@ import type { RateLimiter } from '../queue/limiter'
 import { DeferJobError, type JobQueue } from '../queue/queue'
 import type { NormalizedMessage } from '../types'
 import { useAtomicAuthState, type AtomicAuthState } from './authState'
-import { isGroupJid, normalize, participantJids, stripDevice, toMs, toPhoneJid, type ParticipantLike } from './normalize'
+import { isGroupJid, keyLidPair, normalize, participantJids, stripDevice, toMs, toPhoneJid, type ParticipantLike } from './normalize'
 import { ReconnectPolicy, classifyDisconnect } from './reconnect'
 import { WaVersionResolver, formatWaVersion, type WaVersionFetcher } from './version'
 import {
@@ -71,6 +71,7 @@ export type ConnState =
 export interface WaSocket {
   ev: { on(event: string, listener: (arg: any) => void): unknown }
   end(error: Error | undefined): unknown
+  /** só o armazenamento local de pares @lid → telefone (leitura das chaves no disco; nenhuma consulta ao WhatsApp) */
   signalRepository?: { lidMapping?: { getPNForLID(lid: string): Promise<string | null> } }
   /** só leitura (uma consulta IQ): os grupos de que o mentor participa, com o assunto e os participantes. Sempre pela fila. */
   groupFetchAllParticipating?(): Promise<Record<string, { id?: string; subject?: string | null; participants?: ParticipantLike[] | null }>>
@@ -354,6 +355,12 @@ export class WhatsAppClient extends EventEmitter {
     this.hasFreeSpace = deps.hasFreeSpace ?? hasFreeSpace
     this.versions = new WaVersionResolver(deps.repo, deps.clock, deps.fetchWaVersion ?? defaultFetchWaVersion)
     this.baileysLogger = makeBaileysLogger(deps.diag)
+    // v0.10.1: os pares @lid → telefone já aprendidos (guardados): valem desde o início, antes de o WhatsApp conectar
+    try {
+      for (const { lid, pn } of deps.repo.lidPnPairs()) this.lidToPn.set(lid, pn)
+    } catch {
+      // banco sem os pares: aprende de novo
+    }
     deps.queue.register('download_audio', (p, signal) => this.downloadAudio(p, signal))
     deps.queue.register('fetch_profile', (p) => this.fetchProfile(p))
     // um envio ainda em andamento (mesmo depois do prazo do job) segura o próximo: nunca dois ao mesmo tempo
@@ -697,6 +704,13 @@ export class WhatsAppClient extends EventEmitter {
     // grava as credenciais atuais antes de copiar: o backup sempre reflete uma sessão que abriu
     await this.auth?.saveCreds()
     await this.auth?.backup()
+    // v0.10.1: remetentes @lid guardados sem telefone: o armazenamento local do Baileys pode já saber (sem rede)
+    try {
+      await this.resolveStoredLids()
+    } catch {
+      // nunca atrapalha a conexão
+    }
+    if (gen !== this.gen || !this.running) return
     if (this.qrThisSocket) {
       // v0.8.3: aparelho vinculado agora (primeira vez ou de novo): o histórico vai chegar. Os grupos (nomes e
       // participantes) são consultados de novo pela fila, uma vez, e o serviço segura o envio automático dos follow-ups
@@ -1028,9 +1042,49 @@ export class WhatsAppClient extends EventEmitter {
     this.requestGroupSubjects(true)
   }
 
-  /** v0.5.0 (Copiloto): o telefone já conhecido para um @lid (só o mapa em memória, sem rede); null se não souber. */
+  /**
+   * v0.5.0 (Copiloto): o telefone já conhecido para um @lid, sem rede; null se não souber. v0.10.1: o mapa da memória e,
+   * depois, os pares guardados no banco (de outra execução do app).
+   */
   pnForLid(lid: string): string | null {
-    return this.lidToPn.get(lid) ?? null
+    const known = this.lidToPn.get(lid)
+    if (known) return known
+    try {
+      const saved = this.deps.repo.pnForLid(lid)
+      if (saved) this.lidToPn.set(lid, saved)
+      return saved
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * v0.10.1: os @lid guardados aqui ainda sem telefone (quem mandou mensagem num grupo, participantes) são procurados no
+   * armazenamento local do Baileys (só leitura das chaves no disco, nenhuma consulta ao WhatsApp). Quantos ganharam telefone.
+   */
+  async resolveStoredLids(): Promise<{ checked: number; resolved: number }> {
+    const store = this.sock?.signalRepository?.lidMapping
+    if (!store) return { checked: 0, resolved: 0 }
+    let lids: string[]
+    try {
+      lids = this.deps.repo.unresolvedLids()
+    } catch {
+      return { checked: 0, resolved: 0 }
+    }
+    let resolved = 0
+    for (const lid of lids) {
+      try {
+        const pn = toPhoneJid(await store.getPNForLID(lid))
+        if (pn) {
+          this.learnLid(lid, pn)
+          resolved++
+        }
+      } catch {
+        // sem mapeamento para este: segue
+      }
+    }
+    if (lids.length) this.diag('wa_lids', `remetentes @lid sem telefone: ${lids.length}; encontrados no armazenamento local: ${resolved}`)
+    return { checked: lids.length, resolved }
   }
 
   /**
@@ -1048,7 +1102,8 @@ export class WhatsAppClient extends EventEmitter {
   /** `@lid` → telefone quando conhecido (mapa do histórico/eventos, depois o armazenamento local do Baileys). */
   private async resolveJid(jid: string): Promise<string> {
     if (!jid.endsWith('@lid')) return jid
-    const known = this.lidToPn.get(jid)
+    // v0.10.1: a memória e os pares guardados no banco
+    const known = this.pnForLid(jid)
     if (known) return known
     try {
       // consulta só o armazenamento local de chaves (sem rede)
@@ -1099,9 +1154,15 @@ export class WhatsAppClient extends EventEmitter {
       const n = normalize(raw, opts)
       if (!n) continue
       if (n.ts > batchMax && n.ts <= bound) batchMax = n.ts
+      // v0.10.1: o par @lid ↔ telefone que a chave traz (participantAlt/remoteJidAlt) fica aprendido e guardado
+      const pair = keyLidPair(raw.key)
+      if (pair && this.lidToPn.get(pair.lid) !== pair.pn) this.learnLid(pair.lid, pair.pn)
       const lid = n.jid
       n.jid = await this.resolveJid(n.jid)
-      if (n.senderJid) n.senderJid = await this.resolveJid(n.senderJid)
+      if (n.senderJid) {
+        n.senderJid = await this.resolveJid(n.senderJid)
+        n.senderPn = n.senderPn ?? toPhoneJid(n.senderJid)
+      }
       // menções e citação das minhas mensagens de grupo: guarda o @lid e o telefone (casa com a conversa individual)
       if (n.targets?.length) {
         const all = new Set(n.targets)

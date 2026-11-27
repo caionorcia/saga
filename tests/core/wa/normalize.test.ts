@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { BufferJSON, type WAMessage } from '@whiskeysockets/baileys'
-import { normalize, isGroupJid, isIndividualJid, toPhoneJid } from '../../../src/core/wa/normalize'
+import { keyLidPair, normalize, isGroupJid, isIndividualJid, toPhoneJid } from '../../../src/core/wa/normalize'
 
 const FIX = join(__dirname, '../../fixtures/wa')
 const load = (name: string): WAMessage => JSON.parse(readFileSync(join(FIX, `${name}.json`), 'utf8'), BufferJSON.reviver)
@@ -60,6 +60,7 @@ describe('normalize', () => {
       waKeyJson: JSON.stringify({ remoteJid: '120363025555555555@g.us', id: 'GRP1', participant: JID }),
       isGroup: true,
       senderJid: JID,
+      senderPn: JID,
       senderName: 'Ana',
       mentionsMe: false
     })
@@ -70,6 +71,25 @@ describe('normalize', () => {
     expect(g({ participant: '999:2@lid', participantAlt: '5511988887777:4@s.whatsapp.net' }).senderJid).toBe('5511988887777@s.whatsapp.net')
     expect(g({ participant: '999:2@lid' }).senderJid).toBe('999@lid')
     expect(g({ participant: '5511988887777:7@s.whatsapp.net' }).senderJid).toBe('5511988887777@s.whatsapp.net')
+    // v0.10.1: o telefone de quem mandou fica à parte (null quando a chave não traz)
+    expect(g({ participant: '999:2@lid', participantAlt: '5511988887777:4@s.whatsapp.net' }).senderPn).toBe('5511988887777@s.whatsapp.net')
+    expect(g({ participant: '999:2@lid' }).senderPn).toBeNull()
+  })
+
+  it('v0.10.1: o par @lid ↔ telefone da chave (participantAlt nos grupos, remoteJidAlt nas individuais; nunca nas minhas)', () => {
+    expect(keyLidPair({ remoteJid: '1203@g.us', id: 'a', participant: '999:2@lid', participantAlt: '5511988887777:4@s.whatsapp.net' })).toEqual({
+      lid: '999@lid',
+      pn: '5511988887777@s.whatsapp.net'
+    })
+    // modo de endereçamento por telefone: o alternativo é o @lid
+    expect(keyLidPair({ remoteJid: '1203@g.us', id: 'a', participant: '5511988887777@s.whatsapp.net', participantAlt: '999@lid' })).toEqual({
+      lid: '999@lid',
+      pn: '5511988887777@s.whatsapp.net'
+    })
+    expect(keyLidPair({ remoteJid: '999@lid', id: 'a', remoteJidAlt: '5511988887777@s.whatsapp.net' })).toEqual({ lid: '999@lid', pn: '5511988887777@s.whatsapp.net' })
+    expect(keyLidPair({ remoteJid: '999@lid', id: 'a', fromMe: true, remoteJidAlt: '5511988887777@s.whatsapp.net' })).toBeNull()
+    expect(keyLidPair({ remoteJid: '1203@g.us', id: 'a', participant: '999@lid' })).toBeNull()
+    expect(keyLidPair(null)).toBeNull()
   })
 
   it('grupo: mensagem minha não tem remetente nem nome; fromMe igual', () => {
