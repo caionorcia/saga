@@ -191,6 +191,21 @@ describe('follow-up do Copiloto no serviço (v0.7.0)', () => {
     return r.preview
   }
 
+  it('v0.11.0: entrada num grupo escolhido da mentoria (group-participants.update) agenda a conferência dele em 2 min', async () => {
+    const G = '120363050000000002@g.us'
+    await startOpen()
+    await withFollowups()
+    expect(service.copiloto.membership.setGroup('grupo_avisos', G)).toBe(true)
+    // a conferência de hoje já foi: só a entrada conta aqui
+    const t = service.copiloto.membership.dailyTarget()!
+    repo.setSetting('copiloto.membershipDaily', JSON.stringify({ ...t, done: true }))
+    expect(service.copiloto.membership.nextAt(clock.now())).toBeNull()
+    await emit('group-participants.update', { id: G, action: 'add', participants: [{ id: '5547911112222@s.whatsapp.net' }] })
+    expect(service.copiloto.membership.nextAt(clock.now())).toBe(clock.now() + 2 * 60_000)
+    // um grupo que não foi escolhido não muda nada
+    expect(service.copiloto.membership.onJoin('120363050000000099@g.us')).toBe(false)
+  })
+
   it('abrir → editar → confirmar → envia uma vez pela fila da avulsa e relata "sent" com o texto editado; nada na memória', async () => {
     await startOpen()
     await withFollowups()

@@ -20,6 +20,7 @@ import type {
 } from './backup'
 import type { PrepareSendInput, PrepareSendResult, SendAvulsaInput, SendKind, SendOptions, SendPreview, SendReplyInput, SendReplyResult, SendStatus, SendView } from './send'
 import type { SendHoursInfo, SendSchedule } from './sendHours'
+import type { MembershipCheckResult, MembershipGroupOption, MembershipKey, MembershipView } from './membership'
 import type { CopilotoCodeResult, CopilotoPatch, CopilotoRepairResult, CopilotoSaveResult, CopilotoStatus, CopilotoTestResult, FollowupOpenResult, FollowupStatus, FollowupView, ConvoAction, ConvoActionResult, ConvoView } from './copiloto'
 import type { AlertQuality, ExportFeedbackOptions, ExportFeedbackResult, RateReason, ReplyDecision, ReplyReason } from './feedback'
 
@@ -363,6 +364,12 @@ export interface SagaApi {
    * ter mais. Só leitura
    */
   copilotoFetchGroupHistory(): Promise<CopilotoRepairResult>
+  /** v0.11.0 (Adendo v1.4): os grupos e comunidades de que a conta participa, por nome (para escolher os da mentoria) */
+  copilotoMembershipGroups(): Promise<MembershipGroupOption[]>
+  /** v0.11.0: o grupo de uma marca da conferência (null = "Não conferir"), guardado pelo JID */
+  copilotoSetMembershipGroup(key: MembershipKey, jid: string | null): Promise<MembershipView>
+  /** v0.11.0: "Conferir agora" (no máximo uma vez a cada 10 min) */
+  copilotoCheckMembership(): Promise<MembershipCheckResult>
 
   // --- follow-up do Copiloto (v0.7.0): a equipe escreve, o mentor confirma cada envio ---
   /** os follow-ups esperando o mentor ou saindo (e, por algumas horas, os enviados e os que não dão para enviar) */
@@ -446,6 +453,9 @@ export const INVOKE_METHODS = [
   'copilotoTest',
   'copilotoRepairGroups',
   'copilotoFetchGroupHistory',
+  'copilotoMembershipGroups',
+  'copilotoSetMembershipGroup',
+  'copilotoCheckMembership',
   'listFollowups',
   'followupOpen',
   'followupDecline',

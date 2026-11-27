@@ -23,6 +23,7 @@ import type {
   SettingsView
 } from '../../../shared/api'
 import { NOT_CONFIRMED_TEXT, SEND_LIMITS, SEND_REFUSAL_TEXT } from '../../../shared/send'
+import { MEMBERSHIP_LIMITS, MEMBERSHIP_SLOTS, MEMBERSHIP_TEXT, type MembershipGroupOption, type MembershipSlotView } from '../../../shared/membership'
 import { COPILOTO_TEXT, CONVO_TEST, FOLLOWUP_LIMITS, FOLLOWUP_REASON, FOLLOWUP_TEXT, isCopilotoUrl, type ConvoView, type CopilotoStatus, type FollowupView } from '../../../shared/copiloto'
 
 export const DEFAULT_STATE: AppState = {
@@ -102,6 +103,8 @@ export interface FakeOptions {
    * `needs` = o mentorado respondeu pedindo algo que só o mentor decide ("Precisa de você"); padrão: nenhum
    */
   convo?: 'draft' | 'needs'
+  /** v0.11.0: Copiloto ligado com três grupos da mentoria escolhidos e o resultado da conferência de hoje; padrão: nenhum */
+  membership?: boolean
 }
 
 const EXTRA_SUGGESTION = 'Combinado! Qualquer coisa me avisa por aqui.'
@@ -575,7 +578,32 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     historyFetch: null,
     searches: { today: 0, lastAt: null },
     followupTestUntil: null,
-    convosActive: 0
+    convosActive: 0,
+    membership: { slots: MEMBERSHIP_SLOTS.map((s) => ({ key: s.key, label: s.label, jid: null, name: null, last: null })), lastAttemptAt: null, lastProblem: null, manualAvailableAt: null }
+  }
+  /** v0.11.0: grupos e comunidades de exemplo (nomes fictícios) para a conferência dos grupos da mentoria */
+  const membershipGroups: MembershipGroupOption[] = [
+    { jid: '120363000000000101@g.us', name: 'Comunidade da Mentoria', kind: 'community' },
+    { jid: '120363000000000102@g.us', name: 'Comunidade da Mentoria › avisos', kind: 'announce' },
+    { jid: '120363000000000103@g.us', name: 'Avisos da Turma', kind: 'group' },
+    { jid: '120363000000000104@g.us', name: 'Dúvidas de tráfego pago', kind: 'group' },
+    { jid: '120363000000000105@g.us', name: 'Turma de lançamento', kind: 'group' },
+    { jid: '120363000000000106@g.us', name: 'Comunidade Avançada', kind: 'community' }
+  ]
+  if (opts.membership) {
+    Object.assign(copiloto, { enabled: true, url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook', hasCode: true, rosterSize: 24, rosterAt: now, chats: 5, lastSentAt: now - 60_000 })
+    const at = new Date(new Date(now).getFullYear(), new Date(now).getMonth(), new Date(now).getDate(), 9, 7).getTime()
+    const pick: Record<string, { jid: string; last: MembershipSlotView['last'] }> = {
+      comunidade_saga: { jid: '120363000000000101@g.us', last: { at, received: 38, matched: 37, marked: 2, capped: false } },
+      grupo_avisos: { jid: '120363000000000103@g.us', last: { at, received: 41, matched: 40, marked: 0, capped: false } },
+      grupo_sos_trafego: { jid: '120363000000000104@g.us', last: { at, received: 12, matched: 12, marked: 1, capped: false } }
+    }
+    for (const s of copiloto.membership.slots) {
+      const p = pick[s.key]
+      if (!p) continue
+      Object.assign(s, { jid: p.jid, name: membershipGroups.find((g) => g.jid === p.jid)?.name ?? null, last: p.last })
+    }
+    copiloto.membership.lastAttemptAt = at
   }
   if (opts.oldHistory) {
     for (const c of demo) for (const m of c.messages) if (m.kind === 'audio' && m.transcriptStatus === null && m.ts < now - 30 * 86_400_000) onDemand.add(m.id)
@@ -989,7 +1017,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       if (patch.password !== undefined) backup.auto.hasPassword = !!patch.password
       return structuredClone(backup)
     },
-    copilotoStatus: async () => ({ ...copiloto }),
+    copilotoStatus: async () => ({ ...copiloto, membership: structuredClone(copiloto.membership) }),
     copilotoSave: async (patch) => {
       record('copilotoSave', [patch], undefined)
       if (patch.url !== undefined) {
@@ -1020,6 +1048,24 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       if (!copiloto.enabled) return { ok: false, message: COPILOTO_TEXT.historyOff }
       copiloto.historyFetch = { state: 'running', startedAt: Date.now(), finishedAt: null, groups: 4, done: 1, requests: 3, received: 120, noAnchor: 1, capped: false }
       return { ok: true, status: { ...copiloto } }
+    },
+    copilotoMembershipGroups: async () => membershipGroups.map((g) => ({ ...g })),
+    copilotoSetMembershipGroup: async (key, jid) => {
+      record('copilotoSetMembershipGroup', [key, jid], undefined)
+      const s = copiloto.membership.slots.find((x) => x.key === key)
+      if (s && s.jid !== jid) Object.assign(s, { jid, name: membershipGroups.find((g) => g.jid === jid)?.name ?? null, last: null })
+      return structuredClone(copiloto.membership)
+    },
+    copilotoCheckMembership: async () => {
+      record('copilotoCheckMembership', [], undefined)
+      if (!copiloto.enabled) return { ok: false, message: MEMBERSHIP_TEXT.off }
+      if (!copiloto.membership.slots.some((s) => s.jid)) return { ok: false, message: MEMBERSHIP_TEXT.none }
+      const t = Date.now()
+      if (copiloto.membership.manualAvailableAt && copiloto.membership.manualAvailableAt > t) {
+        return { ok: false, message: MEMBERSHIP_TEXT.wait(Math.ceil((copiloto.membership.manualAvailableAt - t) / 60_000)) }
+      }
+      copiloto.membership.manualAvailableAt = t + MEMBERSHIP_LIMITS.manualEveryMs
+      return { ok: true, view: structuredClone(copiloto.membership) }
     },
     copilotoGenerateCode: async () => {
       record('copilotoGenerateCode', [], undefined)
@@ -1145,7 +1191,7 @@ export async function installFakeSaga(): Promise<void> {
   if (patch.conn === 'waiting_retry' && patch.retryAt === undefined) patch.retryAt = Date.now() + 2 * 60_000
   const t = params.get('theme')
   const theme = t === 'light' || t === 'dark' || t === 'system' ? t : undefined
-  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside', followups: params.get('followups') !== '0', autoFollowups: params.get('auto') === '1', oldHistory: params.get('old') === '1', ...(params.get('convo') === 'draft' || params.get('convo') === 'needs' ? { convo: params.get('convo') as 'draft' | 'needs' } : {}) })
+  const ctl = createFakeSaga({ state: patch, aiDelayMs: 600, theme, outsideHours: params.get('hours') === 'outside', followups: params.get('followups') !== '0', autoFollowups: params.get('auto') === '1', oldHistory: params.get('old') === '1', membership: params.get('membership') === '1', ...(params.get('convo') === 'draft' || params.get('convo') === 'needs' ? { convo: params.get('convo') as 'draft' | 'needs' } : {}) })
   window.saga = ctl.api
   window.__sagaFake = ctl
 }

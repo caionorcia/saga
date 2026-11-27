@@ -74,6 +74,7 @@ import {
 } from '../shared/copiloto'
 import { followupView, type FollowupRow } from './db/followupRepo'
 import { shortReason } from './copiloto/followups'
+import type { MembershipCheckResult, MembershipGroupOption, MembershipKey, MembershipView } from '../shared/membership'
 import { FollowupAutoSender } from './copiloto/autoSend'
 import { ConvoEngine, type ConvoDispatch } from './copiloto/convo'
 import { draftConvoMessage, type ConvoPromptInput } from './ai/convoPrompt'
@@ -117,7 +118,7 @@ const UNHIDDEN_KEY = 'migration.unhidden_jids'
 
 /** O que o serviço usa do cliente do WhatsApp (o real ou um falso nos testes / modo SAGA_FAKE_WA). */
 export interface WaClientLike {
-  on(event: 'qr' | 'status' | 'message' | 'disk' | 'contacts' | 'send' | 'membership' | 'paired' | 'history', listener: (arg: any) => void): unknown
+  on(event: 'qr' | 'status' | 'message' | 'disk' | 'contacts' | 'send' | 'membership' | 'paired' | 'history' | 'participantsAdded', listener: (arg: any) => void): unknown
   start(): Promise<void>
   stop(): Promise<void>
   manualReconnect(): Promise<void>
@@ -143,6 +144,8 @@ export interface WaClientLike {
   startGroupHistory?(jids: string[], noAnchor: number): unknown
   /** v0.10.0: o mentor está entre os participantes conhecidos do grupo (null = não se sabe) */
   isSelfInGroup?(groupJid: string): boolean | null
+  /** v0.11.0: a consulta só deste grupo (participantes), pela fila, nos limites de sempre */
+  requestGroupMembers?(groupJid: string): void
 }
 
 export interface SagaServiceOpts {
@@ -385,7 +388,11 @@ export class SagaService extends EventEmitter {
       diag: (k, d) => this.diag(k, d),
       onFollowups: () => this.markFollowups(),
       onSendChanged: (jid) => this.markSends(jid),
-      waReady: () => this.groupsReady()
+      waReady: () => this.groupsReady(),
+      // v0.11.0 (Adendo v1.4): a conferência dos grupos da mentoria sai no começo do horário de envio
+      schedule: () => this.settings.sendOptions().schedule,
+      rng,
+      requestGroupMeta: (jid) => this.wa?.requestGroupMembers?.(jid)
     })
 
     this.autoFollowups = new FollowupAutoSender({
@@ -587,6 +594,14 @@ export class SagaService extends EventEmitter {
     this.wa.on('disk', () => this.markState())
     // v0.8.1: participantes de grupo ou um @lid com telefone novo: o Copiloto confere de novo os grupos
     this.wa.on('membership', () => this.copiloto.membershipChanged())
+    // v0.11.0 (Adendo v1.4): alguém entrou num grupo: se for um dos grupos da mentoria, a conferência dele em 2 min
+    this.wa.on('participantsAdded', (jid: string) => {
+      try {
+        if (typeof jid === 'string' && this.copiloto.membership.onJoin(jid) && this.copiloto.enabled()) this.copiloto.kick()
+      } catch {
+        // nunca atrapalha a ingestão
+      }
+    })
     // v0.8.3: aparelho vinculado de novo (QR) ou histórico pedido ao celular: o histórico antigo vai ao Copiloto, e os
     // follow-ups que ele gerar nas próximas 24 h ficam para a confirmação do mentor (nenhum envio automático por isso)
     this.wa.on('paired', () => this.copiloto.holdAutoFollowups())
@@ -1994,6 +2009,23 @@ export class SagaService extends EventEmitter {
 
   copilotoTest(): Promise<CopilotoTestResult> {
     return this.copiloto.test()
+  }
+
+  /** v0.11.0 (Adendo v1.4): os grupos e comunidades de que a conta participa, por nome (só local). */
+  async copilotoMembershipGroups(): Promise<MembershipGroupOption[]> {
+    return this.copiloto.membership.options()
+  }
+
+  /** v0.11.0: escolhe (ou tira, com null) o grupo de uma marca da conferência. */
+  async copilotoSetMembershipGroup(key: MembershipKey, jid: string | null): Promise<MembershipView> {
+    this.copiloto.membership.setGroup(key, jid)
+    if (this.copiloto.enabled()) this.copiloto.kick()
+    return this.copiloto.membership.view()
+  }
+
+  /** v0.11.0: "Conferir agora" (no máximo uma vez a cada 10 min). */
+  async copilotoCheckMembership(): Promise<MembershipCheckResult> {
+    return this.copiloto.checkMembershipNow()
   }
 
   /**

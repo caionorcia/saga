@@ -36,6 +36,8 @@ import { PENDING_REQUEST, parsePending, resolveTarget, shortReason, type Followu
 import { generateCode, inRoster, isRosterHash, messageEventId, phoneOfJid } from './identity'
 import { mayHaveOlder, runView, localDayStart as localDay } from '../wa/groupHistory'
 import { COPILOTO_SEARCH_LIMITS, parseSearchPending, runCopilotoSearch } from './search'
+import { GroupMembership } from './membership'
+import type { SendSchedule } from '../../shared/sendHours'
 
 export const COPILOTO_LIMITS = {
   batchEvents: 100,
@@ -129,6 +131,11 @@ export interface CopilotoSyncDeps {
    * espera por isso; sem a função, vale sempre.
    */
   waReady?: () => boolean
+  /** v0.11.0 (Adendo v1.4): o horário de envio (a conferência diária dos grupos sai no começo dele) */
+  schedule?: () => SendSchedule | null
+  rng?: () => number
+  /** v0.11.0: a consulta só de um grupo escolhido cujos participantes ainda não são conhecidos (pela fila do WhatsApp) */
+  requestGroupMeta?: (groupJid: string) => void
 }
 
 /** v0.8.1: o que o reenvio do histórico dos grupos pôs na fila (só contagens). */
@@ -174,10 +181,21 @@ export class CopilotoSync {
 
   private convos: ConvoHandler | null = null
   private convoReportFailures = 0
+  /** v0.11.0 (Adendo v1.4): a conferência dos grupos da mentoria */
+  readonly membership: GroupMembership
 
   constructor(private readonly deps: CopilotoSyncDeps) {
     this.repo = deps.repo
     this.lastSearchPollAt = deps.clock.now()
+    this.membership = new GroupMembership({
+      repo: deps.repo,
+      clock: deps.clock,
+      ...(deps.rng ? { rng: deps.rng } : {}),
+      ...(deps.schedule ? { schedule: deps.schedule } : {}),
+      ...(deps.pnForLid ? { pnForLid: deps.pnForLid } : {}),
+      ...(deps.requestGroupMeta ? { requestMeta: deps.requestGroupMeta } : {}),
+      diag: (k, d) => this.diag(k, d)
+    })
   }
 
   /** v0.10.0: o motor das conversas de follow-up (criado depois, no serviço). */
@@ -309,7 +327,8 @@ export class CopilotoSync {
       historyFetch: runView(this.repo, this.deps.clock.now()),
       searches: this.searchStats(),
       followupTestUntil: this.followupTestUntil(),
-      convosActive: this.repo.convos.activeCount()
+      convosActive: this.repo.convos.activeCount(),
+      membership: this.membership.view()
     }
   }
 
@@ -454,6 +473,7 @@ export class CopilotoSync {
       this.repo.setSetting(K.enabled, '0')
       this.repo.copiloto.clearAll()
       this.searchOut.clear()
+      this.membership.reset()
       this.repo.followups.clearAll()
       this.repo.convos.clearAll()
       this.deps.onFollowups?.()
@@ -587,6 +607,9 @@ export class CopilotoSync {
     // sem roster nenhum ainda: nada vira evento (o que mudou fica anotado, só local)
     const set = this.rosterSet()
     if (!set) return Math.max(this.rosterRetryAt - now, COPILOTO_LIMITS.gapMs)
+    // v0.11.0 (Adendo v1.4): a conferência dos grupos da mentoria (uma por dia, e depois de alguém entrar num deles)
+    const ms = await this.membershipStep(url, code, now, wait, set)
+    if (ms !== undefined) return ms
     // v0.8.1: o reenvio único dos grupos (depois da atualização, com o WhatsApp de pé) ou o pedido pelo botão
     const repairDue = this.repo.getSetting(K.groupRepairPending) === '1' || (this.repo.getSetting(K.groupRepairDone) !== '1' && (this.deps.waReady?.() ?? true))
     if (repairDue) this.repairGroupsNow(set)
@@ -618,8 +641,42 @@ export class CopilotoSync {
     const next = this.repo.copiloto.nextDueAt()
     const nextReport = this.repo.followups.nextReportAt()
     const nextConvo = this.repo.convos.nextReportAt()
-    const nextAt = Math.min(next ?? Infinity, nextReport ?? Infinity, nextConvo ?? Infinity, this.followupPollAt, this.searchPollAt, this.nextSearchOutAt())
+    const nextAt = Math.min(
+      next ?? Infinity,
+      nextReport ?? Infinity,
+      nextConvo ?? Infinity,
+      this.followupPollAt,
+      this.searchPollAt,
+      this.nextSearchOutAt(),
+      this.membership.nextAt(now) ?? Infinity
+    )
     return Math.min(COPILOTO_LIMITS.idleMs, Math.max(nextAt - now, COPILOTO_LIMITS.gapMs))
+  }
+
+  /**
+   * v0.11.0: um pedido `group_membership`, se venceu (no máximo um por volta, na fila de uma requisição por vez).
+   * `undefined` = nada agora (segue para os eventos).
+   */
+  private async membershipStep(url: string, code: string, now: number, wait: number, roster: ReadonlySet<string>): Promise<number | null | undefined> {
+    const at = this.membership.nextAt(now)
+    if (at === null || at > now) return undefined
+    if (wait > 0) return wait
+    const req = this.membership.take(roster, now)
+    if (!req) return undefined
+    const r = await this.post(url, code, req.body)
+    this.nextRequestAt = this.deps.clock.now() + COPILOTO_LIMITS.gapMs
+    if (this.membership.handle(req, r) === 'auth') {
+      this.authFailed('conferência dos grupos')
+      return null
+    }
+    return Math.max(this.nextRequestAt - this.deps.clock.now(), COPILOTO_LIMITS.gapMs)
+  }
+
+  /** v0.11.0: "Conferir agora" (no máximo uma vez a cada 10 min); sai na próxima volta. */
+  checkMembershipNow(): ReturnType<GroupMembership['requestNow']> {
+    const r = this.membership.requestNow(this.healthy())
+    if (r.ok) this.kick()
+    return r
   }
 
   private exclusive<T>(fn: () => Promise<T>): Promise<T> {

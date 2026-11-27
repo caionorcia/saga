@@ -3,6 +3,7 @@ import type { CopilotoStatus } from '../../../shared/copiloto'
 import { COPILOTO_TEXT, groupHistoryLine, groupRepairLine, historyFetchLine, isCopilotoUrl, noAnchorLine, searchesLine, senderRepairLine } from '../../../shared/copiloto'
 import { formatDay, formatTime } from '../format'
 import { Group, Info } from './SettingsParts'
+import { MentorGroups } from './MentorGroups'
 
 const when = (ts: number) => `${formatDay(ts)}, ${formatTime(ts)}`
 const POLL_MS = 5_000
@@ -309,6 +310,8 @@ export function CopilotoSection() {
           </p>
         )}
       </section>
+
+      <MentorGroups view={st.membership} enabled={st.enabled && !st.authFailed} onView={(membership) => setSt((cur) => (cur ? { ...cur, membership } : cur))} />
     </Group>
   )
 }

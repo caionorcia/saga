@@ -3,6 +3,8 @@
  * Contrato: `docs/superpowers/specs/2026-11-26-copiloto-integration.md`. Sem dependências: core e interface importam.
  */
 
+import type { MembershipView } from './membership'
+
 /** Caminho obrigatório do endereço (a função do Copiloto que recebe os eventos). */
 export const COPILOTO_PATH = '/functions/v1/sagazap-webhook'
 export const COPILOTO_URL_MAX = 300
@@ -162,6 +164,8 @@ export interface CopilotoStatus {
   followupTestUntil: number | null
   /** v0.10.0: conversas de follow-up (onboarding/sumido) em andamento */
   convosActive: number
+  /** v0.11.0 (Adendo v1.4): a conferência dos grupos da mentoria (grupos escolhidos e o último resultado de cada) */
+  membership: MembershipView
 }
 
 /** v0.9.0: quantas pesquisas do Copiloto foram respondidas hoje (dia local) e quando foi a última. */

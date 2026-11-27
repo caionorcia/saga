@@ -28,6 +28,20 @@ describe('IPC do Copiloto: argumentos', () => {
     }
   })
 
+  it('v0.11.0 grupos da mentoria: chave do contrato e JID de grupo (ou null); listar e conferir sem argumentos', () => {
+    ok('copilotoMembershipGroups')
+    bad('copilotoMembershipGroups', 'x')
+    ok('copilotoCheckMembership')
+    bad('copilotoCheckMembership', true)
+    ok('copilotoSetMembershipGroup', 'grupo_avisos', '120363050000000002@g.us')
+    ok('copilotoSetMembershipGroup', 'comunidade_saga', null)
+    bad('copilotoSetMembershipGroup', 'grupo_avisos')
+    bad('copilotoSetMembershipGroup', 'outra_chave', '120363050000000002@g.us')
+    bad('copilotoSetMembershipGroup', 'grupo_avisos', '5547999998888@s.whatsapp.net')
+    bad('copilotoSetMembershipGroup', 'grupo_avisos', '../x@g.us')
+    bad('copilotoSetMembershipGroup', 'grupo_avisos', '120363050000000002@g.us', 'extra')
+  })
+
   it('salvar: só enabled (sim/não) e/ou url (texto curto)', () => {
     ok('copilotoSave', { enabled: true })
     ok('copilotoSave', { url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook' })
@@ -53,6 +67,7 @@ describe('IPC do Copiloto: ligação com o serviço', () => {
       copilotoTest: vi.fn(async () => ({ ok: true, phones: 2, chats: 1 })),
       copilotoRepairGroups: vi.fn(async () => ({ ok: true, status: { enabled: true } })),
       copilotoFetchGroupHistory: vi.fn(async () => ({ ok: true, status: { enabled: true } })),
+      copilotoSetMembershipGroup: vi.fn(async () => ({ slots: [] })),
       onState: vi.fn(() => () => {}),
       onContactsChanged: vi.fn(() => () => {}),
       on: vi.fn(),
@@ -81,5 +96,8 @@ describe('IPC do Copiloto: ligação com o serviço', () => {
     await expect(call('copilotoRepairGroups', 'https://evil.example/')).rejects.toThrow(/origem não confiável/)
     expect(await call('copilotoFetchGroupHistory', APP)).toEqual({ ok: true, status: { enabled: true } })
     await expect(call('copilotoFetchGroupHistory', 'https://evil.example/')).rejects.toThrow(/origem não confiável/)
+    await call('copilotoSetMembershipGroup', APP, 'grupo_avisos', '120363050000000002@g.us')
+    expect(service.copilotoSetMembershipGroup).toHaveBeenCalledWith('grupo_avisos', '120363050000000002@g.us')
+    await expect(call('copilotoSetMembershipGroup', 'https://evil.example/', 'grupo_avisos', null)).rejects.toThrow(/origem não confiável/)
   })
 })

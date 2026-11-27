@@ -11,6 +11,7 @@ import { BACKUP_PASSWORD_MAX, BACKUP_PASSWORD_MIN } from '../shared/backup'
 import { DRAFT_ID_RE, SEND_LIMITS } from '../shared/send'
 import { isValidSchedule } from '../shared/sendHours'
 import { CONVO_LIMITS, COPILOTO_URL_MAX, FOLLOWUP_LIMITS, type ConvoAction } from '../shared/copiloto'
+import { isMembershipKey } from '../shared/membership'
 
 export interface AppOrigin {
   /** URL do servidor de desenvolvimento (ELECTRON_RENDERER_URL), se houver */
@@ -320,6 +321,9 @@ const RULES: Record<InvokeMethod, (a: unknown[]) => boolean> = {
   copilotoTest: (a) => a.length === 0,
   copilotoRepairGroups: (a) => a.length === 0,
   copilotoFetchGroupHistory: (a) => a.length === 0,
+  copilotoMembershipGroups: (a) => a.length === 0,
+  copilotoSetMembershipGroup: (a) => a.length === 2 && isMembershipKey(a[0]) && (a[1] === null || (isStr(a[1]) && /^[0-9-]{5,40}@g\.us$/.test(a[1]))),
+  copilotoCheckMembership: (a) => a.length === 0,
   listFollowups: (a) => a.length === 0,
   followupOpen: (a) => a.length === 1 && isStr(a[0]) && DRAFT_ID_RE.test(a[0]),
   followupDecline: (a) =>
