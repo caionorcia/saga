@@ -133,6 +133,8 @@ export interface WaClientLike {
   isSendInFlight?(sendId: number): boolean
   /** v0.5.0: o telefone (`@s.whatsapp.net`) já conhecido para um @lid, sem rede; null se não souber */
   pnForLid?(lid: string): string | null
+  /** v0.10.1: procura no armazenamento local (sem rede) o telefone dos @lid guardados sem telefone */
+  resolveStoredLids?(): Promise<unknown>
   /** v0.8.1: pede a consulta dos grupos (nomes e participantes) de novo, pela fila */
   refreshGroupSubjects?(): void
   /** v0.8.3: o WhatsApp desta versão aceita o pedido de histórico ao celular */
@@ -378,7 +380,8 @@ export class SagaService extends EventEmitter {
       cipher: opts.cipher ?? NO_CIPHER,
       clock,
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-      pnForLid: (lid) => this.wa?.pnForLid?.(lid) ?? null,
+      // v0.10.1: sem o cliente (ou antes de conectar), os pares @lid → telefone guardados no banco
+      pnForLid: (lid) => this.wa?.pnForLid?.(lid) ?? repo.pnForLid(lid),
       diag: (k, d) => this.diag(k, d),
       onFollowups: () => this.markFollowups(),
       onSendChanged: (jid) => this.markSends(jid),
@@ -1993,12 +1996,20 @@ export class SagaService extends EventEmitter {
     return this.copiloto.test()
   }
 
-  /** v0.8.1: "Reenviar histórico dos grupos": pede os nomes dos grupos de novo e põe o histórico dos grupos na fila. */
-  copilotoRepairGroups(): Promise<CopilotoRepairResult> {
+  /**
+   * v0.8.1: "Reenviar histórico dos grupos": pede os nomes dos grupos de novo e põe o histórico dos grupos na fila.
+   * v0.10.1: antes, os remetentes @lid ainda sem telefone são procurados no armazenamento local do WhatsApp (sem rede).
+   */
+  async copilotoRepairGroups(): Promise<CopilotoRepairResult> {
     try {
       this.wa.refreshGroupSubjects?.()
     } catch {
       // sem conexão: os nomes vêm na próxima consulta
+    }
+    try {
+      await this.wa.resolveStoredLids?.()
+    } catch {
+      // sem o armazenamento: vale o que já se sabe
     }
     return this.copiloto.repairGroups()
   }

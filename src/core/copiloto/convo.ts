@@ -23,7 +23,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Clock } from '../clock'
-import type { MessageRow, Repo } from '../db/repo'
+import { senderOf, type MessageRow, type Repo } from '../db/repo'
 import { NO_DRAFT, type ConvoPatch, type ConvoRow } from '../db/convoRepo'
 import type { PendingConvo } from './followups'
 import { chatKey } from './identity'
@@ -233,11 +233,11 @@ export class ConvoEngine {
     let lastMentee: MessageRow | null = null
     for (const m of msgs) {
       if (m.fromMe) lastMentor = m
-      else if (CONTENT_KINDS.has(m.kind) && this.deps.isMentee(m.senderJid)) lastMentee = m
+      else if (CONTENT_KINDS.has(m.kind) && this.deps.isMentee(senderOf(m))) lastMentee = m
     }
     // só as dos últimos 30 dias esperam resposta (uma pergunta antiga sem resposta não vira rascunho)
     const since = Math.max(lastMentor?.ts ?? -Infinity, this.deps.repo.recentSince())
-    const waiting = msgs.filter((m) => !m.fromMe && m.ts > since && CONTENT_KINDS.has(m.kind) && this.deps.isMentee(m.senderJid))
+    const waiting = msgs.filter((m) => !m.fromMe && m.ts > since && CONTENT_KINDS.has(m.kind) && this.deps.isMentee(senderOf(m)))
     return { msgs, lastMentor, lastMentee, waiting }
   }
 
@@ -423,7 +423,7 @@ export class ConvoEngine {
     const a = this.activity(c)
     const since = repo.recentSince()
     const messages = a.msgs.filter((m) => m.ts >= since).slice(-CONVO_LIMITS.contextMessages)
-    const speaker = (m: MessageRow): ConvoSpeaker => (m.fromMe ? 'mentor' : this.deps.isMentee(m.senderJid) ? 'mentorado' : 'outro')
+    const speaker = (m: MessageRow): ConvoSpeaker => (m.fromMe ? 'mentor' : this.deps.isMentee(senderOf(m)) ? 'mentorado' : 'outro')
     const slot = c.slot
     try {
       const out = await this.deps.draft({

@@ -144,6 +144,15 @@ describe('a busca', () => {
     for (const phone of [ANA_PHONE, BIA_PHONE, CAIO_PHONE, OLD_PHONE, '97777-6666', '@s.whatsapp.net', '@g.us']) expect(raw).not.toContain(phone)
   })
 
+  it('v0.10.1: remetente @lid com o telefone guardado na mensagem: mentorado, com o nome do contato do telefone', () => {
+    ctx.repo.upsertContact({ jid: OLD, pushName: 'Segunda Cadeira' })
+    ctx.repo.setGroupMembers(G_ANA, [ANA])
+    ctx.add(G_ANA, { senderJid: '246802468024680@lid', senderPn: OLD, text: 'preço 9', minutesAgo: 2 })
+    const r = runCopilotoSearch(ctx.repo, search(), { phoneOf, roster: new Set(rosterOf(ROSTER_PHONES)) })
+    expect(r.results.map((x) => [x.excerpt, x.sender, x.sender_name])).toEqual([['preço 9', 'mentorado', 'Segunda Cadeira']])
+    expect(JSON.stringify(r)).not.toContain('@lid')
+  })
+
   it('pedido inválido responde erro sem procurar; sem conversa do mentorado, nada', () => {
     ctx.add(ANA, { text: 'preço' })
     expect(runCopilotoSearch(ctx.repo, search({ invalid: 'periodo_invalido' }), { phoneOf, roster: new Set() })).toMatchObject({ status: 'error', error: 'periodo_invalido', results: [], total_found: 0 })

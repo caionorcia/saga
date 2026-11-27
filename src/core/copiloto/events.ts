@@ -5,7 +5,7 @@
  *   `chat.phones` leva só esses telefones. Telefone de quem não é mentorado nunca entra num evento.
  * - @lid: vale o telefone que o app já conhece para ele (`pnForLid`); sem telefone, não casa.
  */
-import type { ContactRow, MessageRow, Repo } from '../db/repo'
+import { senderOf, type ContactRow, type MessageRow, type Repo } from '../db/repo'
 import { REPLY_REASON_LABELS, type ReplyReasonCode } from '../../shared/feedback'
 import {
   alertEventId,
@@ -191,7 +191,8 @@ export class EventBuilder {
     if (m.fromMe) sender = { phone: null, name: null, is_mentor: true }
     else if (chat.kind === 'individual') sender = { phone: chat.phones[0], name: chat.name, is_mentor: false }
     else {
-      const phone = this.rosterPhone(m.senderJid)
+      // v0.10.1: o telefone de quem mandou (guardado na mensagem ou pelo par @lid → telefone); nunca o @lid
+      const phone = this.rosterPhone(senderOf(m))
       // o rótulo pode cair no número de quem mandou: só para mentorado
       sender = { phone, name: m.senderName ?? (phone ? m.senderLabel : null), is_mentor: false }
     }

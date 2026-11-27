@@ -10,7 +10,7 @@
  * - Registro: só contagens e códigos de status. Nunca o conteúdo, telefones, o endereço ou o código.
  */
 import type { Clock } from '../clock'
-import type { Repo } from '../db/repo'
+import { senderOf, type MessageRow, type Repo } from '../db/repo'
 import type { OutboxRow } from '../db/copilotoRepo'
 import type { Cipher } from '../settings'
 import {
@@ -21,6 +21,7 @@ import {
   type CopilotoGroupRepair,
   type CopilotoRepairResult,
   type CopilotoSearchStats,
+  type CopilotoSenderRepair,
   type CopilotoPatch,
   type CopilotoSaveResult,
   type CopilotoStatus,
@@ -87,6 +88,10 @@ export const COPILOTO_KEYS = {
   groupRepairPending: 'copiloto.groupRepairPending',
   /** o resultado do último reenvio (JSON `{at, groups, messages, empty}`: só contagens) */
   groupRepairResult: 'copiloto.groupRepairResult',
+  /** v0.10.1: o reenvio das mensagens de grupo com o telefone de quem mandou já rodou uma vez neste computador ('1') */
+  senderRepairDone: 'copiloto.senderRepairV0101',
+  /** o resultado do último reenvio pelos remetentes (JSON `{at, messages, unresolved}`: só contagens) */
+  senderRepairResult: 'copiloto.senderRepairResult',
   /** v0.8.3: até quando (epoch ms) os follow-ups recebidos ficam para a confirmação, por causa de um histórico importado */
   autoHoldUntil: 'copiloto.autoHoldUntil',
   /** v0.9.0: pesquisas do Copiloto respondidas (JSON `{day, count, lastAt}`: só contagens, nunca o texto procurado) */
@@ -299,6 +304,7 @@ export class CopilotoSync {
       autoFollowups: this.autoFollowups(),
       groupRepair: this.groupRepairResult(),
       groupRepairPending: this.repo.getSetting(K.groupRepairPending) === '1',
+      senderRepair: this.senderRepairResult(),
       groupHistory: this.groupHistory(),
       historyFetch: runView(this.repo, this.deps.clock.now()),
       searches: this.searchStats(),
@@ -380,6 +386,15 @@ export class CopilotoSync {
     return { jids, noAnchor }
   }
 
+  private senderRepairResult(): CopilotoSenderRepair | null {
+    try {
+      const v = JSON.parse(this.repo.getSetting(K.senderRepairResult) ?? 'null') as CopilotoSenderRepair | null
+      return v && typeof v.at === 'number' ? v : null
+    } catch {
+      return null
+    }
+  }
+
   private groupRepairResult(): GroupRepairResult | null {
     try {
       const v = JSON.parse(this.repo.getSetting(K.groupRepairResult) ?? 'null') as GroupRepairResult | null
@@ -432,6 +447,7 @@ export class CopilotoSync {
       this.repo.deleteSetting(K.roster)
       // ligada agora (fila vazia, carga nova com a regra dos grupos da v0.8.1): o reenvio único não é preciso
       this.repo.setSetting(K.groupRepairDone, '1')
+      this.repo.setSetting(K.senderRepairDone, '1')
       this.resetBackoff()
       this.repo.logEvent('copiloto_on', 'integração com o Copiloto ligada')
     } else if (patch.enabled === false && this.enabled()) {
@@ -574,6 +590,8 @@ export class CopilotoSync {
     // v0.8.1: o reenvio único dos grupos (depois da atualização, com o WhatsApp de pé) ou o pedido pelo botão
     const repairDue = this.repo.getSetting(K.groupRepairPending) === '1' || (this.repo.getSetting(K.groupRepairDone) !== '1' && (this.deps.waReady?.() ?? true))
     if (repairDue) this.repairGroupsNow(set)
+    // v0.10.1: o reenvio único das mensagens de grupo com o telefone de quem mandou (depois da atualização)
+    else if (this.repo.getSetting(K.senderRepairDone) !== '1' && (this.deps.waReady?.() ?? true)) this.repairSendersNow(set)
     // v0.8.1: grupo que passou a casar (participantes conhecidos depois, @lid que ganhou telefone): carga dele agora
     if (now >= this.regroupAt) {
       this.matchNewGroups(set)
@@ -680,6 +698,9 @@ export class CopilotoSync {
     const repo = this.repo.copiloto
     const since = this.deps.clock.now() - COPILOTO_LIMITS.backfillDays * DAY
     const out: GroupRepairResult = { at: this.deps.clock.now(), groups: 0, messages: 0, empty: 0 }
+    // v0.10.1: o telefone de quem mandou, pelo que já se sabe, antes de montar os eventos
+    this.backfillSenders()
+    const senders: CopilotoSenderRepair = { at: out.at, messages: 0, unresolved: 0 }
     const put = (built: ReturnType<EventBuilder['message']>, jid: string): boolean => {
       if (!built || built.jid !== jid) return false
       const { json, hash } = serialize(built.event)
@@ -700,7 +721,10 @@ export class CopilotoSync {
       let n = 0
       for (const id of ids) {
         const m = this.repo.getMessage(id)
-        if (m && m.jid === jid && put(b.message(m), jid)) n++
+        if (m && m.jid === jid && put(b.message(m), jid)) {
+          n++
+          if (!m.fromMe) this.countSender(b, m, senders)
+        }
       }
       const extras = repo.backfillExtras(jid, since)
       for (const id of extras.sends) put(b.send(id), jid)
@@ -714,8 +738,60 @@ export class CopilotoSync {
     this.repo.setSetting(K.groupRepairResult, JSON.stringify(out))
     this.repo.setSetting(K.groupRepairDone, '1')
     this.repo.deleteSetting(K.groupRepairPending)
+    this.repo.setSetting(K.senderRepairDone, '1')
+    this.saveSenderRepair(senders)
     this.repo.logEvent('copiloto_groups', `reenvio dos grupos: ${out.groups} grupo(s), ${out.messages} mensagem(ns) na fila; ${out.empty} grupo(s) sem nenhuma mensagem neste computador`)
     return out
+  }
+
+  /**
+   * v0.10.1: o reenvio único depois da atualização. Antes, nos grupos, quem mandou chegava quase sempre como @lid sem
+   * telefone conhecido (o histórico não traz o telefone na chave; os pares @lid → telefone ficavam só na memória) e o
+   * evento ia com `sender.phone` null. Agora: o `sender_pn` das mensagens guardadas pelo que já se sabe e, nos grupos de
+   * mentorados, as mensagens dos últimos 30 dias (ou a mais recente) que não são do mentor de volta à fila, com os mesmos
+   * ids e o telefone certo. Público para os testes.
+   */
+  repairSendersNow(roster: ReadonlySet<string>): CopilotoSenderRepair {
+    const b = this.builder(roster)
+    const repo = this.repo.copiloto
+    const since = this.deps.clock.now() - COPILOTO_LIMITS.backfillDays * DAY
+    this.backfillSenders()
+    const out: CopilotoSenderRepair = { at: this.deps.clock.now(), messages: 0, unresolved: 0 }
+    for (const jid of repo.groupJids()) {
+      if (!b.chat(jid)) continue
+      for (const id of repo.backfillMessageIds(jid, since)) {
+        const m = this.repo.getMessage(id)
+        if (!m || m.jid !== jid || m.fromMe) continue
+        const built = b.message(m)
+        if (!built || built.jid !== jid) continue
+        const { json, hash } = serialize(built.event)
+        repo.upsert(built.id, built.jid, json, hash, true)
+        this.countSender(b, m, out)
+      }
+    }
+    this.repo.setSetting(K.senderRepairDone, '1')
+    this.saveSenderRepair(out)
+    return out
+  }
+
+  /** O `sender_pn` das mensagens guardadas pelos pares já conhecidos (nunca quebra o reenvio). */
+  private backfillSenders(): number {
+    try {
+      return this.repo.backfillSenderPn()
+    } catch {
+      return 0
+    }
+  }
+
+  private countSender(b: EventBuilder, m: MessageRow, out: CopilotoSenderRepair): void {
+    out.messages++
+    if (!b.phoneOf(senderOf(m))) out.unresolved++
+  }
+
+  private saveSenderRepair(r: CopilotoSenderRepair): void {
+    this.repo.setSetting(K.senderRepairResult, JSON.stringify(r))
+    // só contagens, nunca telefone ou nome
+    this.repo.logEvent('copiloto_senders', `remetentes dos grupos: ${r.messages} mensagem(ns) reenviada(s); ${r.unresolved} ainda sem telefone identificado`)
   }
 
   private diag(kind: string, detail: string): void {

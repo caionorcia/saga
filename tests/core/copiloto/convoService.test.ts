@@ -81,9 +81,15 @@ class FakeSocket {
   }
 }
 
-function gmsg(o: { id: string; from?: string; fromMe?: boolean; ts: number; text?: string; jid?: string }): any {
+function gmsg(o: { id: string; from?: string; fromAlt?: string; fromMe?: boolean; ts: number; text?: string; jid?: string }): any {
   return {
-    key: { remoteJid: o.jid ?? G, fromMe: o.fromMe ?? false, id: o.id, ...(o.fromMe ? {} : { participant: o.from ?? ANA }) },
+    key: {
+      remoteJid: o.jid ?? G,
+      fromMe: o.fromMe ?? false,
+      id: o.id,
+      ...(o.fromMe ? {} : { participant: o.from ?? ANA }),
+      ...(o.fromAlt ? { participantAlt: o.fromAlt } : {})
+    },
     messageTimestamp: Math.floor(o.ts / 1000),
     pushName: o.fromMe ? undefined : 'Ana',
     message: { conversation: o.text ?? 'oi' }
@@ -321,6 +327,62 @@ describe('follow-ups de conversa no serviço (v0.10.0, contrato v2)', () => {
     expect((await view())!.draft).toMatchObject({ kind: 'reply', attempt: null, text: expect.stringContaining(LINK) })
     await sync()
     expect(updates).toContainEqual(expect.objectContaining({ id: C1, status: 'responded', replied_at: new Date(repliedTs).toISOString(), attempts: 1 }))
+  })
+
+  describe('v0.10.1: a resposta da mentorada no grupo chega pelo @lid', () => {
+    const LID = '424242424242@lid'
+    /** a tentativa 1 sai e o eco dela chega; a conversa espera a resposta */
+    async function attemptSent(): Promise<void> {
+      await startOpen()
+      await deliver([sumido()])
+      await drain(30_000)
+      await service.convoAction(C1, { kind: 'send', draftId: (await view())!.draft!.id, text: 'Oi! Tudo bem?' })
+      await drain(90_000)
+      const [row] = repo.sends.listForJid(G)
+      await emit('messages.upsert', { messages: [gmsg({ id: row.msgIds[0], fromMe: true, ts: clock.now(), text: 'Oi! Tudo bem?' })] })
+      await drain(20_000)
+      expect(convo()).toMatchObject({ status: 'active', awaitingReply: true })
+    }
+
+    it('telefone só no participantAlt da chave: conta como resposta', async () => {
+      await attemptSent()
+      const ts = clock.now()
+      await emit('messages.upsert', { messages: [gmsg({ id: 'l1', from: `${LID.replace('@', ':7@')}`, fromAlt: ANA, ts, text: 'Oi! Voltei' })] })
+      await drain(20_000)
+      expect(convo()).toMatchObject({ status: 'responded', repliedAt: ts })
+      expect(repo.pnForLid(LID)).toBe(ANA)
+    })
+
+    it('sem o telefone na chave: vale o par @lid → telefone guardado de antes (outra execução do app)', async () => {
+      await attemptSent()
+      // aprendido antes (histórico, contatos, participantes): guardado no banco; o cliente lê ao iniciar e quando pergunta
+      repo.saveLidPn(LID, ANA)
+      const ts = clock.now()
+      await emit('messages.upsert', { messages: [gmsg({ id: 'l2', from: LID, ts, text: 'Oi! Voltei' })] })
+      await drain(20_000)
+      expect(repo.getMessage('l2')?.senderPn).toBe(ANA)
+      expect(convo()).toMatchObject({ status: 'responded', repliedAt: ts })
+    })
+
+    it('sem o telefone na chave nem no banco: o armazenamento local do Baileys (sem rede) resolve', async () => {
+      await attemptSent()
+      ;(last() as any).signalRepository = { lidMapping: { getPNForLID: vi.fn(async (l: string) => (l === LID ? `${ANA_PHONE}:0@s.whatsapp.net` : null)) } }
+      const ts = clock.now()
+      await emit('messages.upsert', { messages: [gmsg({ id: 'l3', from: LID, ts, text: 'Oi! Voltei' })] })
+      await drain(20_000)
+      expect(convo()).toMatchObject({ status: 'responded', repliedAt: ts })
+    })
+
+    it('@lid sem telefone em lugar nenhum: não conta como resposta (nem vira "outro" com o @lid no lugar do telefone)', async () => {
+      await attemptSent()
+      await emit('messages.upsert', { messages: [gmsg({ id: 'l4', from: LID, ts: clock.now(), text: 'Oi! Voltei' })] })
+      await drain(20_000)
+      expect(convo()).toMatchObject({ status: 'active', awaitingReply: true })
+      // o par chega depois (lid-mapping.update): a resposta passa a contar
+      await emit('lid-mapping.update', { lid: LID, pn: ANA })
+      await drain(20_000)
+      expect(convo().status).toBe('responded')
+    })
   })
 
   it('"Precisa de você": pedido de dinheiro não chama a IA nem escreve rascunho; "Gerar rascunho mesmo assim" chama', async () => {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { CopilotoStatus } from '../../../shared/copiloto'
-import { COPILOTO_TEXT, groupHistoryLine, groupRepairLine, historyFetchLine, isCopilotoUrl, noAnchorLine, searchesLine } from '../../../shared/copiloto'
+import { COPILOTO_TEXT, groupHistoryLine, groupRepairLine, historyFetchLine, isCopilotoUrl, noAnchorLine, searchesLine, senderRepairLine } from '../../../shared/copiloto'
 import { formatDay, formatTime } from '../format'
 import { Group, Info } from './SettingsParts'
 
@@ -287,6 +287,12 @@ export function CopilotoSection() {
             {st.groupRepair && (
               <>
                 <span data-testid="copiloto-group-repair">{groupRepairLine(st.groupRepair)}</span>
+                <br />
+              </>
+            )}
+            {st.senderRepair && (
+              <>
+                <span data-testid="copiloto-sender-repair">{senderRepairLine(st.senderRepair)}</span>
                 <br />
               </>
             )}

@@ -570,6 +570,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     autoFollowups: false,
     groupRepair: null,
     groupRepairPending: false,
+    senderRepair: null,
     groupHistory: { oldestTs: null, groups: 0, messages: 0, pending: 0 },
     historyFetch: null,
     searches: { today: 0, lastAt: null },
@@ -1010,6 +1011,7 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
       record('copilotoRepairGroups', [], undefined)
       if (!copiloto.enabled) return { ok: false, message: COPILOTO_TEXT.repairOff }
       copiloto.groupRepair = { at: Date.now(), groups: 4, messages: 212, empty: 1 }
+      copiloto.senderRepair = { at: Date.now(), messages: 180, unresolved: 3 }
       copiloto.pending += 212
       return { ok: true, status: { ...copiloto } }
     },

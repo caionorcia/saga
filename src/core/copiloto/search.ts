@@ -9,7 +9,7 @@
  * - Quem mandou: o mentor → `mentor`; mentorado (deste pedido ou da lista de mentorados) → `mentorado`; o resto →
  *   `outro`, com o nome exibido. Nunca telefone; nunca mídia.
  */
-import type { MessageRow, Repo } from '../db/repo'
+import { senderOf, type MessageRow, type Repo } from '../db/repo'
 import { bodyOf } from '../search/search'
 import { buildSnippet, isEmptyQuery, parseQuery, toFtsMatch } from '../search/query'
 import { messageType } from './events'
@@ -211,8 +211,10 @@ export function runCopilotoSearch(repo: Repo, s: PendingSearch, ctx: SearchConte
         sender = isMentee(ctx.phoneOf(m.jid)) ? 'mentorado' : 'outro'
         senderName = chat.name
       } else {
-        sender = m.senderJid && isMentee(ctx.phoneOf(m.senderJid)) ? 'mentorado' : 'outro'
-        senderName = safeName(m.senderJid ? repo.copiloto.rawName(m.senderJid) : null) ?? safeName(m.senderName)
+        // v0.10.1: o telefone de quem mandou quando conhecido (o @lid sozinho nunca casa com o roster)
+        const who = senderOf(m)
+        sender = who && isMentee(ctx.phoneOf(who)) ? 'mentorado' : 'outro'
+        senderName = safeName(who ? repo.copiloto.rawName(who) : null) ?? safeName(m.senderName)
       }
       return {
         chat,

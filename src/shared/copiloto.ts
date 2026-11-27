@@ -104,6 +104,23 @@ export interface CopilotoGroupRepair {
   empty: number
 }
 
+/**
+ * v0.10.1: o último reenvio das mensagens de grupo pelo telefone de quem mandou (o automático depois da atualização ou o
+ * botão "Reenviar histórico dos grupos"). Só contagens.
+ */
+export interface CopilotoSenderRepair {
+  /** epoch ms */
+  at: number
+  /** mensagens de grupo que não são do mentor, postas de novo na fila (os mesmos ids) */
+  messages: number
+  /** dessas, quantas continuam sem o telefone de quem mandou */
+  unresolved: number
+}
+
+export function senderRepairLine(r: CopilotoSenderRepair): string {
+  return `Remetentes dos grupos: ${r.messages} mensagens reenviadas; ${r.unresolved} ainda sem telefone identificado`
+}
+
 /** A linha que Configurações › Copiloto da Saga mostra depois do reenvio. */
 export function groupRepairLine(r: CopilotoGroupRepair): string {
   return `Grupos: ${r.groups} grupo(s) e ${r.messages} mensagem(ns) colocados na fila para o Copiloto (${r.empty} grupo(s) sem nenhuma mensagem neste computador)`
@@ -133,6 +150,8 @@ export interface CopilotoStatus {
   /** v0.8.1: o último reenvio do histórico dos grupos (null = ainda não rodou) e se há um pedido esperando o roster */
   groupRepair: CopilotoGroupRepair | null
   groupRepairPending: boolean
+  /** v0.10.1: o último reenvio pelos remetentes dos grupos (null = nunca) */
+  senderRepair: CopilotoSenderRepair | null
   /** v0.8.3: o histórico dos grupos dos mentorados que já está no Copiloto */
   groupHistory: CopilotoGroupHistory
   /** v0.8.3: a última "Buscar no celular o histórico dos grupos" (null = nunca) */
