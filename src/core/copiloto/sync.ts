@@ -20,6 +20,7 @@ import {
   type CopilotoGroupHistory,
   type CopilotoGroupRepair,
   type CopilotoRepairResult,
+  type CopilotoSearchStats,
   type CopilotoPatch,
   type CopilotoSaveResult,
   type CopilotoStatus,
@@ -32,7 +33,8 @@ import type { FollowupRow } from '../db/followupRepo'
 import { EventBuilder, serialize } from './events'
 import { parsePending, resolveTarget, shortReason, type FollowupUpdate, type PendingFollowup } from './followups'
 import { generateCode, isRosterHash, messageEventId, phoneOfJid } from './identity'
-import { mayHaveOlder, runView } from '../wa/groupHistory'
+import { mayHaveOlder, runView, localDayStart as localDay } from '../wa/groupHistory'
+import { COPILOTO_SEARCH_LIMITS, parseSearchPending, runCopilotoSearch } from './search'
 
 export const COPILOTO_LIMITS = {
   batchEvents: 100,
@@ -86,7 +88,9 @@ export const COPILOTO_KEYS = {
   /** o resultado do último reenvio (JSON `{at, groups, messages, empty}`: só contagens) */
   groupRepairResult: 'copiloto.groupRepairResult',
   /** v0.8.3: até quando (epoch ms) os follow-ups recebidos ficam para a confirmação, por causa de um histórico importado */
-  autoHoldUntil: 'copiloto.autoHoldUntil'
+  autoHoldUntil: 'copiloto.autoHoldUntil',
+  /** v0.9.0: pesquisas do Copiloto respondidas (JSON `{day, count, lastAt}`: só contagens, nunca o texto procurado) */
+  searchStats: 'copiloto.searchStats'
 } as const
 
 const K = COPILOTO_KEYS
@@ -138,9 +142,22 @@ export class CopilotoSync {
   private reportFailures = 0
   /** v0.8.1: quando conferir de novo os grupos ainda sem carga (0 = na próxima volta) */
   private regroupAt = 0
+  /** v0.9.0 pesquisas do Copiloto: próxima consulta (0 = já) e falhas seguidas dela */
+  private searchPollAt = 0
+  private searchFailures = 0
+  /** quando a última consulta saiu (com eventos na fila, a consulta espera no máximo 2 min depois dela) */
+  private lastSearchPollAt: number
+  /**
+   * resultados prontos esperando a confirmação do Copiloto (id → corpo e próxima tentativa). Só na memória: o Copiloto
+   * devolve de novo, na próxima consulta, um pedido que ficou sem resultado (por até 10 min).
+   */
+  private searchOut = new Map<string, { body: string; attempts: number; nextAt: number }>()
+  /** pedidos já respondidos (ou cancelados) há pouco: vindo de novo, não são refeitos */
+  private searchAnswered = new Map<string, number>()
 
   constructor(private readonly deps: CopilotoSyncDeps) {
     this.repo = deps.repo
+    this.lastSearchPollAt = deps.clock.now()
   }
 
   // --- configurações ---
@@ -241,8 +258,32 @@ export class CopilotoSync {
       groupRepair: this.groupRepairResult(),
       groupRepairPending: this.repo.getSetting(K.groupRepairPending) === '1',
       groupHistory: this.groupHistory(),
-      historyFetch: runView(this.repo, this.deps.clock.now())
+      historyFetch: runView(this.repo, this.deps.clock.now()),
+      searches: this.searchStats()
     }
+  }
+
+  /** v0.9.0: as pesquisas respondidas hoje (dia local) e a hora da última. */
+  private searchStats(): CopilotoSearchStats {
+    const st = this.readSearchStats()
+    return { today: st.day === localDay(this.deps.clock.now()) ? st.count : 0, lastAt: st.lastAt }
+  }
+
+  private readSearchStats(): { day: number; count: number; lastAt: number | null } {
+    try {
+      const v = JSON.parse(this.repo.getSetting(K.searchStats) ?? 'null') as { day?: unknown; count?: unknown; lastAt?: unknown } | null
+      if (v && typeof v.day === 'number' && typeof v.count === 'number') return { day: v.day, count: v.count, lastAt: typeof v.lastAt === 'number' ? v.lastAt : null }
+    } catch {
+      // ilegível: começa de novo
+    }
+    return { day: 0, count: 0, lastAt: null }
+  }
+
+  private countSearch(now: number): void {
+    const st = this.readSearchStats()
+    const day = localDay(now)
+    const count = st.day === day ? st.count + 1 : 1
+    this.repo.setSetting(K.searchStats, JSON.stringify({ day, count, lastAt: now }))
   }
 
   private oldestCache: { key: string; ts: number | null } | null = null
@@ -344,6 +385,7 @@ export class CopilotoSync {
     } else if (patch.enabled === false && this.enabled()) {
       this.repo.setSetting(K.enabled, '0')
       this.repo.copiloto.clearAll()
+      this.searchOut.clear()
       this.repo.followups.clearAll()
       this.deps.onFollowups?.()
       this.repo.deleteSetting(K.roster)
@@ -468,6 +510,10 @@ export class CopilotoSync {
     // v0.7.0: relatórios de follow-up primeiro (o mentor já agiu); a busca de novos vem depois dos eventos
     const fu = await this.followupReports(url, code, now, wait)
     if (fu !== undefined) return fu
+    // v0.9.0: pesquisas do Copiloto (alguém da equipe espera): um resultado pronto sai antes dos eventos; a consulta de
+    // 60 s espera a vez dos eventos, mas nunca mais de 2 min (a carga inicial não segura as pesquisas até expirarem)
+    const sr = await this.searchStep(url, code, now, wait, false)
+    if (sr !== undefined) return sr
     // sem roster nenhum ainda: nada vira evento (o que mudou fica anotado, só local)
     const set = this.rosterSet()
     if (!set) return Math.max(this.rosterRetryAt - now, COPILOTO_LIMITS.gapMs)
@@ -488,7 +534,10 @@ export class CopilotoSync {
       return Math.max(this.nextRequestAt - this.deps.clock.now(), COPILOTO_LIMITS.gapMs)
     }
     if (processed > 0 || this.repo.copiloto.dirtyCount() > 0) return COPILOTO_LIMITS.gapMs
-    // nenhum evento para sair agora: a busca de follow-ups (ao ligar, ao abrir o app e a cada 5 min)
+    // nenhum evento para sair agora: a consulta das pesquisas do Copiloto (a cada 60 s)
+    const idleSearch = await this.searchStep(url, code, now, wait, true)
+    if (idleSearch !== undefined) return idleSearch
+    // a busca de follow-ups (ao ligar, ao abrir o app e a cada 5 min)
     if (now >= this.followupPollAt) {
       await this.pollFollowups(url, code)
       if (this.repo.getSetting(K.authFailed) === '1') return null
@@ -496,7 +545,7 @@ export class CopilotoSync {
     }
     const next = this.repo.copiloto.nextDueAt()
     const nextReport = this.repo.followups.nextReportAt()
-    const nextAt = Math.min(next ?? Infinity, nextReport ?? Infinity, this.followupPollAt)
+    const nextAt = Math.min(next ?? Infinity, nextReport ?? Infinity, this.followupPollAt, this.searchPollAt, this.nextSearchOutAt())
     return Math.min(COPILOTO_LIMITS.idleMs, Math.max(nextAt - now, COPILOTO_LIMITS.gapMs))
   }
 
@@ -515,6 +564,8 @@ export class CopilotoSync {
     this.followupFailures = 0
     this.reportFailures = 0
     this.regroupAt = 0
+    this.searchPollAt = 0
+    this.searchFailures = 0
   }
 
   // --- grupos (v0.8.1) ---
@@ -838,6 +889,109 @@ export class CopilotoSync {
     this.nextRequestAt = Math.max(this.nextRequestAt, at)
     this.setError(text)
     this.repo.logEvent('copiloto_error', `status=${code} eventos=${batch.length} tentativa=${this.failures} nova tentativa em ${Math.round(delay / 60_000)} min`)
+  }
+
+  // --- pesquisa pelo Copiloto (v0.9.0, contrato v1.3) ---
+
+  private nextSearchOutAt(): number {
+    let at = Infinity
+    for (const s of this.searchOut.values()) if (s.nextAt < at) at = s.nextAt
+    return at
+  }
+
+  /**
+   * Um passo das pesquisas (no máximo um pedido): manda um resultado pronto que ainda não foi confirmado ou, a cada
+   * 60 s, consulta os pedidos novos. `undefined` = nada a fazer agora (segue para os eventos).
+   */
+  private async searchStep(url: string, code: string, now: number, wait: number, idle: boolean): Promise<number | null | undefined> {
+    let due: string | null = null
+    for (const [id, s] of this.searchOut) {
+      if (s.nextAt <= now) {
+        due = id
+        break
+      }
+    }
+    // a consulta: na vez dela (sem eventos esperando) ou atrasada demais (eventos na fila há mais de 2 min)
+    const pollDue = now >= this.searchPollAt && (idle || now - this.lastSearchPollAt >= COPILOTO_SEARCH_LIMITS.maxPollDelayMs)
+    if (due === null && !pollDue) return undefined
+    if (wait > 0) return wait
+    if (due !== null) await this.postSearchResult(url, code, due)
+    else await this.pollSearches(url, code)
+    if (this.repo.getSetting(K.authFailed) === '1') return null
+    return Math.max(this.nextRequestAt - this.deps.clock.now(), COPILOTO_LIMITS.gapMs)
+  }
+
+  /**
+   * `{action: "search_pending"}`: os cancelados saem; cada pedido novo é procurado aqui (só o banco local) e o resultado
+   * fica pronto para sair. Registro: só contagens.
+   */
+  private async pollSearches(url: string, code: string): Promise<void> {
+    const r = await this.post(url, code, JSON.stringify({ version: 1, action: 'search_pending' }))
+    const now = this.deps.clock.now()
+    this.nextRequestAt = now + COPILOTO_LIMITS.gapMs
+    this.lastSearchPollAt = now
+    if (r.kind === 'http' && r.status === 401) {
+      this.authFailed('pesquisas')
+      return
+    }
+    const parsed = r.kind === 'http' && r.status === 200 ? parseSearchPending(r.body) : null
+    if (!parsed) {
+      this.searchFailures++
+      const delay = this.backoff(this.searchFailures)
+      this.searchPollAt = now + delay
+      const st = r.kind === 'network' ? 'network' : String(r.status)
+      this.repo.logEvent('copiloto_error', `pesquisas: status=${st} tentativa=${this.searchFailures} nova consulta em ${Math.round(delay / 60_000)} min`)
+      return
+    }
+    this.searchFailures = 0
+    this.searchPollAt = now + COPILOTO_SEARCH_LIMITS.pollEveryMs
+    for (const [id, at] of this.searchAnswered) if (now - at > COPILOTO_SEARCH_LIMITS.keepAnsweredMs) this.searchAnswered.delete(id)
+    let cancelled = 0
+    for (const id of parsed.cancelledIds) {
+      if (this.searchOut.delete(id)) cancelled++
+      this.searchAnswered.set(id, now)
+    }
+    let fresh = 0
+    let found = 0
+    const ctx = { phoneOf: (jid: string) => this.phoneOf(jid), roster: this.rosterSet() ?? new Set<string>() }
+    for (const s of parsed.items) {
+      if (this.searchOut.has(s.id) || this.searchAnswered.has(s.id)) continue
+      const body = runCopilotoSearch(this.repo, s, ctx)
+      this.searchOut.set(s.id, { body: JSON.stringify(body), attempts: 0, nextAt: now })
+      fresh++
+      found += body.results.length
+    }
+    if (fresh || cancelled) this.diag('copiloto_search', `pedidos=${parsed.items.length} novos=${fresh} resultados=${found} cancelados=${cancelled}`)
+  }
+
+  /**
+   * `{action: "search_result"}`. 200: confirmado (`stored` conta como respondida; `expired` e `invalid` também acabam).
+   * 400: recusado de vez. 401: para tudo. 429, 5xx, rede: espera crescente (1 → 30 min) até o Copiloto confirmar.
+   */
+  private async postSearchResult(url: string, code: string, id: string): Promise<void> {
+    const out = this.searchOut.get(id)
+    if (!out) return
+    const r = await this.post(url, code, out.body)
+    const now = this.deps.clock.now()
+    this.nextRequestAt = now + COPILOTO_LIMITS.gapMs
+    if (r.kind === 'http' && r.status === 401) {
+      this.authFailed('pesquisas')
+      return
+    }
+    if (r.kind === 'http' && (r.status === 200 || r.status === 400)) {
+      const st = r.status === 200 ? (r.body as { status?: unknown } | null)?.status : 'invalid'
+      const status = typeof st === 'string' ? st.slice(0, 16) : 'sem_status'
+      this.searchOut.delete(id)
+      this.searchAnswered.set(id, now)
+      if (status === 'stored') this.countSearch(now)
+      this.diag('copiloto_search', `resultado status=${r.status} ${status}`)
+      return
+    }
+    out.attempts++
+    const delay = this.backoff(out.attempts)
+    out.nextAt = now + delay
+    const st = r.kind === 'network' ? 'network' : String(r.status)
+    this.repo.logEvent('copiloto_error', `pesquisas: resultado status=${st} tentativa=${out.attempts} nova tentativa em ${Math.round(delay / 60_000)} min`)
   }
 
   // --- follow-up do Copiloto (v0.7.0, contrato v1.1) ---

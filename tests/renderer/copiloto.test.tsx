@@ -89,6 +89,8 @@ describe('Configurações › Copiloto: histórico dos grupos (v0.8.3)', () => {
     await screen.findByLabelText('Código do Copiloto')
     fireEvent.click(screen.getByLabelText('Enviar para o Copiloto da Saga'))
     expect((await screen.findByTestId('copiloto-group-history')).textContent).toBe('Histórico dos grupos: nenhuma mensagem de grupo enviada ao Copiloto ainda')
+    // v0.9.0: as pesquisas do Copiloto (só a contagem, nunca o texto procurado)
+    expect(screen.getByTestId('copiloto-searches').textContent).toBe('Pesquisas do Copiloto: 0 respondidas hoje')
     fireEvent.click(screen.getByRole('button', { name: 'Buscar no celular o histórico completo dos mentorados' }))
     expect(await screen.findByText(/Busca no celular começou/)).toBeTruthy()
     expect(screen.getByTestId('copiloto-history-fetch').textContent).toBe(

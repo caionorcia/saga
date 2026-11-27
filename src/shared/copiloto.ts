@@ -137,6 +137,26 @@ export interface CopilotoStatus {
   groupHistory: CopilotoGroupHistory
   /** v0.8.3: a última "Buscar no celular o histórico dos grupos" (null = nunca) */
   historyFetch: GroupHistoryFetchView | null
+  /** v0.9.0 (contrato v1.3): as pesquisas do Copiloto respondidas (só contagens; nunca o texto procurado) */
+  searches: CopilotoSearchStats
+}
+
+/** v0.9.0: quantas pesquisas do Copiloto foram respondidas hoje (dia local) e quando foi a última. */
+export interface CopilotoSearchStats {
+  today: number
+  /** epoch ms da última respondida (null = nenhuma ainda) */
+  lastAt: number | null
+}
+
+/** A linha de Configurações › Copiloto da Saga. */
+export function searchesLine(s: CopilotoSearchStats, now: number = Date.now()): string {
+  const n = s.today === 1 ? '1 respondida hoje' : `${s.today} respondidas hoje`
+  if (s.lastAt === null) return `Pesquisas do Copiloto: ${n}`
+  const d = new Date(s.lastAt)
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const today = new Date(now)
+  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate()
+  return `Pesquisas do Copiloto: ${n} · última às ${hm}${sameDay ? '' : ` de ${dayMonth(s.lastAt)}`}`
 }
 
 /** v0.8.1: "Reenviar histórico dos grupos". */

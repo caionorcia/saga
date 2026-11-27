@@ -494,7 +494,8 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     groupRepair: null,
     groupRepairPending: false,
     groupHistory: { oldestTs: null, groups: 0, messages: 0, pending: 0 },
-    historyFetch: null
+    historyFetch: null,
+    searches: { today: 0, lastAt: null }
   }
   if (opts.autoFollowups) Object.assign(copiloto, { enabled: true, url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook', hasCode: true, rosterSize: 24, rosterAt: now, chats: 5, autoFollowups: true })
   applyAuto()

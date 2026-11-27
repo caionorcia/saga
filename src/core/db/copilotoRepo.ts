@@ -282,6 +282,12 @@ export class CopilotoRepo {
     return (this.db.prepare('SELECT jid, is_group, custom_name, push_name FROM contacts ORDER BY jid').all() as Row[]).map(toChat)
   }
 
+  /** v0.9.0: o nome guardado do contato ou grupo (personalizado, agenda/perfil), sem cair no número; null se não houver. */
+  rawName(jid: string): string | null {
+    const r = this.db.prepare('SELECT custom_name, push_name FROM contacts WHERE jid = ?').get(jid) as Row | undefined
+    return r ? (r.custom_name ?? r.push_name ?? null) : null
+  }
+
   chat(jid: string): ChatBasic | null {
     const r = this.db.prepare('SELECT jid, is_group, custom_name, push_name FROM contacts WHERE jid = ?').get(jid) as Row | undefined
     return r ? toChat(r) : null

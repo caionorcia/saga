@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { CopilotoStatus } from '../../../shared/copiloto'
-import { COPILOTO_TEXT, groupHistoryLine, groupRepairLine, historyFetchLine, isCopilotoUrl, noAnchorLine } from '../../../shared/copiloto'
+import { COPILOTO_TEXT, groupHistoryLine, groupRepairLine, historyFetchLine, isCopilotoUrl, noAnchorLine, searchesLine } from '../../../shared/copiloto'
 import { formatDay, formatTime } from '../format'
 import { Group, Info } from './SettingsParts'
 
@@ -278,6 +278,8 @@ export function CopilotoSection() {
                 <br />
               </>
             )}
+            <span data-testid="copiloto-searches">{searchesLine(st.searches)}</span>
+            <br />
             Pendentes: {st.pending} · Último envio: {st.lastSentAt ? when(st.lastSentAt) : 'ainda não'}
             {st.lastError && !st.authFailed && (
               <>

@@ -22,6 +22,8 @@ const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit)
   calls.push({ body, raw })
   if (body.action === 'roster') return new Response(JSON.stringify({ version: 1, phones: roster }), { status: 200 })
   if (body.action === 'followups_pending') return new Response(JSON.stringify({ version: 1, followups: [] }), { status: 200 })
+  // v0.9.0: a consulta das pesquisas do Copiloto (nenhuma aqui; os testes delas ficam em search.test.ts)
+  if (body.action === 'search_pending') return new Response(JSON.stringify({ version: 1, searches: [], cancelled_ids: [] }), { status: 200 })
   return new Response(JSON.stringify({ results: body.events.map((e: { id: string }) => ({ id: e.id, status: 'stored' })) }), { status: 200 })
 })
 
