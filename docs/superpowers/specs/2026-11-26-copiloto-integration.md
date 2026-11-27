@@ -492,3 +492,65 @@ Vale o que veio com o follow-up (retrato por id; reentrega do mesmo id pode atua
 - Encerramento por tempo: no `end_day` (do dia 0), se veio; sem ele, no último dia da cadência + 2 dias de folga (e
   nunca antes de 2 dias depois da última tentativa). Sumido sem resposta e onboarding sem cumprir → `no_reply`; sumido
   que respondeu e não marcou → `no_reply` com `sem_agendamento`. (Substitui os 30 dias fixos da implementação v2.)
+
+---
+
+# Adendo v1.4 — conferência dos grupos da mentoria (2026-11-27)
+
+Definido pelo dono do Copiloto. O perfil do mentorado no Copiloto tem quatro marcas: duas comunidades, o grupo de avisos
+e o grupo de SOS de tráfego. O SagaZap (que está nesses grupos com o WhatsApp do mentor) confere quem participa e avisa o
+Copiloto, que marca.
+
+## Configuração no SagaZap (uma vez)
+Configurações › Copiloto da Saga: o mentor escolhe qual grupo (ou comunidade) do WhatsApp é cada chave. As quatro chaves
+do contrato estão em `MEMBERSHIP_SLOTS` (`src/shared/membership.ts`): `comunidade_saga`, a da segunda comunidade,
+`grupo_avisos` e `grupo_sos_trafego`. Sem escolha → não é conferido. Se a "Comunidade" for uma Comunidade do WhatsApp
+(com subgrupos), conta como participante quem está na comunidade (o grupo de avisos dela serve).
+
+## Quando
+Uma vez por dia (no começo do expediente) e sempre que o WhatsApp avisar a entrada de um participante num desses grupos.
+Saídas não precisam ser informadas.
+
+## Privacidade (obrigatório)
+Nunca mandar a lista de participantes. Para cada participante: o telefone real (a mesma regra @lid → telefone dos
+eventos), o hash do roster `sha256hex("sagazap-v1:" + telefoneNormalizado)` nas duas formas do 9º dígito, e só os hashes
+que estão no roster. Sem telefone resolvido ou fora do roster: não vai. Nada disso em log.
+
+## `{version: 1, action: "group_membership", checked_at, groups}` → 200
+```ts
+{ version: 1, action: "group_membership",
+  checked_at: "2026-11-28T12:00:00Z",          // ISO-8601 com fuso, nunca no futuro
+  groups: {                                    // só as quatro chaves; omitir os não conferidos; pelo menos um
+    comunidade_saga:   { members: ["<hash>", ...] },
+    grupo_avisos:      { members: [...] },
+    grupo_sos_trafego: { members: [] }        // lista vazia vale
+  } }                                          // members: até 1500 hashes por grupo, 64 hex minúsculos
+```
+- `200 { status: "stored", groups: { grupo_avisos: { received: 12, matched: 11, marked: 2 } } }`.
+- `200 { status: "invalid" }`: fora do contrato; não repetir o mesmo pedido.
+- 400/401/413/500: as mesmas regras das outras ações (500 pode tentar de novo depois).
+- O servidor só marca, nunca desmarca; mandar de novo a mesma conferência não tem problema.
+
+## Implementação no SagaZap (v0.11.0)
+- Escolha guardada pelo JID do grupo (`copiloto.membershipGroups`). A lista mostra os grupos e comunidades de que a conta
+  participa, pelo nome (comunidade com "(comunidade)"; o grupo de avisos como "<comunidade> › avisos").
+- Participantes: os guardados neste computador (`group_members`), que já vêm da consulta diária dos grupos
+  (`groupFetchAllParticipating`, os campos `id`/`phoneNumber`/`lid` do Baileys 7) e dos eventos `groups.upsert` e
+  `group-participants.update`; @lid pelo mesmo caminho dos eventos (memória, `lid_pn`, `getPNForLID` local). Comunidade
+  (`isCommunity`): a própria comunidade mais o grupo com `linkedParent` = ela e `isCommunityAnnounce`. Os tipos ficam em
+  `wa.groupKinds`. Nenhuma consulta nova ao WhatsApp: grupo escolhido sem participantes conhecidos ganha uma consulta só
+  dele (`groupMetadata`) pela fila, dentro dos limites que já valiam (10/h, 40/dia, uma por grupo por dia), e a
+  conferência espera até 5 min por ela; depois vai sem esse grupo.
+- Diária: no primeiro horário de envio do dia (Configurações › Envio direto; desligado = 09:00) + 3 a 12 min sorteados
+  uma vez por dia; computador ligado depois disso confere assim que ligar, no mesmo dia; dia sem envio liberado não
+  confere. Entrada (`add`) num grupo escolhido (ou no grupo de avisos de uma comunidade escolhida): espera 2 min sem
+  entrada nova (no máximo 10 min desde a primeira) e manda só aquele grupo, com a lista guardada (que já tem quem entrou).
+  "Conferir agora": todos os escolhidos, no máximo uma vez a cada 10 min.
+- Hashes: as duas formas do 9º dígito, só as do roster atual, sem repetir, na ordem dos JIDs; acima de 1500 vão os
+  primeiros 1500 e a tela avisa. `checked_at` = agora, em UTC, sem milissegundos.
+- Fila de uma requisição por vez do Copiloto. 429/5xx/rede: espera crescente (1 → 30 min), refazendo a lista na hora.
+  `invalid` e 400: a impressão do pedido (sem `checked_at`) fica guardada e o mesmo pedido não vai de novo ("Conferir
+  agora" libera). 413 com vários grupos: um grupo por pedido; com um, como `invalid`. 401: para tudo, como as outras
+  ações.
+- Tela: por grupo, "Última conferência DD/MM HH:MM — recebidos X, reconhecidos Y, marcados agora Z" (da resposta
+  `stored`). Registro: só o status e quantos grupos; nunca participantes, hashes, nomes ou JIDs.

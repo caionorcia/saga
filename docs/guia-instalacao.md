@@ -338,6 +338,21 @@ Ao desligar, a fila deste computador é apagada. O que já foi enviado continua 
   identificado**. O botão **Reenviar histórico dos grupos** faz isso de novo. Nada fica duplicado no Copiloto.
 - "Ainda sem telefone" são pessoas cujo número o WhatsApp ainda não mostrou; quando mostrar, a mensagem vai de novo.
 
+#### Grupos da mentoria (versão 0.11.0)
+
+O Copiloto marca no perfil de cada mentorado se ele está nas comunidades e nos grupos da mentoria. Para isso:
+
+1. Abra **Configurações › Copiloto da Saga** e desça até **Grupos da mentoria**.
+2. Em cada um dos quatro itens, digite parte do nome no campo **Procurar…** e escolha o grupo (ou a comunidade)
+   na lista ao lado. Deixe **Não conferir** nos que não quiser conferir.
+3. Pronto. O SagaZap confere sozinho uma vez por dia, alguns minutos depois do começo do seu horário de envio, e também
+   2 minutos depois de alguém entrar num desses grupos. O botão **Conferir agora** confere na hora (uma vez a cada 10 min).
+
+Embaixo de cada grupo aparece **Última conferência DD/MM HH:MM — recebidos X, reconhecidos Y, marcados agora Z**: o que o
+Copiloto respondeu. Só vai ao Copiloto um código (hash) do telefone de quem já é mentorado cadastrado; nomes, a lista de
+participantes e quem não é mentorado nunca saem do computador. Comunidade: vale quem está nela (o grupo de avisos dela).
+Quem sai de um grupo não é desmarcado.
+
 #### Histórico antigo dos grupos (versão 0.8.3)
 
 Se o SagaZap foi vinculado antes da versão 0.1.5, os grupos só têm mensagens daquele dia em diante (o WhatsApp manda o
