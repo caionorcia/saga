@@ -341,8 +341,12 @@ describe('respostas do Copiloto', () => {
 
   it('a resposta é lida com cuidado: números inválidos e chaves fora do contrato são ignorados', () => {
     const r = parseMembershipResponse({ status: 'stored', groups: { grupo_avisos: { received: 3, matched: 2, marked: 1 }, outro: { received: 1, matched: 1, marked: 1 }, grupo_sos_trafego: { received: -1, matched: 0, marked: 0 } } })
-    expect(r).toEqual({ status: 'stored', groups: { grupo_avisos: { received: 3, matched: 2, marked: 1 } } })
+    expect(r).toEqual({ status: 'stored', groups: { grupo_avisos: { received: 3, matched: 2, marked: 1, outsideRule: null } } })
     expect(parseMembershipResponse(null).status).toBe('sem_status')
+    // v1.4: outside_rule (opcional) = reconhecidos num grupo que não é deles
+    const o = parseMembershipResponse({ status: 'stored', groups: { grupo_avisos: { received: 30, matched: 28, marked: 3, outside_rule: 1 }, grupo_sos_trafego: { received: 2, matched: 2, marked: 0, outside_rule: -1 } } })
+    expect(o.groups.grupo_avisos).toEqual({ received: 30, matched: 28, marked: 3, outsideRule: 1 })
+    expect(o.groups.grupo_sos_trafego).toEqual({ received: 2, matched: 2, marked: 0, outsideRule: null })
   })
 })
 
@@ -395,5 +399,14 @@ describe('"Conferir agora" e privacidade', () => {
     expect(sync.membership.setGroup('grupo_avisos', ANA)).toBe(false)
     expect(sync.membership.setGroup('grupo_avisos', null)).toBe(true)
     expect(sync.membership.chosen()).toEqual({})
+  })
+})
+
+describe('membershipLine: fora da regra (v1.4)', () => {
+  it('mostra "fora da regra N" só quando o Copiloto informou', async () => {
+    const { membershipLine } = await import('../../../src/shared/membership')
+    const at = new Date(2026, 10, 28, 9, 5).getTime()
+    expect(membershipLine({ at, received: 30, matched: 28, marked: 3, outsideRule: 1, capped: false })).toMatch(/marcados agora 3, fora da regra 1$/)
+    expect(membershipLine({ at, received: 30, matched: 28, marked: 3, outsideRule: null, capped: false })).toMatch(/marcados agora 3$/)
   })
 })

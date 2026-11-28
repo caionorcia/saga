@@ -554,3 +554,11 @@ que estão no roster. Sem telefone resolvido ou fora do roster: não vai. Nada d
   ações.
 - Tela: por grupo, "Última conferência DD/MM HH:MM — recebidos X, reconhecidos Y, marcados agora Z" (da resposta
   `stored`). Registro: só o status e quantos grupos; nunca participantes, hashes, nomes ou JIDs.
+
+### v1.4.1 — `outside_rule` na resposta (2026-11-28)
+- A resposta de cada grupo pode trazer `outside_rule` (quantos reconhecidos estão num grupo que não é deles pela
+  regra dos grupos oficiais, aplicada só pelo Copiloto). O SagaZap mostra "fora da regra N" na linha da última
+  conferência; ausente → não mostra.
+- O SagaZap **não filtra** pela regra: manda todos os mentorados do roster encontrados em cada grupo, sempre a lista
+  **completa** do grupo conferido (também na conferência disparada por entrada), para o Copiloto tirar o aviso de
+  quem saiu.

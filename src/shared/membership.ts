@@ -42,6 +42,8 @@ export interface MembershipResult {
   received: number
   matched: number
   marked: number
+  /** reconhecidos que estão num grupo que não é deles (regra dos grupos oficiais, aplicada pelo Copiloto); null = não informado */
+  outsideRule: number | null
   /** mais de 1500 participantes do roster: foram só os primeiros 1500 */
   capped: boolean
 }
@@ -87,6 +89,6 @@ const pad = (n: number) => String(n).padStart(2, '0')
 /** "Última conferência DD/MM HH:MM — recebidos X, reconhecidos Y, marcados agora Z" (hora local). */
 export function membershipLine(r: MembershipResult): string {
   const d = new Date(r.at)
-  const line = `Última conferência ${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())} — recebidos ${r.received}, reconhecidos ${r.matched}, marcados agora ${r.marked}`
+  const line = `Última conferência ${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())} — recebidos ${r.received}, reconhecidos ${r.matched}, marcados agora ${r.marked}${r.outsideRule !== null ? `, fora da regra ${r.outsideRule}` : ''}`
   return r.capped ? `${line} (mais de ${MEMBERSHIP_LIMITS.membersMax} mentorados no grupo: só os primeiros ${MEMBERSHIP_LIMITS.membersMax} foram enviados)` : line
 }

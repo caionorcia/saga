@@ -125,15 +125,18 @@ const localDayStart = (now: number): number => {
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1_000_000
 
 /** A resposta 200 do Copiloto. `stored` com os números de cada grupo (só os que vieram certos). */
-export function parseMembershipResponse(body: unknown): { status: string; groups: Partial<Record<MembershipKey, { received: number; matched: number; marked: number }>> } {
+export function parseMembershipResponse(body: unknown): { status: string; groups: Partial<Record<MembershipKey, { received: number; matched: number; marked: number; outsideRule: number | null }>> } {
   const b = body as { status?: unknown; groups?: unknown } | null
   const status = typeof b?.status === 'string' ? b.status.slice(0, 16) : 'sem_status'
-  const groups: Partial<Record<MembershipKey, { received: number; matched: number; marked: number }>> = {}
+  const groups: Partial<Record<MembershipKey, { received: number; matched: number; marked: number; outsideRule: number | null }>> = {}
   if (b?.groups && typeof b.groups === 'object' && !Array.isArray(b.groups)) {
     for (const [k, v] of Object.entries(b.groups as Record<string, unknown>)) {
       if (!isMembershipKey(k) || !v || typeof v !== 'object') continue
       const x = v as Record<string, unknown>
-      if (isCount(x.received) && isCount(x.matched) && isCount(x.marked)) groups[k] = { received: x.received, matched: x.matched, marked: x.marked }
+      if (isCount(x.received) && isCount(x.matched) && isCount(x.marked)) {
+        // v1.4: `outside_rule` = reconhecidos que estão num grupo que não é deles (opcional)
+        groups[k] = { received: x.received, matched: x.matched, marked: x.marked, outsideRule: isCount(x.outside_rule) ? x.outside_rule : null }
+      }
     }
   }
   return { status, groups }
@@ -222,7 +225,7 @@ export class GroupMembership {
     for (const k of MEMBERSHIP_KEYS) {
       const r = raw[k] as Partial<MembershipResult> | undefined
       if (r && typeof r.at === 'number' && isCount(r.received) && isCount(r.matched) && isCount(r.marked)) {
-        out[k] = { at: r.at, received: r.received, matched: r.matched, marked: r.marked, capped: r.capped === true }
+        out[k] = { at: r.at, received: r.received, matched: r.matched, marked: r.marked, outsideRule: isCount(r.outsideRule) ? r.outsideRule : null, capped: r.capped === true }
       }
     }
     return out

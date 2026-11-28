@@ -31,10 +31,10 @@ describe('Grupos da mentoria', () => {
   it('mostra a última conferência de cada grupo como o Copiloto respondeu', async () => {
     mount(true)
     const line = await screen.findByTestId('mgroup-last-comunidade_saga')
-    expect(line.textContent).toMatch(/^Última conferência \d{2}\/\d{2} 09:07 — recebidos 38, reconhecidos 37, marcados agora 2$/)
+    expect(line.textContent).toMatch(/^Última conferência \d{2}\/\d{2} 09:07 — recebidos 38, reconhecidos 37, marcados agora 2, fora da regra 1$/)
     expect(screen.getByTestId('mgroup-last-grupo_sos_trafego').textContent).toMatch(/recebidos 12, reconhecidos 12, marcados agora 1/)
     expect(screen.getByTestId(`mgroup-last-${MEMBERSHIP_SLOTS[1].key}`).textContent).toBe('Não conferido')
-    expect(membershipLine({ at: new Date(2026, 10, 28, 9, 5).getTime(), received: 1600, matched: 1500, marked: 3, capped: true })).toMatch(
+    expect(membershipLine({ at: new Date(2026, 10, 28, 9, 5).getTime(), received: 1600, matched: 1500, marked: 3, outsideRule: null, capped: true })).toMatch(
       /^Última conferência 28\/11 09:05 — recebidos 1600, reconhecidos 1500, marcados agora 3 \(mais de 1500 mentorados no grupo: só os primeiros 1500 foram enviados\)$/
     )
   })

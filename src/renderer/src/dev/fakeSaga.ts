@@ -594,9 +594,9 @@ export function createFakeSaga(opts: FakeOptions = {}): FakeControl {
     Object.assign(copiloto, { enabled: true, url: 'https://exemplo.supabase.co/functions/v1/sagazap-webhook', hasCode: true, rosterSize: 24, rosterAt: now, chats: 5, lastSentAt: now - 60_000 })
     const at = new Date(new Date(now).getFullYear(), new Date(now).getMonth(), new Date(now).getDate(), 9, 7).getTime()
     const pick: Record<string, { jid: string; last: MembershipSlotView['last'] }> = {
-      comunidade_saga: { jid: '120363000000000101@g.us', last: { at, received: 38, matched: 37, marked: 2, capped: false } },
-      grupo_avisos: { jid: '120363000000000103@g.us', last: { at, received: 41, matched: 40, marked: 0, capped: false } },
-      grupo_sos_trafego: { jid: '120363000000000104@g.us', last: { at, received: 12, matched: 12, marked: 1, capped: false } }
+      comunidade_saga: { jid: '120363000000000101@g.us', last: { at, received: 38, matched: 37, marked: 2, outsideRule: 1, capped: false } },
+      grupo_avisos: { jid: '120363000000000103@g.us', last: { at, received: 41, matched: 40, marked: 0, outsideRule: 0, capped: false } },
+      grupo_sos_trafego: { jid: '120363000000000104@g.us', last: { at, received: 12, matched: 12, marked: 1, outsideRule: 0, capped: false } }
     }
     for (const s of copiloto.membership.slots) {
       const p = pick[s.key]
